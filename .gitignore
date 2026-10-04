@@ -1,0 +1,30 @@
+# Executable and build directories
+/main
+/build/
+/out/
+
+# Compiled objects, dependency files, and libraries
+*.o
+*.d
+*.a
+*.so
+*.so.*
+*.dll
+*.exe
+
+# Debugging and profiling output
+/core
+/core.*
+*.gcda
+*.gcno
+*.gcov
+gmon.out
+
+# Editor temporary files and OS metadata
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Keep .vscode configuration tracked for shared build/debug setup.
