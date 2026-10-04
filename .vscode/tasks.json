@@ -5,7 +5,7 @@
             "label": "Build C program",
             "type": "process",
             "command": "/usr/bin/gcc",
-            "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "${workspaceFolder}/main.c", "${workspaceFolder}/interfaces/ctaphid.c", "-o", "${workspaceFolder}/main"],
+            "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "-I", "${workspaceFolder}/include", "${workspaceFolder}/examples/host/main.c", "${workspaceFolder}/src/protocol/ctaphid_parser.c", "-o", "${workspaceFolder}/main"],
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": ["$gcc"],
             "group": { "kind": "build", "isDefault": true }
