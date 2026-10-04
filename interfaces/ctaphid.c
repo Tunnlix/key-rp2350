@@ -1,74 +1,50 @@
 #include "ctaphid.h"
-#include <inttypes.h>
-#include <stdio.h>
-// INITIAL PACKET
 
-// Offset  Size   Field
-// 0       4      CID
-// 4       1      CMD
-// 5       1      BCNTH
-// 6       1      BCNTL
-// 7       57     DATA
+CtaphidParseResult ctaphid_process_packet(const uint8_t packet[64], CtaphidParsedPacket *parsed_packet) {
 
-// CONTINUATION PACKET
+    if(packet == NULL || parsed_packet == NULL) {
+        return CTAPHID_INVALID_PARSE;
+    }
 
-// Offset  Size   Field
-// 0       4      CID
-// 4       1      SEQ
-// 5       59     DATA
-// SEQ
-//     bit 7 is 0
-//     starts at 0
-//     then 1, 2, 3...
-
-
-// CID
-//     4-byte channel ID
-
-// CMD
-//     bit 7 is always 1 for an initial packet
-
-// BCNTH + BCNTL
-//     total payload length
-
-// payload_length =
-//     (BCNTH << 8) | BCNTL
-
-// DATA
-//     first part of message payload
-void ctaphid_process_packet(uint8_t packet[64]) {
     uint32_t cid =
     ((uint32_t)packet[0] << 24) |
     ((uint32_t)packet[1] << 16) |
     ((uint32_t)packet[2] << 8)  |
     ((uint32_t)packet[3]);
-    uint8_t is_initial_packet = (packet[4] >> 7) & 1;
 
-    printf("CID:%" PRIu32 "\n", cid);
+    bool is_initial_packet = (packet[4] & CTAPHID_INIT_MASK) != 0;
 
-    if(is_initial_packet) {
-        printf("Initial Packet\n");
-        printf("Command: %s\n", ctaphid_command_name(packet[4]));
-
-    } else {
-        printf("Continuation Packet\n");
-    }
+    parsed_packet->cid = cid;
+    parsed_packet->packet_type = is_initial_packet ? CTAPHID_PACKET_INITIAL : CTAPHID_PACKET_CONTINUATION;
     
-}
-
-const char *ctaphid_command_name(uint8_t cmd)
-{
-     switch (cmd) {
-        case 0x81: return "CTAPHID_PING";
-        case 0x83: return "CTAPHID_MSG";
-        case 0x84: return "CTAPHID_LOCK";
-        case 0x86: return "CTAPHID_INIT";
-        case 0x88: return "CTAPHID_WINK";
-        case 0x90: return "CTAPHID_CBOR";
-        case 0x91: return "CTAPHID_CANCEL";
-        case 0xBB: return "CTAPHID_KEEPALIVE";
-        case 0xBF: return "CTAPHID_ERROR";
-
-        default:   return "CTAPHID_UNKNOWN";
+    if(!is_initial_packet) {
+        parsed_packet->sequence = packet[4] & 0x7F;
+        parsed_packet->command = 0;
+        parsed_packet->total_length = 0;
+        for(int i = 0; i < CTAPHID_CONTINUATION_PAYLOAD_SIZE; i++) {
+            parsed_packet->payload[i] = packet[CTAPHID_CONTINUATION_PAYLOAD_OFFSET + i];
+        }
+        parsed_packet->payload_length = CTAPHID_CONTINUATION_PAYLOAD_SIZE;
+        return CTAPHID_VALID_PARSE;
     }
+
+    uint16_t bcnt =
+    ((uint16_t)packet[CTAPHID_BCNTH_OFFSET] << 8) |
+    packet[CTAPHID_BCNTL_OFFSET];
+
+    if(bcnt > CTAPHID_MAX_WIRE_MESSAGE_SIZE) {
+        return CTAPHID_INVALID_PARSE;
+    }
+
+    uint8_t payload_length = bcnt >= CTAPHID_INITIAL_PAYLOAD_SIZE ? CTAPHID_INITIAL_PAYLOAD_SIZE : bcnt;
+
+    parsed_packet->command = packet[4];
+    parsed_packet->sequence = 0;
+    parsed_packet->total_length = bcnt;
+    parsed_packet->payload_length = payload_length;
+
+    for(int i = 0; i < payload_length; i++) {
+        parsed_packet->payload[i] = packet[CTAPHID_INITIAL_PAYLOAD_OFFSET + i];
+    }
+    return CTAPHID_VALID_PARSE;
 }
