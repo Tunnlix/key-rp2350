@@ -43,7 +43,7 @@ CtaphidParseResult ctaphid_parse_packet(
     if (packet_length != CTAPHID_REPORT_SIZE) {
         return CTAPHID_PARSE_INVALID_REPORT_LENGTH;
     }
-    const int is_initial = (packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_INITIAL_MARKER) != 0U;
+    const bool is_initial = (packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_INITIAL_MARKER) != 0U;
     uint16_t message_length = 0;
     if (is_initial) {
         message_length = (uint16_t)(((uint16_t)packet[CTAPHID_LENGTH_HIGH_OFFSET] << 8)
@@ -53,7 +53,7 @@ CtaphidParseResult ctaphid_parse_packet(
         }
     }
 
-    CtaphidParsedPacket parsed_packet = {0};
+    CtaphidParsedPacket parsed_packet;
     parsed_packet.channel_id = ((uint32_t)packet[0] << 24) | ((uint32_t)packet[1] << 16)
         | ((uint32_t)packet[2] << 8) | (uint32_t)packet[3];
     if (is_initial) {

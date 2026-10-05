@@ -10,6 +10,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #define CTAPHID_REPORT_SIZE 64U
 #define CTAPHID_INITIAL_PAYLOAD_SIZE 57U
