@@ -11,7 +11,11 @@
             "cwd": "${workspaceFolder}",
             "externalConsole": false,
             "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb",
+            "miDebuggerPath": "gdb",
+            "windows": {
+                "program": "${workspaceFolder}/main.exe",
+                "miDebuggerPath": "gdb.exe"
+            },
             "preLaunchTask": "Build C program"
         }
     ]

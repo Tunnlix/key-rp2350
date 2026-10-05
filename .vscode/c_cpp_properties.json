@@ -2,8 +2,14 @@
     "version": 4,
     "configurations": [
         {
+            "name": "Win32",
+            "compilerPath": "gcc.exe",
+            "cStandard": "c17",
+            "includePath": ["${workspaceFolder}/include"]
+        },
+        {
             "name": "Linux",
-            "compilerPath": "/usr/bin/gcc",
+            "compilerPath": "gcc",
             "cStandard": "c17",
             "includePath": ["${workspaceFolder}/include"]
         }
