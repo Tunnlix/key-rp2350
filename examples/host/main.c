@@ -1,5 +1,6 @@
 #include "protocol/ctaphid_parser.h"
 #include <stdio.h>
+#include <inttypes.h>
 
 int main(void)
 {
@@ -27,18 +28,18 @@ int main(void)
 
 
     CtaphidParsedPacket parsed_packet;
-    CtaphidParseResult result = ctaphid_parse_packet(packet, &parsed_packet);
+    CtaphidParseResult result = ctaphid_parse_packet(packet, sizeof(packet), &parsed_packet);
 
     if(result == CTAPHID_PARSE_OK) {
-        printf("CID: 0x%08X\n", parsed_packet.channel_id);
+        printf("CID: 0x%08" PRIX32 "\n", parsed_packet.channel_id);
         printf("Packet Type: %s\n", parsed_packet.packet_type == CTAPHID_PACKET_INITIAL ? "Initial" : "Continuation");
-        printf("Command: 0x%02X\n", parsed_packet.command);
-        printf("Sequence: %d\n", parsed_packet.sequence_number);
-        printf("Total Length: %d\n", parsed_packet.message_length);
-        printf("Payload Length: %d\n", parsed_packet.payload_length);
+        printf("Command: 0x%02X\n", (unsigned int)parsed_packet.command);
+        printf("Sequence: %u\n", (unsigned int)parsed_packet.sequence_number);
+        printf("Total Length: %u\n", (unsigned int)parsed_packet.message_length);
+        printf("Payload Length: %u\n", (unsigned int)parsed_packet.fragment_length);
         printf("Payload: ");
-        for(int i = 0; i < parsed_packet.payload_length; i++) {
-            printf("0x%02X ", parsed_packet.payload[i]);
+        for(size_t i = 0; i < parsed_packet.fragment_length; i++) {
+            printf("0x%02X ", (unsigned int)parsed_packet.payload[i]);
         }
         printf("\n");
     }else {

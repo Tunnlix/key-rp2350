@@ -1,63 +1,67 @@
 #include "protocol/ctaphid_parser.h"
 
-#include <stdbool.h>
-#include <stddef.h>
+#define CTAPHID_INITIAL_MARKER 0x80U
+#define CTAPHID_VALUE_MASK 0x7FU
+#define CTAPHID_COMMAND_OR_SEQUENCE_OFFSET 4U
+#define CTAPHID_LENGTH_HIGH_OFFSET 5U
+#define CTAPHID_LENGTH_LOW_OFFSET 6U
+#define CTAPHID_INITIAL_PAYLOAD_OFFSET 7U
+#define CTAPHID_CONTINUATION_PAYLOAD_OFFSET 5U
 
-#define CTAPHID_INIT_MASK 0x80
-#define CTAPHID_COMMAND_OR_SEQUENCE_OFFSET 4
-#define CTAPHID_BCNTH_OFFSET 5
-#define CTAPHID_BCNTL_OFFSET 6
-#define CTAPHID_INITIAL_PAYLOAD_OFFSET 7
-#define CTAPHID_CONTINUATION_PAYLOAD_OFFSET 5
+static void ctaphid_decode_initial_packet(
+    const uint8_t *packet, uint16_t message_length, CtaphidParsedPacket *output)
+{
+    output->packet_type = CTAPHID_PACKET_INITIAL;
+    output->command = packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_VALUE_MASK;
+    output->message_length = message_length;
+
+    output->fragment_length = message_length < CTAPHID_INITIAL_PAYLOAD_SIZE
+        ? (uint8_t)message_length : (uint8_t)CTAPHID_INITIAL_PAYLOAD_SIZE;
+
+    for (size_t i = 0; i < output->fragment_length; ++i) {
+        output->payload[i] = packet[CTAPHID_INITIAL_PAYLOAD_OFFSET + i];
+    }
+}
+
+static void ctaphid_decode_continuation_packet(
+    const uint8_t *packet, CtaphidParsedPacket *output)
+{
+    output->packet_type = CTAPHID_PACKET_CONTINUATION;
+    output->sequence_number = packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_VALUE_MASK;
+    output->fragment_length = (uint8_t)CTAPHID_CONTINUATION_PAYLOAD_SIZE;
+    for (size_t i = 0; i < CTAPHID_CONTINUATION_PAYLOAD_SIZE; ++i) {
+        output->payload[i] = packet[CTAPHID_CONTINUATION_PAYLOAD_OFFSET + i];
+    }
+}
 
 CtaphidParseResult ctaphid_parse_packet(
-    const uint8_t packet[CTAPHID_REPORT_SIZE],
-    CtaphidParsedPacket *parsed_packet
-) {
-
-    if(packet == NULL || parsed_packet == NULL) {
-        return CTAPHID_PARSE_INVALID;
+    const uint8_t *packet, size_t packet_length, CtaphidParsedPacket *output)
+{
+    if (packet == NULL || output == NULL) {
+        return CTAPHID_PARSE_NULL_ARGUMENT;
     }
-
-    uint32_t channel_id =
-    ((uint32_t)packet[0] << 24) |
-    ((uint32_t)packet[1] << 16) |
-    ((uint32_t)packet[2] << 8)  |
-    ((uint32_t)packet[3]);
-
-    bool is_initial_packet = (packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_INIT_MASK) != 0;
-
-    parsed_packet->channel_id = channel_id;
-    parsed_packet->packet_type = is_initial_packet ? CTAPHID_PACKET_INITIAL : CTAPHID_PACKET_CONTINUATION;
-
-    if(!is_initial_packet) {
-        parsed_packet->sequence_number = packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & 0x7F;
-        parsed_packet->command = 0;
-        parsed_packet->message_length = 0;
-        for(int i = 0; i < CTAPHID_CONTINUATION_PAYLOAD_SIZE; i++) {
-            parsed_packet->payload[i] = packet[CTAPHID_CONTINUATION_PAYLOAD_OFFSET + i];
+    if (packet_length != CTAPHID_REPORT_SIZE) {
+        return CTAPHID_PARSE_INVALID_REPORT_LENGTH;
+    }
+    const int is_initial = (packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET] & CTAPHID_INITIAL_MARKER) != 0U;
+    uint16_t message_length = 0;
+    if (is_initial) {
+        message_length = (uint16_t)(((uint16_t)packet[CTAPHID_LENGTH_HIGH_OFFSET] << 8)
+            | (uint16_t)packet[CTAPHID_LENGTH_LOW_OFFSET]);
+        if (message_length > CTAPHID_MAX_WIRE_MESSAGE_SIZE) {
+            return CTAPHID_PARSE_INVALID_MESSAGE_LENGTH;
         }
-        parsed_packet->payload_length = CTAPHID_CONTINUATION_PAYLOAD_SIZE;
-        return CTAPHID_PARSE_OK;
     }
 
-    uint16_t message_length =
-    ((uint16_t)packet[CTAPHID_BCNTH_OFFSET] << 8) |
-    packet[CTAPHID_BCNTL_OFFSET];
-
-    if(message_length > CTAPHID_MAX_WIRE_MESSAGE_SIZE) {
-        return CTAPHID_PARSE_INVALID;
+    CtaphidParsedPacket parsed_packet = {0};
+    parsed_packet.channel_id = ((uint32_t)packet[0] << 24) | ((uint32_t)packet[1] << 16)
+        | ((uint32_t)packet[2] << 8) | (uint32_t)packet[3];
+    if (is_initial) {
+        ctaphid_decode_initial_packet(packet, message_length, &parsed_packet);
+    } else {
+        ctaphid_decode_continuation_packet(packet, &parsed_packet);
     }
 
-    uint8_t payload_length = message_length >= CTAPHID_INITIAL_PAYLOAD_SIZE ? CTAPHID_INITIAL_PAYLOAD_SIZE : message_length;
-
-    parsed_packet->command = packet[CTAPHID_COMMAND_OR_SEQUENCE_OFFSET];
-    parsed_packet->sequence_number = 0;
-    parsed_packet->message_length = message_length;
-    parsed_packet->payload_length = payload_length;
-
-    for(int i = 0; i < payload_length; i++) {
-        parsed_packet->payload[i] = packet[CTAPHID_INITIAL_PAYLOAD_OFFSET + i];
-    }
+    *output = parsed_packet;
     return CTAPHID_PARSE_OK;
 }
