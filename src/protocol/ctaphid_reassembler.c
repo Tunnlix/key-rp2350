@@ -124,6 +124,7 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
 
     if (reassembler->received_length == reassembler->expected_length) {
         reassembler->is_active = false;
+        reassembler->has_complete_message = true;
         return CTAPHID_REASSEMBLE_COMPLETE;
     }
 
@@ -138,6 +139,7 @@ void ctaphid_reassembler_reset(
     }
 
     reassembler->is_active = false;
+    reassembler->has_complete_message = false;
 
     reassembler->channel_id = 0U;
     reassembler->command = 0U;
@@ -160,6 +162,7 @@ static CtaphidReassembleResult ctaphid_reassembler_start_message(
     }
 
     reassembler->is_active = true;
+    reassembler->has_complete_message = false;
 
     reassembler->channel_id = packet->channel_id;
     reassembler->command = packet->command;
@@ -178,6 +181,7 @@ static CtaphidReassembleResult ctaphid_reassembler_start_message(
 
     if (reassembler->received_length == reassembler->expected_length) {
         reassembler->is_active = false;
+        reassembler->has_complete_message = true;
         return CTAPHID_REASSEMBLE_COMPLETE;
     }
 

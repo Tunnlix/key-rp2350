@@ -1,5 +1,6 @@
 #include "protocol/ctaphid_parser.h"
 #include "protocol/ctaphid_reassembler.h"
+#include "protocol/ctaphid_dispatcher.h"
 #include <stdio.h>
 
 int main(void)
@@ -36,10 +37,10 @@ int main(void)
 
         CtaphidReassembleResult status = ctaphid_reassemble_packet(
             &reassembler, &packet, current_time_ms);
-        /* Status 0 = COMPLETE, 1 = INCOMPLETE; other values are in the result enum. */
-        printf("%s: status=%d active_message=%s received=%u/%u\n",
-            descriptions[i], (int)status, reassembler.is_active ? "true" : "false",
-            (unsigned)reassembler.received_length, (unsigned)reassembler.expected_length);
+
+        if (status == CTAPHID_REASSEMBLE_COMPLETE) {
+            CtaphidDispatchResult result = ctaphid_dispatch_message(&reassembler);
+        }
         current_time_ms += 10U;
     }
     return 0;

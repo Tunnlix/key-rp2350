@@ -11,6 +11,8 @@
 
 typedef struct {
     bool is_active;
+    /* Set only by complete assembly; cleared by reset, a new message or dispatch. */
+    bool has_complete_message;
     uint32_t channel_id;
     uint8_t command;
     uint16_t expected_length;
