@@ -1,9 +1,27 @@
 #include "protocol/ctaphid_parser.h"
+#include "protocol/ctaphid_reassembler.h"
 #include <stdio.h>
 #include <inttypes.h>
 
+static uint64_t get_current_time_ms(void)
+{
+#ifdef _WIN32
+    return (uint64_t)GetTickCount64();
+#else
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+
+    return ((uint64_t)ts.tv_sec * 1000U)
+         + ((uint64_t)ts.tv_nsec / 1000000U);
+#endif
+}
+
 int main(void)
 {
+    CtaphidReassembler reassembler = {0};
 
     uint8_t packet[CTAPHID_REPORT_SIZE] = {
         0xFF, 0xFF, 0xFF, 0xFF,
@@ -31,17 +49,8 @@ int main(void)
     CtaphidParseResult result = ctaphid_parse_packet(packet, sizeof(packet), &parsed_packet);
 
     if(result == CTAPHID_PARSE_OK) {
-        printf("CID: 0x%08" PRIX32 "\n", parsed_packet.channel_id);
-        printf("Packet Type: %s\n", parsed_packet.packet_type == CTAPHID_PACKET_INITIAL ? "Initial" : "Continuation");
-        printf("Command: 0x%02X\n", (unsigned int)parsed_packet.command);
-        printf("Sequence: %u\n", (unsigned int)parsed_packet.sequence_number);
-        printf("Total Length: %u\n", (unsigned int)parsed_packet.message_length);
-        printf("Payload Length: %u\n", (unsigned int)parsed_packet.fragment_length);
-        printf("Payload: ");
-        for(size_t i = 0; i < parsed_packet.fragment_length; i++) {
-            printf("0x%02X ", (unsigned int)parsed_packet.payload[i]);
-        }
-        printf("\n");
+        uint32_t current_time_ms = get_current_time_ms(); 
+        CtaphidReassembleResult reassemble_result = ctaphid_reassemble_packet(&reassembler, &parsed_packet, current_time_ms);
     }else {
         printf("Invalid packet\n");
     }
