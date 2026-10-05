@@ -1,5 +1,5 @@
 # AGENTS.md
-
+I FORBID CREATING README!
 ## Project purpose
 
 This project is a C implementation used to study, test, and progressively implement a protocol that will later be moved to an embedded system.

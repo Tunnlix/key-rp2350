@@ -1,58 +1,46 @@
 #include "protocol/ctaphid_parser.h"
 #include "protocol/ctaphid_reassembler.h"
 #include <stdio.h>
-#include <inttypes.h>
-
-static uint64_t get_current_time_ms(void)
-{
-#ifdef _WIN32
-    return (uint64_t)GetTickCount64();
-#else
-    struct timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-
-    return ((uint64_t)ts.tv_sec * 1000U)
-         + ((uint64_t)ts.tv_nsec / 1000000U);
-#endif
-}
 
 int main(void)
 {
-    CtaphidReassembler reassembler = {0};
+    CtaphidReassembler reassembler;
+    ctaphid_reassembler_reset(&reassembler);
 
-    uint8_t packet[CTAPHID_REPORT_SIZE] = {
-        0xFF, 0xFF, 0xFF, 0xFF,
-        0x86,
-        0x00, 0x08,
-        0x12, 0x34, 0x56, 0x78,
-        0x9A, 0xBC, 0xDE, 0xF0,
-
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-        0x00
+    uint8_t reports[][CTAPHID_REPORT_SIZE] = {
+        /* INIT: eight-byte nonce on the broadcast CID. */
+        { 0xFF, 0xFF, 0xFF, 0xFF, 0x86, 0x00, 0x08,
+          0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0 },
+        /* First PING: three bytes, complete in one report. */
+        { 0x00, 0x00, 0x00, 0x01, 0x81, 0x00, 0x03, 0xAA, 0xBB, 0xCC },
+        /* Second PING: 60 bytes, requiring a continuation. */
+        { 0x00, 0x00, 0x00, 0x01, 0x81, 0x00, 0x3C },
+        { 0x00, 0x00, 0x00, 0x01, 0x00, 0x39, 0x3A, 0x3B }
     };
+    const char *descriptions[] = {
+        "INIT", "PING 1", "PING 2 initial", "PING 2 continuation"
+    };
+    for (size_t i = 0; i < CTAPHID_INITIAL_PAYLOAD_SIZE; ++i) {
+        reports[2][7U + i] = (uint8_t)i;
+    }
 
+    uint32_t current_time_ms = 0U;
+    for (size_t i = 0; i < sizeof reports / sizeof reports[0]; ++i) {
+        CtaphidParsedPacket packet;
+        CtaphidParseResult parse_result = ctaphid_parse_packet(
+            reports[i], sizeof reports[i], &packet);
+        if (parse_result != CTAPHID_PARSE_OK) {
+            printf("%s: parse status=%d\n", descriptions[i], (int)parse_result);
+            return 1;
+        }
 
-    CtaphidParsedPacket parsed_packet;
-    CtaphidParseResult result = ctaphid_parse_packet(packet, sizeof(packet), &parsed_packet);
-
-    if(result == CTAPHID_PARSE_OK) {
-        uint32_t current_time_ms = get_current_time_ms(); 
-        CtaphidReassembleResult reassemble_result = ctaphid_reassemble_packet(&reassembler, &parsed_packet, current_time_ms);
-    }else {
-        printf("Invalid packet\n");
+        CtaphidReassembleResult status = ctaphid_reassemble_packet(
+            &reassembler, &packet, current_time_ms);
+        /* Status 0 = COMPLETE, 1 = INCOMPLETE; other values are in the result enum. */
+        printf("%s: status=%d active_message=%s received=%u/%u\n",
+            descriptions[i], (int)status, reassembler.is_active ? "true" : "false",
+            (unsigned)reassembler.received_length, (unsigned)reassembler.expected_length);
+        current_time_ms += 10U;
     }
     return 0;
 }
