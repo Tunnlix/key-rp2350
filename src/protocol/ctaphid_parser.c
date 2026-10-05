@@ -53,7 +53,7 @@ CtaphidParseResult ctaphid_parse_packet(
         }
     }
 
-    CtaphidParsedPacket parsed_packet;
+    CtaphidParsedPacket parsed_packet = {0};
     parsed_packet.channel_id = ((uint32_t)packet[0] << 24) | ((uint32_t)packet[1] << 16)
         | ((uint32_t)packet[2] << 8) | (uint32_t)packet[3];
     if (is_initial) {

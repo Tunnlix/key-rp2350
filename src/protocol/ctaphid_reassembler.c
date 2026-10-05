@@ -3,6 +3,31 @@
 #include <string.h>
 
 #define CTAPHID_COMMAND_INIT 0x06U
+#define CTAPHID_COMMAND_CANCEL 0x11U
+#define CTAPHID_MAX_FIELD_VALUE 0x7FU
+
+static bool ctaphid_reassembler_packet_is_valid(const CtaphidParsedPacket *packet)
+{
+    if (packet->packet_type == CTAPHID_PACKET_INITIAL) {
+        /* The parser removes the marker bit; this does not validate command support. */
+        if (packet->command > CTAPHID_MAX_FIELD_VALUE ||
+                packet->message_length > CTAPHID_MAX_WIRE_MESSAGE_SIZE) {
+            return false;
+        }
+
+        uint16_t expected_fragment_length = packet->message_length;
+        if (expected_fragment_length > CTAPHID_INITIAL_PAYLOAD_SIZE) {
+            expected_fragment_length = CTAPHID_INITIAL_PAYLOAD_SIZE;
+        }
+        return packet->fragment_length == expected_fragment_length;
+    }
+    if (packet->packet_type == CTAPHID_PACKET_CONTINUATION) {
+        /* All 59 bytes are decoded; useful data length is known only during assembly. */
+        return packet->sequence_number <= CTAPHID_MAX_FIELD_VALUE &&
+            packet->fragment_length == CTAPHID_CONTINUATION_PAYLOAD_SIZE;
+    }
+    return false;
+}
 
 static bool ctaphid_reassembler_is_timed_out(
     const CtaphidReassembler *reassembler,
@@ -29,25 +54,22 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
         return CTAPHID_REASSEMBLE_NULL_ARGUMENT;
     }
 
-    /*
-     * An incomplete transaction must eventually expire.
-     *
-     * If it has expired, discard the stale partial message and process
-     * the newly received packet as if the reassembler were idle.
-     */
-    if (ctaphid_reassembler_is_timed_out(
-            reassembler,
-            current_time_ms
-        )) {
+    if (!ctaphid_reassembler_packet_is_valid(packet)) {
+        return CTAPHID_REASSEMBLE_INVALID_PACKET;
+    }
+
+    /* Expire the old message before considering the incoming packet. */
+    if (ctaphid_reassembler_is_timed_out(reassembler, current_time_ms)) {
         ctaphid_reassembler_reset(reassembler);
     }
 
-    /*
-     * No message is currently being assembled.
-     *
-     * A continuation packet without a preceding initial packet is
-     * spurious and must be ignored.
-     */
+    /* No CBOR operation is processed here; the caller handles processing-time CANCEL. */
+    if (packet->packet_type == CTAPHID_PACKET_INITIAL &&
+            packet->command == CTAPHID_COMMAND_CANCEL) {
+        return CTAPHID_REASSEMBLE_IGNORED;
+    }
+
+    /* Continuations without an active message are spurious. */
     if (!reassembler->is_active) {
         if (packet->packet_type == CTAPHID_PACKET_CONTINUATION) {
             return CTAPHID_REASSEMBLE_IGNORED;
@@ -60,15 +82,7 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
         );
     }
 
-    /*
-     * A partial message is active.
-     *
-     * Continuation packets from another channel are spurious for the
-     * active message and are ignored.
-     *
-     * A new initial packet from another channel attempts to start
-     * another transaction while this one is active, so report busy.
-     */
+    /* Other channels cannot interrupt an active message. */
     if (reassembler->channel_id != packet->channel_id) {
         if (packet->packet_type == CTAPHID_PACKET_CONTINUATION) {
             return CTAPHID_REASSEMBLE_IGNORED;
@@ -77,13 +91,7 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
         return CTAPHID_REASSEMBLE_CHANNEL_BUSY;
     }
 
-    /*
-     * An initial packet arrived on the same CID while a fragmented
-     * message is already being assembled.
-     *
-     * CTAPHID_INIT is special: on the active CID it aborts and
-     * re-synchronizes the current transaction.
-     */
+    /* INIT on the active CID aborts and resynchronizes the message. */
     if (packet->packet_type == CTAPHID_PACKET_INITIAL) {
         if (packet->command == CTAPHID_COMMAND_INIT) {
             ctaphid_reassembler_reset(reassembler);
@@ -95,19 +103,11 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
             );
         }
 
-        /*
-         * Any other new initial packet cannot be used as the expected
-         * continuation of the current fragmented message.
-         */
         ctaphid_reassembler_reset(reassembler);
 
         return CTAPHID_REASSEMBLE_INVALID_SEQUENCE;
     }
 
-    /*
-     * From here the packet is a continuation packet belonging to the
-     * active CID.
-     */
     if (packet->sequence_number != reassembler->expected_sequence) {
         ctaphid_reassembler_reset(reassembler);
 
@@ -123,6 +123,7 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
     reassembler->last_activity_time_ms = current_time_ms;
 
     if (reassembler->received_length == reassembler->expected_length) {
+        reassembler->is_active = false;
         return CTAPHID_REASSEMBLE_COMPLETE;
     }
 
@@ -176,6 +177,7 @@ static CtaphidReassembleResult ctaphid_reassembler_start_message(
     );
 
     if (reassembler->received_length == reassembler->expected_length) {
+        reassembler->is_active = false;
         return CTAPHID_REASSEMBLE_COMPLETE;
     }
 
