@@ -14,7 +14,7 @@
             "miDebuggerPath": "gdb",
             "windows": {
                 "program": "${workspaceFolder}/main.exe",
-                "miDebuggerPath": "gdb.exe"
+                "miDebuggerPath": "${env:LOCALAPPDATA}/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/gdb.exe"
             },
             "preLaunchTask": "Build C program"
         }
