@@ -49,7 +49,7 @@ bool ctaphid_channels_is_allocated(
     uint32_t channel_id
 );
 
-/* This module only stores allocations. The INIT handler requests a CID and
+/* This module only stores allocations. INIT routing requests a CID; the handler
  * constructs its reply. The coordinator handles transactions, resynchronization,
  * locks, cancellation, and replies when allocation fails. No HID I/O occurs here. */
 

@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 /* Host demonstration transport. Display outgoing wire bytes; a binary pipe or
- * USB transport can replace this callback without changing the PING handler. */
+ * USB transport can replace this callback without changing the handlers. */
 static bool display_response_report(
     void *context, const uint8_t report[CTAPHID_REPORT_SIZE])
 {
@@ -20,6 +20,8 @@ int main(void)
 {
     CtaphidReassembler reassembler;
     ctaphid_reassembler_reset(&reassembler);
+    CtaphidChannelManager channels;
+    ctaphid_channels_reset(&channels);
 
     uint8_t reports[][CTAPHID_REPORT_SIZE] = {
         /* INIT: eight-byte nonce on the broadcast CID. */
@@ -29,10 +31,14 @@ int main(void)
         { 0x00, 0x00, 0x00, 0x01, 0x81, 0x00, 0x03, 0xAA, 0xBB, 0xCC },
         /* Second PING: 60 bytes, requiring a continuation. */
         { 0x00, 0x00, 0x00, 0x01, 0x81, 0x00, 0x3C },
-        { 0x00, 0x00, 0x00, 0x01, 0x00, 0x39, 0x3A, 0x3B }
+        { 0x00, 0x00, 0x00, 0x01, 0x00, 0x39, 0x3A, 0x3B },
+        /* WINK: identification action followed by an empty response. */
+        { 0x00, 0x00, 0x00, 0x01, 0x88, 0x00, 0x00 },
+        /* MSG is rejected with ERR_INVALID_CMD; no CTAP1 operation is run. */
+        { 0x00, 0x00, 0x00, 0x01, 0x83, 0x00, 0x01, 0x00 }
     };
     const char *descriptions[] = {
-        "INIT", "PING 1", "PING 2 initial", "PING 2 continuation"
+        "INIT", "PING 1", "PING 2 initial", "PING 2 continuation", "WINK", "MSG unsupported"
     };
     for (size_t i = 0; i < CTAPHID_INITIAL_PAYLOAD_SIZE; ++i) {
         reports[2][7U + i] = (uint8_t)i;
@@ -53,7 +59,7 @@ int main(void)
 
         if (status == CTAPHID_REASSEMBLE_COMPLETE) {
             CtaphidDispatchResult result = ctaphid_dispatch_message(
-                &reassembler, display_response_report, stdout);
+                &reassembler, &channels, display_response_report, stdout);
             if (result != CTAPHID_DISPATCH_OK && result != CTAPHID_DISPATCH_NO_RESPONSE) {
                 fprintf(stderr, "%s: dispatch status=%d\n", descriptions[i], (int)result);
                 return 1;
