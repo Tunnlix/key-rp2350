@@ -12,10 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define CTAPHID_REPORT_SIZE 64U
-#define CTAPHID_INITIAL_PAYLOAD_SIZE 57U
-#define CTAPHID_CONTINUATION_PAYLOAD_SIZE 59U
-#define CTAPHID_MAX_WIRE_MESSAGE_SIZE 7609U
+#include "protocol/ctaphid_framing.h"
 
 typedef enum {
     CTAPHID_PARSE_OK = 0,
