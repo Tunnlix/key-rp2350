@@ -12,7 +12,8 @@ bool auth_credentials_init(AuthCredentialService *service,
 /* Store a new credential with a random ID and provider-owned P-256 key. Output
  * is published only after metadata persistence succeeds. On insert failure the
  * new key is destroyed; cleanup failure returns IO_ERROR and requires provider
- * recovery/garbage collection. No automatic credential overwrites or retries. */
+ * recovery/garbage collection. No automatic credential overwrites or retries.
+ * user_id may be empty (valid in CTAP 2.3); NULL is allowed only with length 0. */
 AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65]);

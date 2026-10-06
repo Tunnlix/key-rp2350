@@ -67,7 +67,10 @@ bool ctaphid_host_storage_init(HostStorage *storage, const char *control_directo
         ctaphid_host_storage_close(storage);
         return false;
     }
-    if (!publish_snapshot(storage)) { ctaphid_host_storage_close(storage); return false; }
+    AuthCrypto crypto = pc_authenticator_crypto(storage->authenticator);
+    AuthStorage provider = pc_authenticator_storage(storage->authenticator);
+    if (!auth_credentials_init(&storage->credentials, &crypto, &provider) ||
+        !publish_snapshot(storage)) { ctaphid_host_storage_close(storage); return false; }
     return true;
 }
 

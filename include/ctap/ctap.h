@@ -3,17 +3,28 @@
 
 #include "ctap/ctap_get_info.h"
 
+#define CTAP_COMMAND_MAKE_CREDENTIAL 0x01U
 #define CTAP_COMMAND_GET_INFO 0x04U
 #define CTAP_COMMAND_RESET 0x07U
 #define CTAP_COMMAND_SELECTION 0x0BU
 #define CTAP_STATUS_OK 0x00U
 #define CTAP_STATUS_INVALID_COMMAND 0x01U
+#define CTAP_STATUS_INVALID_PARAMETER 0x02U
 #define CTAP_STATUS_INVALID_LENGTH 0x03U
+#define CTAP_STATUS_CBOR_UNEXPECTED_TYPE 0x11U
+#define CTAP_STATUS_INVALID_CBOR 0x12U
+#define CTAP_STATUS_MISSING_PARAMETER 0x14U
+#define CTAP_STATUS_LIMIT_EXCEEDED 0x15U
+#define CTAP_STATUS_CREDENTIAL_EXCLUDED 0x19U
+#define CTAP_STATUS_UNSUPPORTED_ALGORITHM 0x26U
+#define CTAP_STATUS_KEY_STORE_FULL 0x28U
+#define CTAP_STATUS_UNSUPPORTED_OPTION 0x2BU
+#define CTAP_STATUS_INVALID_OPTION 0x2CU
 #define CTAP_STATUS_OTHER 0x7FU
 #define CTAP_STATUS_OPERATION_DENIED 0x27U
 #define CTAP_STATUS_USER_ACTION_TIMEOUT 0x2FU
 #define CTAP_STATUS_NOT_ALLOWED 0x30U
-#define CTAP_MAX_RESPONSE_SIZE (1U + CTAP_GET_INFO_MAX_CBOR_SIZE)
+#define CTAP_MAX_RESPONSE_SIZE 512U
 
 typedef enum {
     CTAP_EXECUTION_ERROR = 0,
@@ -33,7 +44,8 @@ typedef enum {
  * command byte; trailing data is rejected. Selection also takes no inputs and
  * is supported only with profile.user_presence. Reset also takes no inputs and
  * returns OPERATION_DENIED when user interaction cannot be collected. Remaining
- * commands are unsupported.
+ * commands are unsupported by this stateless entry point. MakeCredential uses
+ * ctap_make_credential_prepare/finish via the backend's bound credential service.
  */
 CtapExecutionResult ctap_execute(const CtapGetInfoProfile *profile,
     const uint8_t *request, size_t request_length,

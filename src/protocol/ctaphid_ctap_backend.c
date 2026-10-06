@@ -10,7 +10,18 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     CtapGetInfoProfile copied = *profile;
     memset(backend, 0, sizeof *backend);
     backend->profile = copied;
+    backend->profile.make_credential = false; /* Only binding enables this claim. */
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
+    return true;
+}
+
+bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
+    AuthCredentialService *service)
+{
+    if (backend == NULL || service == NULL || backend->pending || backend->credentials != NULL ||
+        !backend->profile.user_presence) return false;
+    backend->credentials = service;
+    backend->profile.make_credential = true;
     return true;
 }
 
@@ -29,6 +40,19 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     CtaphidCtapBackend *backend = context;
     backend->operation_id = operation_id;
     backend->presence_started = false;
+    backend->awaiting_make_credential = false;
+    memset(&backend->make_credential, 0, sizeof backend->make_credential);
+    if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_MAKE_CREDENTIAL && backend->credentials != NULL) {
+        uint8_t status = ctap_make_credential_prepare(backend->credentials, request + 1U,
+            request_length - 1U, &backend->make_credential);
+        backend->awaiting_make_credential = status == CTAP_STATUS_OK;
+        backend->awaiting_presence = backend->awaiting_make_credential;
+        backend->awaiting_reset = backend->reset_authorized = false;
+        backend->response[0] = status;
+        backend->response_length = backend->awaiting_presence ? 0U : 1U;
+        backend->pending = true;
+        return;
+    }
     CtapExecutionResult execution = ctap_execute(&backend->profile, request, request_length,
         backend->response, sizeof backend->response, &backend->response_length);
     backend->awaiting_reset = execution == CTAP_EXECUTION_WAIT_FACTORY_RESET;
@@ -53,6 +77,8 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id)
         ctap_user_presence_abort(&backend->presence, operation_id);
         ctap_reset_abort(&backend->reset, operation_id);
         backend->awaiting_reset = backend->reset_authorized = false;
+        backend->awaiting_make_credential = false;
+        memset(&backend->make_credential, 0, sizeof backend->make_credential);
     }
 }
 
@@ -100,6 +126,20 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->response[0] = ctap_reset_commit(&backend->reset, backend->operation_id, &backend->presence);
         }
         backend->response_length = 1U;
+        if (backend->awaiting_make_credential) {
+            /* Exclusion waits for UP but returns EXCLUDED even after timeout.
+             * Normal registration refusal/timeout is OPERATION_DENIED (6.1.2).
+             * A coordinator CANCEL aborts us before reaching this code. */
+            uint8_t status = CTAP_STATUS_OPERATION_DENIED;
+            size_t encoded_length = 0U;
+            if (backend->make_credential.credential_excluded) status = CTAP_STATUS_CREDENTIAL_EXCLUDED;
+            else if (presence == CTAP_PRESENCE_CONFIRMED) {
+                status = ctap_make_credential_finish(backend->credentials, &backend->make_credential,
+                    backend->profile.aaguid, backend->response + 1U, sizeof backend->response - 1U, &encoded_length);
+            }
+            backend->response[0] = status;
+            backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+        }
     }
     CtaphidDeviceResult result = ctaphid_device_complete_cbor(device, backend->operation_id,
         backend->response, backend->response_length);
@@ -110,6 +150,8 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     ctap_user_presence_abort(&backend->presence, backend->operation_id);
     ctap_reset_abort(&backend->reset, backend->operation_id);
     backend->awaiting_reset = backend->reset_authorized = false;
+    backend->awaiting_make_credential = false;
+    memset(&backend->make_credential, 0, sizeof backend->make_credential);
     return result == CTAPHID_DEVICE_INVALID_STATE ? CTAPHID_DEVICE_IGNORED : result;
 }
 

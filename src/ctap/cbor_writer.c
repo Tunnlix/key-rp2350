@@ -49,6 +49,12 @@ bool cbor_write_uint(CborWriter *writer, uint64_t value)
     return write_head(writer, 0U, value);
 }
 
+bool cbor_write_int(CborWriter *writer, int64_t value)
+{
+    return value >= 0 ? write_head(writer, 0U, (uint64_t)value) :
+        write_head(writer, 1U, (uint64_t)(-(value + 1)));
+}
+
 static bool write_string(CborWriter *writer, uint8_t major, const uint8_t *data, size_t length)
 {
     if (writer == NULL) return false;

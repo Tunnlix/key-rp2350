@@ -145,6 +145,10 @@ int ctaphid_host_run_stdio(const char *presence_control_directory, const char *s
     if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
     HostStorage storage;
     if (!ctaphid_host_storage_init(&storage, presence_control_directory, storage_directory)) return 1;
+    if (profile.user_presence && !ctaphid_ctap_backend_configure_credentials(&backend, &storage.credentials)) {
+        ctaphid_host_storage_close(&storage);
+        return 1;
+    }
     if (!ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) {
         ctaphid_host_storage_close(&storage);
         return 1;

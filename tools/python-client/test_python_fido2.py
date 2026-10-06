@@ -111,23 +111,24 @@ class PythonFido2Tests(unittest.TestCase):
         self.assertEqual(info.versions, ["FIDO_2_3"])
         self.assertEqual(bytes(info.aaguid), bytes(16))
         self.assertEqual(info.max_msg_size, 1024)
-        self.assertEqual(info.options, {"rk": False, "up": True, "plat": False})
+        self.assertEqual(info.options, {"rk": False, "up": True, "plat": False, "makeCredUvNotRqd": True})
         self.assertEqual(info.extensions, [])
         self.assertEqual(info.pin_uv_protocols, [])
-        self.assertEqual(info.algorithms, [])
+        self.assertEqual(info.algorithms, [{"alg": -7, "type": "public-key"}])
         reply = self.device.call(CTAPHID.CBOR, b"\x04")
         self.assertEqual(reply[0], 0)
         decoded = cbor.decode(reply[1:])
-        self.assertEqual(set(decoded), {1, 3, 4, 5})
+        self.assertEqual(set(decoded), {1, 3, 4, 5, 10, 22})
+        self.assertEqual(decoded[22], ["packed"])
         self.assertEqual(cbor.encode(decoded), reply[1:])
 
     def test_ctap_errors_are_cbor_statuses(self):
         client = Ctap2(self.device)
         with self.assertRaises(CtapError) as raised:
             client.send_cbor(Ctap2.CMD.MAKE_CREDENTIAL, {})
-        self.assertEqual(raised.exception.code, CtapError.ERR.INVALID_COMMAND)
-        # Unsupported CTAP commands are CBOR replies, not HID transport errors.
-        self.assertEqual(self.connection.received_reports[-1][4:8], b"\x90\x00\x01\x01")
+        self.assertEqual(raised.exception.code, CtapError.ERR.MISSING_PARAMETER)
+        # Invalid CTAP parameters are CBOR replies, not HID transport errors.
+        self.assertEqual(self.connection.received_reports[-1][4:8], b"\x90\x00\x01\x14")
         self.assertEqual(self.device.call(CTAPHID.CBOR, b"\x04\xA0"), b"\x03")
         self.assertEqual(client.get_info().versions, ["FIDO_2_3"])
 

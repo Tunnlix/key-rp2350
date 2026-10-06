@@ -86,6 +86,7 @@ int main(int argc, char **argv)
     HostStorage storage;
     if (!ctaphid_host_storage_init(&storage, NULL, storage_directory) ||
         !ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) return 1;
+    if (profile.user_presence && !ctaphid_ctap_backend_configure_credentials(&backend, &storage.credentials)) return 1;
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;

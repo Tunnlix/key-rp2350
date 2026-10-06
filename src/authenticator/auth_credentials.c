@@ -19,8 +19,8 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65])
 {
-    if (service == NULL || rp_id_hash == NULL || user_id == NULL || credential == NULL ||
-        public_key == NULL || user_id_length == 0U || user_id_length > AUTH_USER_ID_MAX_SIZE) return AUTH_INVALID_ARGUMENT;
+    if (service == NULL || rp_id_hash == NULL || (user_id == NULL && user_id_length != 0U) || credential == NULL ||
+        public_key == NULL || user_id_length > AUTH_USER_ID_MAX_SIZE) return AUTH_INVALID_ARGUMENT;
     size_t count;
     AuthStatus status = service->storage.count(service->storage.context, &count);
     if (status != AUTH_OK) return status;
@@ -29,7 +29,7 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
     created.algorithm = AUTH_COSE_ALG_ES256;
     created.discoverable = discoverable;
     created.user_id_length = (uint8_t)user_id_length;
-    memcpy(created.user_id, user_id, user_id_length);
+    if (user_id_length != 0U) memcpy(created.user_id, user_id, user_id_length);
     memcpy(created.rp_id_hash, rp_id_hash, 32U);
     /* Bounded collision handling; storage lookup failure never implies free ID. */
     bool unique = false;

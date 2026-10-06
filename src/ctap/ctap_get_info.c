@@ -12,19 +12,25 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     uint8_t encoded[CTAP_GET_INFO_MAX_CBOR_SIZE];
     CborWriter writer;
     cbor_writer_init(&writer, encoded, sizeof encoded);
-    bool ok = cbor_write_map(&writer, 4U) &&
+    bool ok = cbor_write_map(&writer, profile->make_credential ? 6U : 4U) &&
         /* Integer map keys are in increasing canonical order. */
         cbor_write_uint(&writer, 0x01U) && cbor_write_array(&writer, 1U) &&
         cbor_write_text(&writer, "FIDO_2_3") &&
         cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
-        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, 3U) &&
+        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, profile->make_credential ? 4U : 3U) &&
         /* String keys sort by length, then bytes: rk, up, plat.
          * Do not use uv=false/clientPin=false: those imply supported but unset. */
         cbor_write_text(&writer, "rk") && cbor_write_bool(&writer, false) &&
         cbor_write_text(&writer, "up") && cbor_write_bool(&writer, profile->user_presence) &&
-        cbor_write_text(&writer, "plat") && cbor_write_bool(&writer, false) &&
-        cbor_write_uint(&writer, 0x05U) && cbor_write_uint(&writer, profile->max_message_size);
+        cbor_write_text(&writer, "plat") && cbor_write_bool(&writer, false);
+    if (profile->make_credential) ok = ok && cbor_write_text(&writer, "makeCredUvNotRqd") && cbor_write_bool(&writer, true);
+    ok = ok && cbor_write_uint(&writer, 0x05U) && cbor_write_uint(&writer, profile->max_message_size);
+    if (profile->make_credential) ok = ok &&
+        cbor_write_uint(&writer, 0x0AU) && cbor_write_array(&writer, 1U) && cbor_write_map(&writer, 2U) &&
+        cbor_write_text(&writer, "alg") && cbor_write_int(&writer, -7) &&
+        cbor_write_text(&writer, "type") && cbor_write_text(&writer, "public-key") &&
+        cbor_write_uint(&writer, 0x16U) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "packed");
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);
     *output_length = writer.length;
