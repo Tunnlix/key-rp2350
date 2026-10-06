@@ -3,6 +3,19 @@
 #include "protocol/ctaphid_dispatcher.h"
 #include <stdio.h>
 
+/* Host demonstration transport. Display outgoing wire bytes; a binary pipe or
+ * USB transport can replace this callback without changing the PING handler. */
+static bool display_response_report(
+    void *context, const uint8_t report[CTAPHID_REPORT_SIZE])
+{
+    FILE *output = context;
+    if (fputs("TX:", output) == EOF) return false;
+    for (size_t i = 0; i < CTAPHID_REPORT_SIZE; ++i) {
+        if (fprintf(output, " %02X", (unsigned int)report[i]) < 0) return false;
+    }
+    return fputc('\n', output) != EOF && fflush(output) == 0;
+}
+
 int main(void)
 {
     CtaphidReassembler reassembler;
@@ -39,7 +52,16 @@ int main(void)
             &reassembler, &packet, current_time_ms);
 
         if (status == CTAPHID_REASSEMBLE_COMPLETE) {
-            CtaphidDispatchResult result = ctaphid_dispatch_message(&reassembler);
+            CtaphidDispatchResult result = ctaphid_dispatch_message(
+                &reassembler, display_response_report, stdout);
+            if (result != CTAPHID_DISPATCH_OK && result != CTAPHID_DISPATCH_NO_RESPONSE) {
+                fprintf(stderr, "%s: dispatch status=%d\n", descriptions[i], (int)result);
+                return 1;
+            }
+        } else if (status != CTAPHID_REASSEMBLE_INCOMPLETE &&
+                   status != CTAPHID_REASSEMBLE_IGNORED) {
+            fprintf(stderr, "%s: assembly status=%d\n", descriptions[i], (int)status);
+            return 1;
         }
         current_time_ms += 10U;
     }

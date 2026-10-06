@@ -5,7 +5,11 @@
 #define CTAPHID_LOCK_PAYLOAD_LENGTH 1U
 #define CTAPHID_MAX_LOCK_SECONDS 10U
 
-CtaphidDispatchResult ctaphid_dispatch_message(CtaphidReassembler *message)
+CtaphidDispatchResult ctaphid_dispatch_message(
+    CtaphidReassembler *message,
+    CtaphidSendReport send_report,
+    void *transport_context
+)
 {
     if (message == NULL) {
         return CTAPHID_DISPATCH_NULL_ARGUMENT;
@@ -30,9 +34,17 @@ CtaphidDispatchResult ctaphid_dispatch_message(CtaphidReassembler *message)
         ctaphid_handle_init(message);
         break;
 
-    case CTAPHID_COMMAND_PING:
-        ctaphid_handle_ping(message);
-        break;
+    case CTAPHID_COMMAND_PING: {
+        if (send_report == NULL) {
+            return CTAPHID_DISPATCH_NULL_ARGUMENT;
+        }
+        CtaphidResponseResult response = ctaphid_handle_ping(
+            message, send_report, transport_context);
+        /* Sending may have partially succeeded. Consume once, even on failure. */
+        message->has_complete_message = false;
+        return response == CTAPHID_RESPONSE_OK
+            ? CTAPHID_DISPATCH_OK : CTAPHID_DISPATCH_RESPONSE_FAILED;
+    }
 
     case CTAPHID_COMMAND_CBOR:
         if (message->received_length == 0U) {

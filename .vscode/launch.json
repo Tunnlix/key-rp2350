@@ -7,7 +7,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/main",
             "args": [],
-            "stopAtEntry": true,
+            "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "externalConsole": false,
             "MIMode": "gdb",

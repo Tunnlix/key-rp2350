@@ -2,14 +2,19 @@
 #define CTAPHID_HANDLERS_H
 
 #include "protocol/ctaphid_reassembler.h"
+#include "protocol/ctaphid_response.h"
 
-/* Development-only host handlers: print the validated request. No protocol
- * operation or response is implemented. Replace this module for embedded use;
- * the dispatcher itself has no terminal or OS dependency. Inputs are borrowed
- * for the duration of the call, immutable, and validated by the dispatcher.
+/* Inputs are borrowed, immutable, and validated by the dispatcher.
+ * PING echoes the complete payload through the response serializer. Its return
+ * value reports serialization/transport failure; it does not modify the request.
+ * Other handlers remain development-only logging stubs.
  */
 void ctaphid_handle_init(const CtaphidReassembler *message);
-void ctaphid_handle_ping(const CtaphidReassembler *message);
+CtaphidResponseResult ctaphid_handle_ping(
+    const CtaphidReassembler *message,
+    CtaphidSendReport send_report,
+    void *transport_context
+);
 void ctaphid_handle_cbor(const CtaphidReassembler *message);
 void ctaphid_handle_lock(const CtaphidReassembler *message);
 void ctaphid_handle_wink(const CtaphidReassembler *message);
