@@ -1,41 +1,24 @@
 #include "host_storage.h"
 
 #include <inttypes.h>
-#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32
 #include <windows.h>
-#include <bcrypt.h>
 #endif
 
-static bool random_bytes(uint8_t *output, size_t length)
-{
-#ifdef _WIN32
-    return length <= ULONG_MAX && BCryptGenRandom(NULL, output, (ULONG)length,
-        BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
-#else
-    FILE *random = fopen("/dev/urandom", "rb");
-    if (random == NULL) return false;
-    bool ok = fread(output, 1U, length, random) == length;
-    if (fclose(random) != 0) ok = false;
-    return ok;
-#endif
-}
-
-/* Private test-only snapshot, never a CTAP response. Publish before committing
- * RAM state so a snapshot/RNG failure cannot produce a successful reset. */
+/* Private diagnostic IPC only. Credential/key bytes are never included. */
 static bool publish_snapshot(const HostStorage *storage)
 {
     if (storage->snapshot_path[0] == '\0') return true;
+    PcAuthenticatorState state = pc_authenticator_state(storage->authenticator);
     FILE *file = fopen(storage->temporary_path, "w");
     if (file == NULL) return false;
-    bool ok = fprintf(file, "{\"generation\":%" PRIu32 ",\"mock_credential_count\":%" PRIu32
-        ",\"mock_pin_set\":%s,\"device_identifier\":\"",
-        storage->generation, storage->mock_credential_count, storage->mock_pin_set ? "true" : "false") > 0;
-    for (size_t i = 0; i < 16U; ++i) if (fprintf(file, "%02x", (unsigned int)storage->device_identifier[i]) < 0) ok = false;
+    bool ok = fprintf(file, "{\"generation\":%" PRIu32 ",\"credential_count\":%zu,\"key_count\":%zu,\"device_identifier\":\"",
+        state.generation, state.credential_count, state.key_count) > 0;
+    for (size_t i = 0; i < 16U; ++i) if (fprintf(file, "%02x", (unsigned int)state.device_identifier[i]) < 0) ok = false;
     if (fputs("\",\"credential_store_state\":\"", file) == EOF) ok = false;
-    for (size_t i = 0; i < 16U; ++i) if (fprintf(file, "%02x", (unsigned int)storage->credential_store_state[i]) < 0) ok = false;
+    for (size_t i = 0; i < 16U; ++i) if (fprintf(file, "%02x", (unsigned int)state.credential_store_state[i]) < 0) ok = false;
     if (fputs("\"}\n", file) == EOF) ok = false;
     if (fclose(file) != 0) ok = false;
     if (!ok) return false;
@@ -46,37 +29,71 @@ static bool publish_snapshot(const HostStorage *storage)
 #endif
 }
 
-bool ctaphid_host_storage_init(HostStorage *storage, const char *control_directory)
+bool ctaphid_host_storage_init(HostStorage *storage, const char *control_directory,
+    const char *storage_directory)
 {
     memset(storage, 0, sizeof *storage);
+    int directory;
+    if (storage_directory != NULL) {
+        directory = snprintf(storage->vault_directory, sizeof storage->vault_directory, "%s", storage_directory);
+    } else if (control_directory != NULL) {
+        directory = snprintf(storage->vault_directory, sizeof storage->vault_directory, "%s/vault", control_directory);
+    } else {
+#ifdef _WIN32
+        char temporary[512], identifier[33];
+        uint8_t random[16];
+        DWORD count = GetTempPathA(sizeof temporary, temporary);
+        if (count == 0U || count >= sizeof temporary || pc_authenticator_random(random, sizeof random) != AUTH_OK) return false;
+        for (size_t i = 0; i < 16U; ++i) snprintf(identifier + 2U * i, 3U, "%02x", (unsigned int)random[i]);
+        directory = snprintf(storage->vault_directory, sizeof storage->vault_directory, "%sctaphid-vault-%s", temporary, identifier);
+        storage->owns_temporary_directory = true;
+#else
+        return false; /* Current PC provider is Windows-specific; core is portable. */
+#endif
+    }
+    if (directory < 0 || (size_t)directory >= sizeof storage->vault_directory) return false;
+#ifdef _WIN32
+    if (storage->owns_temporary_directory && !CreateDirectoryA(storage->vault_directory, NULL)) return false;
+#endif
     if (control_directory != NULL) {
         int snapshot = snprintf(storage->snapshot_path, sizeof storage->snapshot_path, "%s/factory-state", control_directory);
         int temporary = snprintf(storage->temporary_path, sizeof storage->temporary_path, "%s/factory-state.tmp", control_directory);
         if (snapshot < 0 || (size_t)snapshot >= sizeof storage->snapshot_path ||
             temporary < 0 || (size_t)temporary >= sizeof storage->temporary_path) return false;
     }
-    memset(storage->mock_records, 0xA5, sizeof storage->mock_records);
-    memset(storage->mock_pin_verifier, 0x5A, sizeof storage->mock_pin_verifier);
-    storage->mock_credential_count = 2U;
-    storage->mock_pin_set = true;
-    if (!random_bytes(storage->device_identifier, sizeof storage->device_identifier) ||
-        !random_bytes(storage->credential_store_state, sizeof storage->credential_store_state)) return false;
-    return publish_snapshot(storage);
+    AuthStatus opened = pc_authenticator_open(storage->vault_directory, &storage->authenticator);
+    if (opened != AUTH_OK) {
+        fprintf(stderr, "Cannot open PC credential vault (status %d)\n", (int)opened);
+        ctaphid_host_storage_close(storage);
+        return false;
+    }
+    if (!publish_snapshot(storage)) { ctaphid_host_storage_close(storage); return false; }
+    return true;
+}
+
+void ctaphid_host_storage_close(HostStorage *storage)
+{
+    if (storage == NULL) return;
+    pc_authenticator_close(storage->authenticator);
+    storage->authenticator = NULL;
+#ifdef _WIN32
+    if (storage->owns_temporary_directory) {
+        char file[1100];
+        snprintf(file, sizeof file, "%s/credentials.vault", storage->vault_directory);
+        DeleteFileA(file);
+        snprintf(file, sizeof file, "%s/credentials.tmp", storage->vault_directory);
+        DeleteFileA(file);
+        RemoveDirectoryA(storage->vault_directory); /* Only this provider's private temporary directory. */
+    }
+#endif
 }
 
 bool ctaphid_host_storage_reset(void *context)
 {
     HostStorage *storage = context;
-    HostStorage next = *storage;
-    if (!random_bytes(next.device_identifier, sizeof next.device_identifier) ||
-        !random_bytes(next.credential_store_state, sizeof next.credential_store_state)) return false;
-    memset(next.mock_records, 0, sizeof next.mock_records);
-    memset(next.mock_pin_verifier, 0, sizeof next.mock_pin_verifier);
-    next.mock_credential_count = 0U;
-    next.mock_pin_set = false;
-    ++next.generation;
-    if (!publish_snapshot(&next)) return false;
-    *storage = next;
-    fprintf(stderr, "Mock factory reset committed (generation %" PRIu32 ")\n", storage->generation);
+    if (!pc_authenticator_factory_reset(storage->authenticator)) return false;
+    if (!publish_snapshot(storage)) fprintf(stderr, "Reset committed, but diagnostic snapshot publication failed\n");
+    PcAuthenticatorState state = pc_authenticator_state(storage->authenticator);
+    fprintf(stderr, "PC vault factory reset committed (generation %" PRIu32 ")\n", state.generation);
     return true;
 }

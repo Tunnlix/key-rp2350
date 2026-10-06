@@ -2,7 +2,7 @@
 
 Run: .venv/Scripts/python.exe tools/python-client/presence_demo.py
 Enter confirms a fresh touch, d denies, c sends real CTAPHID_CANCEL.
-Add --reset to reset the peer's volatile mock state within its power-on window.
+Add --reset to reset the peer's PC vault within its power-on window.
 """
 
 from threading import Event
@@ -16,13 +16,14 @@ from fido2_harness import open_harness
 
 def main():
     parser = argparse.ArgumentParser(description="Simulate user presence on the C test peer")
-    parser.add_argument("--reset", action="store_true", help="Reset only the peer's volatile mock storage")
+    parser.add_argument("--reset", action="store_true", help="Reset the peer's PC credential vault")
+    parser.add_argument("--store-dir", help="Persistent PC vault directory; default is a private temporary vault")
     arguments = parser.parse_args()
-    device = open_harness(build_harness())
+    device = open_harness(build_harness(), storage_directory=arguments.store_dir)
     cancelled = Event()
     try:
         client = Ctap2(device)
-        print("Waiting for user presence (30 seconds)." + (" Reset affects volatile mock data only." if arguments.reset else ""))
+        print("Waiting for user presence (30 seconds)." + (" Reset erases this PC vault's credentials and keys." if arguments.reset else ""))
 
         def prompt(status):
             if status != STATUS.UPNEEDED:
@@ -39,8 +40,8 @@ def main():
 
         if arguments.reset:
             client.reset(event=cancelled, on_keepalive=prompt)
-            print("Confirmed; volatile mock storage reset.")
-            print(device._connection.simulated_storage_state())
+            print("Confirmed; PC credential vault reset.")
+            print(device._connection.storage_state())
         else:
             client.selection(event=cancelled, on_keepalive=prompt)
             print("Presence confirmed; authenticator selected.")

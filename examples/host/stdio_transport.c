@@ -73,7 +73,56 @@ static bool send_binary_report(void *context,
         fflush(output) == 0;
 }
 
-int ctaphid_host_run_stdio(const char *presence_control_directory)
+static int run_binary_loop(CtaphidDevice *device, CtaphidCtapBackend *backend, HostPresence *simulation)
+{
+    uint8_t report[CTAPHID_REPORT_SIZE];
+    size_t filled = 0U;
+    for (;;) {
+        uint32_t now_ms = ctaphid_host_now_ms();
+        CtaphidDeviceResult polled = ctaphid_device_poll(device, now_ms);
+        if (polled != CTAPHID_DEVICE_OK && polled != CTAPHID_DEVICE_QUEUE_FULL) {
+            fprintf(stderr, "Device poll failed: %d\n", (int)polled);
+            return 1;
+        }
+        /* Complete prepared CTAP work outside coordinator callbacks, then let
+         * the coordinator serialize/transmit its final response. */
+        CtaphidDeviceResult completed = ctaphid_ctap_backend_poll(backend, device, now_ms);
+        if (completed != CTAPHID_DEVICE_OK && completed != CTAPHID_DEVICE_IGNORED) return 1;
+        if (!ctaphid_host_presence_poll(simulation, backend, now_ms)) return 1;
+        completed = ctaphid_ctap_backend_poll(backend, device, now_ms);
+        if (completed != CTAPHID_DEVICE_OK && completed != CTAPHID_DEVICE_IGNORED) return 1;
+        if (ctaphid_device_poll(device, now_ms) != CTAPHID_DEVICE_OK) return 1;
+        size_t received;
+        InputResult input = read_available(report + filled, sizeof report - filled, &received);
+        if (input == INPUT_WAIT) continue;
+        if (input == INPUT_EOF) {
+            if (filled == 0U) return 0;
+            fprintf(stderr, "Truncated input report: %zu/64 bytes\n", filled);
+            return 1;
+        }
+        if (input == INPUT_ERROR) {
+            fprintf(stderr, "Failed to read report input\n");
+            return 1;
+        }
+        filled += received;
+        if (filled == sizeof report) {
+            CtaphidDeviceResult result = ctaphid_device_receive_report(
+                device, report, sizeof report, ctaphid_host_now_ms());
+            /* Backpressure preserves this report for retry after output drains. */
+            while (result == CTAPHID_DEVICE_QUEUE_FULL) {
+                if (ctaphid_device_poll(device, ctaphid_host_now_ms()) != CTAPHID_DEVICE_OK) return 1;
+                result = ctaphid_device_receive_report(device, report, sizeof report, ctaphid_host_now_ms());
+            }
+            if (result != CTAPHID_DEVICE_OK && result != CTAPHID_DEVICE_IGNORED) {
+                fprintf(stderr, "Report receive failed: %d\n", (int)result);
+                return 1;
+            }
+            filled = 0U;
+        }
+    }
+}
+
+int ctaphid_host_run_stdio(const char *presence_control_directory, const char *storage_directory)
 {
     uint32_t powered_at_ms = ctaphid_host_now_ms();
 #ifdef _WIN32
@@ -95,57 +144,21 @@ int ctaphid_host_run_stdio(const char *presence_control_directory)
     CtaphidCtapBackend backend;
     if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
     HostStorage storage;
-    if (!ctaphid_host_storage_init(&storage, presence_control_directory) ||
-        !ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) return 1;
+    if (!ctaphid_host_storage_init(&storage, presence_control_directory, storage_directory)) return 1;
+    if (!ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) {
+        ctaphid_host_storage_close(&storage);
+        return 1;
+    }
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;
     CtaphidDevice device;
-    if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) return 1;
-
-    uint8_t report[CTAPHID_REPORT_SIZE];
-    size_t filled = 0U;
-    for (;;) {
-        uint32_t now_ms = ctaphid_host_now_ms();
-        CtaphidDeviceResult polled = ctaphid_device_poll(&device, now_ms);
-        if (polled != CTAPHID_DEVICE_OK && polled != CTAPHID_DEVICE_QUEUE_FULL) {
-            fprintf(stderr, "Device poll failed: %d\n", (int)polled);
-            return 1;
-        }
-        /* Complete prepared CTAP work outside coordinator callbacks, then let
-         * the coordinator serialize/transmit its final response. */
-        CtaphidDeviceResult completed = ctaphid_ctap_backend_poll(&backend, &device, now_ms);
-        if (completed != CTAPHID_DEVICE_OK && completed != CTAPHID_DEVICE_IGNORED) return 1;
-        if (!ctaphid_host_presence_poll(&simulation, &backend, now_ms)) return 1;
-        completed = ctaphid_ctap_backend_poll(&backend, &device, now_ms);
-        if (completed != CTAPHID_DEVICE_OK && completed != CTAPHID_DEVICE_IGNORED) return 1;
-        if (ctaphid_device_poll(&device, now_ms) != CTAPHID_DEVICE_OK) return 1;
-        size_t received;
-        InputResult input = read_available(report + filled, sizeof report - filled, &received);
-        if (input == INPUT_WAIT) continue;
-        if (input == INPUT_EOF) {
-            if (filled == 0U) return 0;
-            fprintf(stderr, "Truncated input report: %zu/64 bytes\n", filled);
-            return 1;
-        }
-        if (input == INPUT_ERROR) {
-            fprintf(stderr, "Failed to read report input\n");
-            return 1;
-        }
-        filled += received;
-        if (filled == sizeof report) {
-            CtaphidDeviceResult result = ctaphid_device_receive_report(
-                &device, report, sizeof report, ctaphid_host_now_ms());
-            /* Backpressure preserves this report for retry after output drains. */
-            while (result == CTAPHID_DEVICE_QUEUE_FULL) {
-                if (ctaphid_device_poll(&device, ctaphid_host_now_ms()) != CTAPHID_DEVICE_OK) return 1;
-                result = ctaphid_device_receive_report(&device, report, sizeof report, ctaphid_host_now_ms());
-            }
-            if (result != CTAPHID_DEVICE_OK && result != CTAPHID_DEVICE_IGNORED) {
-                fprintf(stderr, "Report receive failed: %d\n", (int)result);
-                return 1;
-            }
-            filled = 0U;
-        }
+    if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) {
+        ctaphid_host_storage_close(&storage);
+        return 1;
     }
+
+    int result = run_binary_loop(&device, &backend, &simulation);
+    ctaphid_host_storage_close(&storage);
+    return result;
 }

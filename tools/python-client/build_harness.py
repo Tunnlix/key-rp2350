@@ -57,9 +57,11 @@ def build_harness() -> Path:
     output.parent.mkdir(exist_ok=True)
     sources = [ROOT / "examples/host/main.c", ROOT / "examples/host/stdio_transport.c",
                ROOT / "examples/host/host_actions.c", ROOT / "examples/host/host_clock.c",
-               ROOT / "examples/host/host_presence.c", ROOT / "examples/host/host_storage.c"]
+               ROOT / "examples/host/host_presence.c", ROOT / "examples/host/host_storage.c",
+               ROOT / "examples/host/pc_authenticator.c"]
     sources.extend(sorted((ROOT / "src/protocol").glob("*.c")))
     sources.extend(sorted((ROOT / "src/ctap").glob("*.c")))
+    sources.extend(sorted((ROOT / "src/authenticator").glob("*.c")))
     # GCC's helper tools/DLLs may also live in bin. Only the compiler subprocess
     # receives this PATH addition; the user's terminal configuration is untouched.
     compiler_env = dict(os.environ)
@@ -67,9 +69,23 @@ def build_harness() -> Path:
     subprocess.run(
         [str(compiler), "-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
          "-I", str(ROOT / "include"), *map(str, sources),
-         *(["-lbcrypt"] if os.name == "nt" else []), "-o", str(output)],
+         *(["-lbcrypt", "-lcrypt32"] if os.name == "nt" else []), "-o", str(output)],
         cwd=ROOT, env=compiler_env, check=True,
     )
+    return output
+
+
+def build_provider_test_driver() -> Path:
+    compiler = find_compiler()
+    output = ROOT / "build/test_pc_authenticator.exe"
+    output.parent.mkdir(exist_ok=True)
+    sources = [ROOT / "tests/test_pc_authenticator.c", ROOT / "examples/host/pc_authenticator.c"]
+    sources.extend(sorted((ROOT / "src/authenticator").glob("*.c")))
+    compiler_env = dict(os.environ)
+    compiler_env["PATH"] = str(compiler.parent) + os.pathsep + compiler_env.get("PATH", "")
+    subprocess.run([str(compiler), "-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                    "-I", str(ROOT / "include"), *map(str, sources), "-lbcrypt", "-lcrypt32", "-o", str(output)],
+                   cwd=ROOT, env=compiler_env, check=True)
     return output
 
 

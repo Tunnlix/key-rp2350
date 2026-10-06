@@ -46,22 +46,28 @@ static bool display_response_report(
 int main(int argc, char **argv)
 {
     uint32_t powered_at_ms = ctaphid_host_now_ms();
-    if (argc == 2 && strcmp(argv[1], "--stdio") == 0) return ctaphid_host_run_stdio(NULL);
-    if (argc == 4 && strcmp(argv[1], "--stdio") == 0 && strcmp(argv[2], "--presence-control") == 0) {
-        return ctaphid_host_run_stdio(argv[3]);
-    }
-    bool reset_demo = argc >= 2 && strcmp(argv[1], "--reset-demo") == 0;
-    bool presence_demo = reset_demo || (argc >= 2 && strcmp(argv[1], "--presence-demo") == 0);
+    bool reset_demo = false, presence_demo = false, stdio_mode = false;
+    const char *control_directory = NULL, *storage_directory = NULL;
     uint32_t auto_touch_ms = UINT32_MAX;
-    if (presence_demo && argc == 4 && strcmp(argv[2], "--auto-touch-ms") == 0) {
-        char *end;
-        unsigned long delay = strtoul(argv[3], &end, 10);
-        if (end == argv[3] || *end != '\0' || delay > INT32_MAX) return 2;
-        auto_touch_ms = (uint32_t)delay;
-    } else if (!(argc == 1 || (presence_demo && argc == 2))) {
-        fprintf(stderr, "Usage: %s [--stdio [--presence-control DIR] | --presence-demo | --reset-demo] [--auto-touch-ms N]\n", argv[0]);
-        return 2;
+    for (int argument = 1; argument < argc; ++argument) {
+        if (strcmp(argv[argument], "--stdio") == 0) stdio_mode = true;
+        else if (strcmp(argv[argument], "--presence-demo") == 0) presence_demo = true;
+        else if (strcmp(argv[argument], "--reset-demo") == 0) { reset_demo = true; presence_demo = true; }
+        else if (strcmp(argv[argument], "--store-dir") == 0 && argument + 1 < argc) storage_directory = argv[++argument];
+        else if (strcmp(argv[argument], "--presence-control") == 0 && argument + 1 < argc) control_directory = argv[++argument];
+        else if (strcmp(argv[argument], "--auto-touch-ms") == 0 && argument + 1 < argc) {
+            char *end;
+            unsigned long delay = strtoul(argv[++argument], &end, 10);
+            if (end == argv[argument] || *end != '\0' || delay > INT32_MAX) return 2;
+            auto_touch_ms = (uint32_t)delay;
+        } else {
+            fprintf(stderr, "Usage: %s [--stdio | --presence-demo | --reset-demo] [--store-dir DIR] [--presence-control DIR] [--auto-touch-ms N]\n", argv[0]);
+            return 2;
+        }
     }
+    if ((stdio_mode && presence_demo) || (!stdio_mode && control_directory != NULL) ||
+        (!presence_demo && auto_touch_ms != UINT32_MAX)) return 2;
+    if (stdio_mode) return ctaphid_host_run_stdio(control_directory, storage_directory);
     HostTransport transport = {0};
     transport.output = stdout;
     transport.compact_keepalive = presence_demo;
@@ -78,7 +84,7 @@ int main(int argc, char **argv)
     CtaphidCtapBackend backend;
     if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
     HostStorage storage;
-    if (!ctaphid_host_storage_init(&storage, NULL) ||
+    if (!ctaphid_host_storage_init(&storage, NULL, storage_directory) ||
         !ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) return 1;
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
@@ -159,7 +165,11 @@ int main(int argc, char **argv)
     if (presence_demo) printf("%s result: 0x%02X (00=confirmed, 27=denied, 2D=cancelled, 2F=timed out, 30=outside reset window)\n",
         reset_demo ? "Reset" : "Selection",
         (unsigned int)transport.last_ctap_status);
-    if (reset_demo) printf("Volatile mock storage: generation=%u, records=%u, PIN set=%s\n",
-        (unsigned int)storage.generation, (unsigned int)storage.mock_credential_count, storage.mock_pin_set ? "true" : "false");
+    if (reset_demo) {
+        PcAuthenticatorState state = pc_authenticator_state(storage.authenticator);
+        printf("PC vault: generation=%u, credentials=%zu, keys=%zu\n", (unsigned int)state.generation,
+            state.credential_count, state.key_count);
+    }
+    ctaphid_host_storage_close(&storage);
     return 0;
 }

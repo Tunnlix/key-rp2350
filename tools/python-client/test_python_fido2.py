@@ -180,13 +180,13 @@ class PythonFido2Tests(unittest.TestCase):
 
     def test_reset_confirmed_and_state_erased(self):
         client = Ctap2(self.device)
-        before = self.connection.simulated_storage_state()
+        before = self.connection.storage_state()
         channel = self.connection.sent_reports[-1][:4]
         client.reset(on_keepalive=lambda status: self.connection.confirm_presence() if status == STATUS.UPNEEDED else None)
-        after = self.connection.simulated_storage_state()
+        after = self.connection.storage_state()
         self.assertEqual(after["generation"], before["generation"] + 1)
-        self.assertEqual(after["mock_credential_count"], 0)
-        self.assertFalse(after["mock_pin_set"])
+        self.assertEqual(after["credential_count"], 0)
+        self.assertEqual(after["key_count"], 0)
         self.assertNotEqual(after["device_identifier"], before["device_identifier"])
         self.assertNotEqual(after["credential_store_state"], before["credential_store_state"])
         self.assertEqual(client.get_info().versions, ["FIDO_2_3"])
@@ -194,23 +194,23 @@ class PythonFido2Tests(unittest.TestCase):
 
     def test_reset_denial_and_cancel_preserve_state(self):
         client = Ctap2(self.device)
-        before = self.connection.simulated_storage_state()
+        before = self.connection.storage_state()
         with self.assertRaises(CtapError) as raised:
             client.reset(on_keepalive=lambda status: self.connection.deny_presence() if status == STATUS.UPNEEDED else None)
         self.assertEqual(raised.exception.code, CtapError.ERR.OPERATION_DENIED)
-        self.assertEqual(self.connection.simulated_storage_state(), before)
+        self.assertEqual(self.connection.storage_state(), before)
         cancelled = Event()
         with self.assertRaises(CtapError) as raised:
             client.reset(event=cancelled, on_keepalive=lambda status: cancelled.set())
         self.assertEqual(raised.exception.code, CtapError.ERR.KEEPALIVE_CANCEL)
-        self.assertEqual(self.connection.simulated_storage_state(), before)
+        self.assertEqual(self.connection.storage_state(), before)
 
     def test_reset_manual_main_auto_touch(self):
         result = subprocess.run([str(self.executable), "--reset-demo", "--auto-touch-ms", "200"],
                                 capture_output=True, timeout=3.0)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(b"Reset result: 0x00", result.stdout)
-        self.assertIn(b"generation=1, records=0, PIN set=false", result.stdout)
+        self.assertIn(b"generation=1, credentials=0, keys=0", result.stdout)
         self.assertEqual(self.device.call(CTAPHID.CBOR, b"\x07\xA0"), b"\x03")
 
     def test_timeout_while_input_is_silent(self):

@@ -1,0 +1,80 @@
+#ifndef AUTH_PLATFORM_H
+#define AUTH_PLATFORM_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#define AUTH_CREDENTIAL_ID_SIZE 32U
+#define AUTH_RP_HASH_SIZE 32U
+#define AUTH_USER_ID_MAX_SIZE 64U
+#define AUTH_KEY_HANDLE_SIZE 32U
+#define AUTH_P256_PUBLIC_KEY_SIZE 65U /* SEC1 uncompressed: 04 || X[32] || Y[32]. */
+#define AUTH_ES256_DER_MAX_SIZE 72U
+#define AUTH_COSE_ALG_ES256 (-7)
+
+typedef enum {
+    AUTH_OK = 0,
+    AUTH_INVALID_ARGUMENT,
+    AUTH_NOT_FOUND,
+    AUTH_ALREADY_EXISTS,
+    AUTH_CAPACITY,
+    AUTH_IO_ERROR,
+    AUTH_BAD_DATA,
+    AUTH_CRYPTO_ERROR,
+    AUTH_BUSY,
+    AUTH_UNSUPPORTED
+} AuthStatus;
+
+/* Persistent opaque locator. Only its owning crypto provider interprets bytes.
+ * Zero is invalid. Handles are provider-specific and must not be reused after
+ * deletion/reset. Moving existing keys to another provider requires migration
+ * supported by that provider, or re-enrollment; changing callbacks is not migration. */
+typedef struct { uint8_t bytes[AUTH_KEY_HANDLE_SIZE]; } AuthKeyHandle;
+
+/* No private key bytes. Core caller validates CTAP parameters/user consent before
+ * using these operations. Callbacks are serial, bounded, and non-reentrant.
+ * Contexts remain application-owned and outlive all copies of these interfaces. */
+typedef struct {
+    void *context;
+    AuthStatus (*random)(void *, uint8_t *, size_t);
+    AuthStatus (*sha256)(void *, const uint8_t *, size_t, uint8_t digest[32]);
+    AuthStatus (*generate_p256)(void *, AuthKeyHandle *, uint8_t public_key[65]);
+    AuthStatus (*public_key)(void *, const AuthKeyHandle *, uint8_t public_key[65]);
+    AuthStatus (*sign_p256_digest)(void *, const AuthKeyHandle *, const uint8_t digest[32],
+        uint8_t signature[AUTH_ES256_DER_MAX_SIZE], size_t *signature_length);
+    AuthStatus (*destroy_key)(void *, const AuthKeyHandle *);
+} AuthCrypto;
+
+typedef struct {
+    uint8_t credential_id[AUTH_CREDENTIAL_ID_SIZE];
+    uint8_t rp_id_hash[AUTH_RP_HASH_SIZE];
+    uint8_t user_id[AUTH_USER_ID_MAX_SIZE];
+    uint8_t user_id_length;
+    AuthKeyHandle key;
+    int32_t algorithm;
+    uint32_t signature_count;
+    bool discoverable;
+} AuthCredential;
+
+/* Metadata backend: do not serialize native C struct layout to persistent media.
+ * insert and counter update must persist atomically before returning OK.
+ * Lookup/enumeration return NOT_FOUND at end; corruption must fail closed.
+ * erase removes metadata only. Key deletion remains a crypto-provider operation.
+ * Factory reset is the application's combined storage/key reset callback. */
+typedef struct {
+    void *context;
+    size_t capacity;
+    AuthStatus (*read)(void *, const uint8_t id[32], AuthCredential *);
+    AuthStatus (*insert)(void *, const AuthCredential *);
+    AuthStatus (*erase)(void *, const uint8_t id[32]);
+    AuthStatus (*find_rp)(void *, const uint8_t rp_hash[32], bool discoverable_only,
+        size_t index, AuthCredential *);
+    AuthStatus (*count)(void *, size_t *);
+    AuthStatus (*update_counter)(void *, const uint8_t id[32], uint32_t expected, uint32_t next);
+} AuthStorage;
+
+bool auth_credential_valid(const AuthCredential *credential);
+bool auth_key_handle_valid(const AuthKeyHandle *key);
+
+#endif

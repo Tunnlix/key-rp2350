@@ -63,7 +63,7 @@ bool ctaphid_host_presence_poll(HostPresence *simulation,
         if (simulation->console_mode) {
             discard_console_input();
             fprintf(stderr, "%s request %" PRIu64 ": Enter=touch, d=deny, c=cancel (30-second timeout)\n",
-                backend->awaiting_reset ? "Factory reset (volatile mock data)" : "Presence", operation);
+                backend->awaiting_reset ? "Factory reset (PC credential vault)" : "Presence", operation);
         }
         if (simulation->file_mode) {
             (void)remove(simulation->request_path);

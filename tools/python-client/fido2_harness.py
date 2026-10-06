@@ -30,7 +30,8 @@ class HarnessConnection(CtapHidConnection):
     A read timeout closes the connection to avoid reusing out-of-order replies.
     """
 
-    def __init__(self, executable: str | Path, timeout: float = 5.0, *, user_presence: bool = True):
+    def __init__(self, executable: str | Path, timeout: float = 5.0, *, user_presence: bool = True,
+                 storage_directory: str | Path | None = None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be finite and positive")
         self.timeout = timeout
@@ -38,10 +39,13 @@ class HarnessConnection(CtapHidConnection):
         self.received_reports: deque[bytes] = deque(maxlen=256)
         self._closed = False
         self._packets: Queue[bytes | Exception] = Queue()
-        self._presence_directory = tempfile.TemporaryDirectory(prefix="ctaphid-presence-") if user_presence else None
+        self._presence_directory = tempfile.TemporaryDirectory(prefix="ctaphid-presence-")
         arguments = [str(Path(executable).resolve()), "--stdio"]
-        if self._presence_directory:
+        if user_presence:
             arguments += ["--presence-control", self._presence_directory.name]
+        storage = Path(storage_directory) if storage_directory is not None else Path(self._presence_directory.name) / "vault"
+        storage.parent.mkdir(parents=True, exist_ok=True)
+        arguments += ["--store-dir", str(storage.resolve())]
         try:
             self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
         except BaseException:
@@ -145,8 +149,8 @@ class HarnessConnection(CtapHidConnection):
     def deny_presence(self) -> bool:
         return self._presence_event("deny")
 
-    def simulated_storage_state(self) -> dict:
-        """Inspect volatile test data; no actual credential/PIN features implied."""
+    def storage_state(self) -> dict:
+        """Read private diagnostics; credential/private-key data are not exposed."""
         if self._presence_directory is None:
             raise ValueError("Simulation control is disabled")
         return json.loads((Path(self._presence_directory.name) / "factory-state").read_text(encoding="ascii"))
@@ -158,14 +162,15 @@ class HarnessConnection(CtapHidConnection):
         self.close()
 
 
-def open_harness(executable: str | Path, timeout: float = 5.0, *, user_presence: bool = True) -> CtapHidDevice:
+def open_harness(executable: str | Path, timeout: float = 5.0, *, user_presence: bool = True,
+                 storage_directory: str | Path | None = None) -> CtapHidDevice:
     """Create the standard client; its constructor performs broadcast INIT."""
     descriptor = HidDescriptor(
         path=f"subprocess:{Path(executable).resolve()}", vid=0, pid=0,
         report_size_in=REPORT_SIZE, report_size_out=REPORT_SIZE,
         product_name="CTAPHID C test harness", serial_number=None,
     )
-    connection = HarnessConnection(executable, timeout, user_presence=user_presence)
+    connection = HarnessConnection(executable, timeout, user_presence=user_presence, storage_directory=storage_directory)
     try:
         return CtapHidDevice(descriptor, connection)
     except BaseException:
