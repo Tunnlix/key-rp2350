@@ -1,14 +1,26 @@
-#include "protocol/ctaphid_parser.h"
-#include "protocol/ctaphid_reassembler.h"
-#include "protocol/ctaphid_dispatcher.h"
+#include "protocol/ctaphid_device.h"
 #include <stdio.h>
+#include <string.h>
+#include "stdio_transport.h"
+#include "host_actions.h"
 
 /* Host demonstration transport. Display outgoing wire bytes; a binary pipe or
  * USB transport can replace this callback without changing the handlers. */
+typedef struct {
+    FILE *output;
+    uint32_t allocated_cid;
+} HostTransport;
+
 static bool display_response_report(
-    void *context, const uint8_t report[CTAPHID_REPORT_SIZE])
+    void *context, const uint8_t report[CTAPHID_REPORT_SIZE], uint64_t transfer_id)
 {
-    FILE *output = context;
+    HostTransport *transport = context;
+    FILE *output = transport->output;
+    (void)transfer_id; /* Synchronous transport finishes before returning. */
+    if (report[4] == 0x86U && report[5] == 0U && report[6] == 17U) {
+        transport->allocated_cid = ((uint32_t)report[15] << 24) |
+            ((uint32_t)report[16] << 16) | ((uint32_t)report[17] << 8) | report[18];
+    }
     if (fputs("TX:", output) == EOF) return false;
     for (size_t i = 0; i < CTAPHID_REPORT_SIZE; ++i) {
         if (fprintf(output, " %02X", (unsigned int)report[i]) < 0) return false;
@@ -16,12 +28,20 @@ static bool display_response_report(
     return fputc('\n', output) != EOF && fflush(output) == 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
-    CtaphidReassembler reassembler;
-    ctaphid_reassembler_reset(&reassembler);
-    CtaphidChannelManager channels;
-    ctaphid_channels_reset(&channels);
+    if (argc == 2 && strcmp(argv[1], "--stdio") == 0) return ctaphid_host_run_stdio();
+    if (argc != 1) {
+        fprintf(stderr, "Usage: %s [--stdio]\n", argv[0]);
+        return 2;
+    }
+    HostTransport transport = {stdout, 0U};
+    CtaphidDeviceConfig config = {0};
+    config.submit_report = display_response_report;
+    config.transport_context = &transport;
+    config.wink_action = ctaphid_host_wink;
+    CtaphidDevice device;
+    if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) return 1;
 
     uint8_t reports[][CTAPHID_REPORT_SIZE] = {
         /* INIT: eight-byte nonce on the broadcast CID. */
@@ -46,29 +66,20 @@ int main(void)
 
     uint32_t current_time_ms = 0U;
     for (size_t i = 0; i < sizeof reports / sizeof reports[0]; ++i) {
-        CtaphidParsedPacket packet;
-        CtaphidParseResult parse_result = ctaphid_parse_packet(
-            reports[i], sizeof reports[i], &packet);
-        if (parse_result != CTAPHID_PARSE_OK) {
-            printf("%s: parse status=%d\n", descriptions[i], (int)parse_result);
+        /* Host uses the actual CID from INIT, rather than assuming allocation 1. */
+        if (i != 0U) {
+            reports[i][0] = (uint8_t)(transport.allocated_cid >> 24);
+            reports[i][1] = (uint8_t)(transport.allocated_cid >> 16);
+            reports[i][2] = (uint8_t)(transport.allocated_cid >> 8);
+            reports[i][3] = (uint8_t)transport.allocated_cid;
+        }
+        CtaphidDeviceResult result = ctaphid_device_receive_report(
+            &device, reports[i], sizeof reports[i], current_time_ms);
+        if (result != CTAPHID_DEVICE_OK && result != CTAPHID_DEVICE_IGNORED) {
+            fprintf(stderr, "%s: receive status=%d\n", descriptions[i], (int)result);
             return 1;
         }
-
-        CtaphidReassembleResult status = ctaphid_reassemble_packet(
-            &reassembler, &packet, current_time_ms);
-
-        if (status == CTAPHID_REASSEMBLE_COMPLETE) {
-            CtaphidDispatchResult result = ctaphid_dispatch_message(
-                &reassembler, &channels, display_response_report, stdout);
-            if (result != CTAPHID_DISPATCH_OK && result != CTAPHID_DISPATCH_NO_RESPONSE) {
-                fprintf(stderr, "%s: dispatch status=%d\n", descriptions[i], (int)result);
-                return 1;
-            }
-        } else if (status != CTAPHID_REASSEMBLE_INCOMPLETE &&
-                   status != CTAPHID_REASSEMBLE_IGNORED) {
-            fprintf(stderr, "%s: assembly status=%d\n", descriptions[i], (int)status);
-            return 1;
-        }
+        if (ctaphid_device_poll(&device, current_time_ms) != CTAPHID_DEVICE_OK) return 1;
         current_time_ms += 10U;
     }
     return 0;

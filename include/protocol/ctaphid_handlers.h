@@ -7,13 +7,15 @@
 /* Inputs are borrowed, immutable, and validated by the dispatcher.
  * INIT constructs its reply using the CID selected by the dispatcher; it does
  * not allocate channels or reset transaction state. PING echoes the payload.
- * WINK performs the host identification action and sends an empty reply.
+ * WINK sends an empty reply after the caller's platform identification action.
  * These handlers return serialization/transport status without modifying the
- * request. CBOR, LOCK, and CANCEL remain development-only logging stubs.
+ * request. CBOR execution and cancellation belong to the device/backend;
+ * optional LOCK remains unsupported.
  */
 CtaphidResponseResult ctaphid_handle_init(
     const CtaphidReassembler *message,
     uint32_t allocated_channel_id,
+    uint8_t capabilities,
     CtaphidSendReport send_report,
     void *transport_context
 );
@@ -22,13 +24,10 @@ CtaphidResponseResult ctaphid_handle_ping(
     CtaphidSendReport send_report,
     void *transport_context
 );
-void ctaphid_handle_cbor(const CtaphidReassembler *message);
-void ctaphid_handle_lock(const CtaphidReassembler *message);
 CtaphidResponseResult ctaphid_handle_wink(
     const CtaphidReassembler *message,
     CtaphidSendReport send_report,
     void *transport_context
 );
-void ctaphid_handle_cancel(uint32_t channel_id);
 
 #endif

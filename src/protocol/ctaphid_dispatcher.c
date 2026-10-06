@@ -16,9 +16,10 @@ static CtaphidDispatchResult finish_response(
         ? CTAPHID_DISPATCH_OK : CTAPHID_DISPATCH_RESPONSE_FAILED;
 }
 
-CtaphidDispatchResult ctaphid_dispatch_message(
+CtaphidDispatchResult ctaphid_dispatch_message_with_capabilities(
     CtaphidReassembler *message,
     CtaphidChannelManager *channels,
+    uint8_t capabilities,
     CtaphidSendReport send_report,
     void *transport_context
 )
@@ -32,6 +33,12 @@ CtaphidDispatchResult ctaphid_dispatch_message(
     if (message->expected_length > sizeof(message->buffer)
         || message->received_length != message->expected_length) {
         return CTAPHID_DISPATCH_INVALID_MESSAGE;
+    }
+    /* Fire-and-forget even on a non-active/invalid CID. The device intercepts
+     * processing-time cancellation before this synchronous dispatcher. */
+    if (message->command == CTAPHID_COMMAND_CANCEL) {
+        message->has_complete_message = false;
+        return CTAPHID_DISPATCH_NO_RESPONSE;
     }
     if (message->channel_id == 0U || (message->channel_id == CTAPHID_BROADCAST_CHANNEL_ID
         && message->command != CTAPHID_COMMAND_INIT) ||
@@ -59,8 +66,11 @@ CtaphidDispatchResult ctaphid_dispatch_message(
                     send_report, transport_context));
             }
         }
+        capabilities = (uint8_t)((capabilities &
+            (CTAPHID_CAPABILITY_WINK | CTAPHID_CAPABILITY_CBOR)) | CTAPHID_CAPABILITY_NMSG);
         return finish_response(message, ctaphid_handle_init(
-            message, allocated_channel_id, send_report, transport_context));
+            message, allocated_channel_id, capabilities,
+            send_report, transport_context));
     }
 
     case CTAPHID_COMMAND_PING: {
@@ -76,16 +86,7 @@ CtaphidDispatchResult ctaphid_dispatch_message(
         if (message->received_length == 0U) {
             return CTAPHID_DISPATCH_INVALID_LENGTH;
         }
-        ctaphid_handle_cbor(message);
-        break;
-
-    case CTAPHID_COMMAND_CANCEL:
-        /* Log a valid CANCEL at this stage; send no response to this request. */
-        if (message->received_length == 0U) {
-            ctaphid_handle_cancel(message->channel_id);
-        }
-        message->has_complete_message = false;
-        return CTAPHID_DISPATCH_NO_RESPONSE;
+        return CTAPHID_DISPATCH_UNSUPPORTED_COMMAND;
 
     case CTAPHID_COMMAND_LOCK:
         if (message->received_length != CTAPHID_LOCK_PAYLOAD_LENGTH) {
@@ -94,10 +95,13 @@ CtaphidDispatchResult ctaphid_dispatch_message(
         if (message->buffer[0] > CTAPHID_MAX_LOCK_SECONDS) {
             return CTAPHID_DISPATCH_INVALID_PARAMETER;
         }
-        ctaphid_handle_lock(message);
-        break;
+        /* Optional LOCK is not implemented: never acknowledge a logging stub. */
+        return CTAPHID_DISPATCH_UNSUPPORTED_COMMAND;
 
     case CTAPHID_COMMAND_WINK:
+        if ((capabilities & CTAPHID_CAPABILITY_WINK) == 0U) {
+            return CTAPHID_DISPATCH_UNSUPPORTED_COMMAND;
+        }
         if (message->received_length != 0U) {
             return CTAPHID_DISPATCH_INVALID_LENGTH;
         }
@@ -126,4 +130,13 @@ CtaphidDispatchResult ctaphid_dispatch_message(
 
     message->has_complete_message = false;
     return CTAPHID_DISPATCH_OK;
+}
+
+CtaphidDispatchResult ctaphid_dispatch_message(
+    CtaphidReassembler *message, CtaphidChannelManager *channels,
+    CtaphidSendReport send_report, void *transport_context)
+{
+    return ctaphid_dispatch_message_with_capabilities(message, channels,
+        CTAPHID_CAPABILITY_WINK | CTAPHID_CAPABILITY_NMSG,
+        send_report, transport_context);
 }

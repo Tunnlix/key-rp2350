@@ -1,7 +1,7 @@
 /*
  * CTAPHID USB HID report parser.
- * Reference: FIDO CTAP 2.2 specification, section 11.2 (USB HID).
- * https://fidoalliance.org/specs/fido-v2.2-ps-20250714/fido-client-to-authenticator-protocol-v2.2-ps-20250714.html#usb-hid
+ * Reference: FIDO CTAP 2.3 specification, section 11.2 (USB HID).
+ * https://fidoalliance.org/specs/fido-v2.3-ps-20260226/fido-client-to-authenticator-protocol-v2.3-ps-20260226.html#usb-hid
  * Decodes individual 64-byte initial and continuation reports.
  */
 

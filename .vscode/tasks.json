@@ -5,14 +5,24 @@
             "label": "Build C program",
             "type": "process",
             "command": "gcc",
-            "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "-I", "${workspaceFolder}/include", "${workspaceFolder}/examples/host/main.c", "${workspaceFolder}/src/protocol/ctaphid_parser.c", "${workspaceFolder}/src/protocol/ctaphid_reassembler.c", "${workspaceFolder}/src/protocol/ctaphid_dispatcher.c", "${workspaceFolder}/src/protocol/ctaphid_handlers.c", "${workspaceFolder}/src/protocol/ctaphid_response.c", "${workspaceFolder}/src/protocol/ctaphid_channels.c", "-o", "${workspaceFolder}/main"],
+            "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "-I", "${workspaceFolder}/include", "${workspaceFolder}/examples/host/main.c", "${workspaceFolder}/examples/host/stdio_transport.c", "${workspaceFolder}/examples/host/host_actions.c", "${workspaceFolder}/src/protocol/ctaphid_parser.c", "${workspaceFolder}/src/protocol/ctaphid_reassembler.c", "${workspaceFolder}/src/protocol/ctaphid_dispatcher.c", "${workspaceFolder}/src/protocol/ctaphid_handlers.c", "${workspaceFolder}/src/protocol/ctaphid_response.c", "${workspaceFolder}/src/protocol/ctaphid_channels.c", "${workspaceFolder}/src/protocol/ctaphid_device.c", "-o", "${workspaceFolder}/main"],
             "windows": {
                 "command": "${env:LOCALAPPDATA}/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/gcc.exe",
-                "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "-I", "${workspaceFolder}/include", "${workspaceFolder}/examples/host/main.c", "${workspaceFolder}/src/protocol/ctaphid_parser.c", "${workspaceFolder}/src/protocol/ctaphid_reassembler.c", "${workspaceFolder}/src/protocol/ctaphid_dispatcher.c", "${workspaceFolder}/src/protocol/ctaphid_handlers.c", "${workspaceFolder}/src/protocol/ctaphid_response.c", "${workspaceFolder}/src/protocol/ctaphid_channels.c", "-o", "${workspaceFolder}/main.exe"]
+                "args": ["-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-g", "-O0", "-I", "${workspaceFolder}/include", "${workspaceFolder}/examples/host/main.c", "${workspaceFolder}/examples/host/stdio_transport.c", "${workspaceFolder}/examples/host/host_actions.c", "${workspaceFolder}/src/protocol/ctaphid_parser.c", "${workspaceFolder}/src/protocol/ctaphid_reassembler.c", "${workspaceFolder}/src/protocol/ctaphid_dispatcher.c", "${workspaceFolder}/src/protocol/ctaphid_handlers.c", "${workspaceFolder}/src/protocol/ctaphid_response.c", "${workspaceFolder}/src/protocol/ctaphid_channels.c", "${workspaceFolder}/src/protocol/ctaphid_device.c", "-o", "${workspaceFolder}/main.exe"]
             },
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": ["$gcc"],
             "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "Test python-fido2 integration",
+            "type": "process",
+            "command": "${workspaceFolder}/.venv/bin/python",
+            "windows": { "command": "${workspaceFolder}/.venv/Scripts/python.exe" },
+            "args": ["-m", "unittest", "discover", "-s", "tools/python-client", "-p", "test_python_fido2.py", "-v"],
+            "options": { "cwd": "${workspaceFolder}" },
+            "problemMatcher": [],
+            "group": "test"
         }
     ]
 }
