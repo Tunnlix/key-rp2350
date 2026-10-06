@@ -29,8 +29,17 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65])
 {
+    return auth_credentials_create_protected(service, rp_id_hash, user_id, user_id_length,
+        discoverable, 1U, credential, public_key);
+}
+
+AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
+    const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
+    bool discoverable, uint8_t cred_protect, AuthCredential *credential, uint8_t public_key[65])
+{
     if (service == NULL || rp_id_hash == NULL || (user_id == NULL && user_id_length != 0U) || credential == NULL ||
-        public_key == NULL || user_id_length > AUTH_USER_ID_MAX_SIZE) return AUTH_INVALID_ARGUMENT;
+        public_key == NULL || user_id_length > AUTH_USER_ID_MAX_SIZE || cred_protect < 1U || cred_protect > 3U)
+        return AUTH_INVALID_ARGUMENT;
     size_t count;
     AuthStatus status = service->storage.count(service->storage.context, &count);
     if (status != AUTH_OK) return status;
@@ -38,6 +47,7 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
     AuthCredential created = {0}, existing;
     created.algorithm = AUTH_COSE_ALG_ES256;
     created.discoverable = discoverable;
+    created.cred_protect = cred_protect;
     created.user_id_length = (uint8_t)user_id_length;
     if (user_id_length != 0U) memcpy(created.user_id, user_id, user_id_length);
     memcpy(created.rp_id_hash, rp_id_hash, 32U);

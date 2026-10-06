@@ -16,6 +16,7 @@ bool auth_credential_valid(const AuthCredential *credential)
 {
     return credential != NULL && credential->algorithm == AUTH_COSE_ALG_ES256 &&
         credential->user_id_length <= AUTH_USER_ID_MAX_SIZE &&
+        credential->cred_protect >= 1U && credential->cred_protect <= 3U &&
         auth_key_handle_valid(&credential->key) &&
         nonzero(credential->credential_id, sizeof credential->credential_id);
 }

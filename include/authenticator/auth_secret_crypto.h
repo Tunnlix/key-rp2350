@@ -23,7 +23,7 @@ typedef struct {
     AuthStatus (*credential_supported)(void *, const AuthKeyHandle *, bool *supported);
     AuthStatus (*credential_hmac)(void *, const AuthKeyHandle *, bool user_verified,
         const uint8_t salt[32], uint8_t result[32]);
-    /* Optional for hmac-secret, required for PIN maintenance. Replace the
+    /* Optional for hmac-secret, required for PIN/token support. Replace the
      * ephemeral agreement key atomically; failure must leave it unusable or
      * return an error so the caller can fail closed. Does not alter credentials. */
     AuthStatus (*regenerate)(void *);

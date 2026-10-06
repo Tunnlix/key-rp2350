@@ -55,6 +55,7 @@ typedef struct {
     int32_t algorithm;
     uint32_t signature_count;
     bool discoverable;
+    uint8_t cred_protect; /* CTAP policy 1..3, persisted with metadata. */
 } AuthCredential;
 
 /* Metadata backend: do not serialize native C struct layout to persistent media.

@@ -3,6 +3,7 @@
 
 #include "ctap/ctap.h"
 #include "authenticator/auth_credentials.h"
+#include "ctap/ctap_client_pin.h"
 
 /* Validated request state owns only the data needed after touch. No borrowed
  * receive-buffer pointers, credential keys or platform details are retained. */
@@ -11,15 +12,24 @@ typedef struct {
     size_t user_id_length;
     bool credential_excluded, omit_attestation;
     bool hmac_secret_requested;
+    CtapClientPin *pin;
+    CtapPinAuth auth;
+    bool user_verified, cred_protect_requested;
+    uint8_t cred_protect;
 } CtapMakeCredential;
 
 /* Validate the parameter map and check RP-bound exclusion before asking for UP.
  * Success means ready to wait for a fresh touch, not a created credential.
  * Invalid/unsupported requests produce a CTAP status and never create keys.
  * Supports non-discoverable ES256 only; ignores unsupported extensions/options.
- * No PIN, UV, enterprise attestation or resident-key features are claimed. */
+ * This entry point has no PIN binding; the with_pin variant adds protocol 2
+ * authorization and credProtect. Enterprise attestation/rk remain unsupported. */
 uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
+/* Authorize against the injected clock after validating all descriptors. The
+ * prepared state snapshots the token generation and may be discarded on abort. */
+uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, CtapClientPin *pin,
+    uint32_t now_ms, const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 
 /* Caller MUST establish fresh user presence for this operation first.
  * Creates/persists the credential, then encodes the response CBOR (no status).
@@ -31,5 +41,11 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
 uint8_t ctap_make_credential_finish(AuthCredentialService *service,
     const CtapMakeCredential *prepared, const uint8_t aaguid[16],
     uint8_t *output, size_t capacity, size_t *length);
+/* Required for PIN-bound prepared state: rechecks expiry/generation after UP,
+ * then consumes token permissions before creating/signing. Failures may consume
+ * permissions but cannot publish an unauthorized credential. */
+uint8_t ctap_make_credential_finish_at(AuthCredentialService *service,
+    const CtapMakeCredential *prepared, const uint8_t aaguid[16],
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 
 #endif

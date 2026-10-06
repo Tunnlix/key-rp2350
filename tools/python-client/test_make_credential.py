@@ -122,7 +122,7 @@ class MakeCredentialTests(unittest.TestCase):
                  (5, [], 2), (5, [{"type": "public-key", "id": False}], 0x11),
                  (6, [], 0x11), (7, {"rk": True}, 0x2B), (7, {"up": False}, 0x2C),
                  (7, {"uv": True}, 0x2C), (7, {"up": 1}, 0x11),
-                 (8, b"", 0x14), (10, 1, 2), (11, [1], 0x11)]
+                 (8, bytes(32), 0x14), (10, 1, 2), (11, [1], 0x11)]
         for key, value, status in cases:
             with self.subTest(key=key, value=value):
                 request = parameters()

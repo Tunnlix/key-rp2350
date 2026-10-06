@@ -7,23 +7,25 @@
 uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
     const uint8_t *parameters, size_t length, CtapGetAssertion *prepared)
 {
-    if (service == NULL || prepared == NULL) return CTAP_STATUS_OTHER;
+    return ctap_get_assertion_prepare_with_pin(service, NULL, 0U, parameters, length, prepared);
+}
+
+uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, CtapClientPin *pin,
+    uint32_t now_ms, const uint8_t *parameters, size_t length, CtapGetAssertion *prepared)
+{
+    if (service == NULL || prepared == NULL || (pin != NULL && pin->service != service)) return CTAP_STATUS_OTHER;
     CborValue fields[8] = {{0}}, value;
     bool present[8] = {false};
     uint8_t status = ctap_request_map(parameters, length, 8U, fields, present);
     if (status != CTAP_STATUS_OK) return status;
+    CtapGetAssertion result = {0}; result.pin = pin; result.user_presence_required = true;
+    status = ctap_pin_auth_parse(pin, present[6] ? &fields[6] : NULL, present[7] ? &fields[7] : NULL, &result.auth);
+    if (status != CTAP_STATUS_OK) return status;
+    if (result.auth.probe) { *prepared = result; return CTAP_STATUS_OK; }
     if (!present[1] || !present[2]) return CTAP_STATUS_MISSING_PARAMETER;
     if (fields[1].major != 3U || fields[2].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (fields[1].value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
     if (fields[2].value != 32U) return CTAP_STATUS_INVALID_LENGTH;
-    if (present[6]) {
-        if (fields[6].major != 2U || (present[7] && fields[7].major != 0U)) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        /* No PIN/UV protocols are supported. Never silently ignore an auth param. */
-        return present[7] ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_MISSING_PARAMETER;
-    }
-    if (present[7] && fields[7].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    CtapGetAssertion result = {0};
-    result.user_presence_required = true;
     if (present[5]) {
         status = ctap_request_text_map(&fields[5]);
         if (status != CTAP_STATUS_OK) return status;
@@ -37,7 +39,7 @@ uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
                 enabled[i] = value.encoded[0] == 0xF5U;
             }
         }
-        if (enabled[0]) return CTAP_STATUS_INVALID_OPTION;
+        if (enabled[0] && !result.auth.present) return CTAP_STATUS_INVALID_OPTION;
         if (known[1]) return CTAP_STATUS_UNSUPPORTED_OPTION; /* rk is invalid even when false (6.2.2). */
         result.user_presence_required = enabled[2];
     }
@@ -56,6 +58,10 @@ uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
     memcpy(result.client_data_hash, fields[2].data, 32U);
     if (service->crypto.sha256(service->crypto.context, fields[1].data,
         (size_t)fields[1].value, result.rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
+    status = ctap_client_pin_authorize(pin, &result.auth, result.rp_id_hash, result.client_data_hash,
+        CTAP_PIN_PERMISSION_GA, now_ms, false);
+    if (status != CTAP_STATUS_OK) return status;
+    result.user_verified = result.auth.present;
     if (!present[3]) return CTAP_STATUS_NO_CREDENTIALS;
     const uint8_t *cursor = fields[3].data, *end = fields[3].encoded + fields[3].encoded_length;
     CborValue entry, id, type;
@@ -67,12 +73,15 @@ uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
         if (!cbor_text_equal(&type, "public-key") || id.value != AUTH_CREDENTIAL_ID_SIZE) continue;
         AuthCredential found;
         AuthStatus lookup = auth_credentials_get(service, id.data, result.rp_id_hash, &found);
-        if (lookup == AUTH_OK && !selected) {
+        if (lookup == AUTH_OK && !selected && (found.cred_protect != 3U || result.user_verified)) {
             memcpy(result.credential_id, found.credential_id, 32U);
             selected = true;
         } else if (lookup != AUTH_OK && lookup != AUTH_NOT_FOUND) return CTAP_STATUS_OTHER;
     }
     if (!selected) return CTAP_STATUS_NO_CREDENTIALS;
+    status = ctap_client_pin_authorize(pin, &result.auth, result.rp_id_hash, result.client_data_hash,
+        CTAP_PIN_PERMISSION_GA, now_ms, true);
+    if (status != CTAP_STATUS_OK) return status;
     *prepared = result;
     return CTAP_STATUS_OK;
 }
@@ -80,25 +89,43 @@ uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
 uint8_t ctap_get_assertion_finish(AuthCredentialService *service,
     const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length)
 {
+    if (prepared != NULL && prepared->pin != NULL) return CTAP_STATUS_OTHER;
+    return ctap_get_assertion_finish_at(service, prepared, output, capacity, length, 0U);
+}
+
+uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service,
+    const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
     if (service == NULL || prepared == NULL || output == NULL || length == NULL ||
         capacity < (prepared->hmac_secret.requested ? 288U : 192U))
         return CTAP_STATUS_OTHER;
+    if (prepared->auth.probe) return ctap_client_pin_probe(prepared->pin);
+    if (prepared->user_verified != prepared->auth.present || (prepared->pin != NULL && prepared->pin->service != service))
+        return CTAP_STATUS_OTHER;
+    CtapPinAuth auth = prepared->auth;
+    if (auth.present && auth.token_generation == 0U) return CTAP_STATUS_PIN_AUTH_INVALID;
+    uint8_t authorized = ctap_client_pin_authorize(prepared->pin, &auth, prepared->rp_id_hash, prepared->client_data_hash,
+        CTAP_PIN_PERMISSION_GA, now_ms, false);
+    if (authorized != CTAP_STATUS_OK) return authorized;
     AuthCredential credential;
     AuthStatus status = auth_credentials_get(service, prepared->credential_id, prepared->rp_id_hash, &credential);
     if (status != AUTH_OK) return status == AUTH_NOT_FOUND ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_OTHER;
+    if (credential.cred_protect == 3U && !prepared->user_verified) return CTAP_STATUS_NO_CREDENTIALS;
+    if (prepared->user_presence_required) ctap_client_pin_invalidate(prepared->pin);
     uint8_t extension_output[80]; size_t extension_length = 0U;
     if (prepared->hmac_secret.requested) {
         if (!prepared->user_presence_required) return CTAP_STATUS_UNSUPPORTED_OPTION;
         uint8_t extension_status = ctap_hmac_secret_evaluate(service, &credential, &prepared->hmac_secret,
-            false, extension_output, &extension_length);
+            prepared->user_verified, extension_output, &extension_length);
         if (extension_status != CTAP_STATUS_OK) return extension_status;
     }
     /* Signed bytes = rpIdHash[32] || flags[1] || counter[4] || clientDataHash[32].
      * Optional encrypted extension map is between counter and clientDataHash.
-     * No AT/UV/backup flags: this is a local, non-discoverable credential. */
+     * UV reflects authorization; no AT/backup flags for these local credentials. */
     uint8_t signed_data[164], digest[32], signature[72];
     memcpy(signed_data, prepared->rp_id_hash, 32U);
-    signed_data[32] = (prepared->user_presence_required ? 1U : 0U) | (extension_length != 0U ? 0x80U : 0U);
+    signed_data[32] = (prepared->user_presence_required ? 1U : 0U) | (prepared->user_verified ? 4U : 0U) |
+        (extension_length != 0U ? 0x80U : 0U);
     size_t data_length = 37U;
     if (extension_length != 0U) {
         CborWriter extension; cbor_writer_init(&extension, signed_data + data_length, sizeof signed_data - data_length - 32U);

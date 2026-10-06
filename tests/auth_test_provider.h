@@ -13,7 +13,7 @@ typedef struct {
     bool read_fails, counter_fails;
     size_t generated, destroyed, signatures;
     size_t hashed_length;
-    uint8_t hashed_data[212];
+    uint8_t hashed_data[224];
     uint32_t counter_at_sign;
 } Store;
 static AuthStatus random_bytes(void *ctx, uint8_t *out, size_t len)

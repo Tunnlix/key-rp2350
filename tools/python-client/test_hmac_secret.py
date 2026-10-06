@@ -37,15 +37,17 @@ def rewrite_as_legacy_vault(path, version=1):
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
     vault = path.read_bytes()
-    assert vault[:8] == b"APCV\x00\x00\x00\x03"
+    assert vault[:8] == b"APCV\x00\x00\x00\x04"
     sealed = (ctypes.c_ubyte * (len(vault) - 12)).from_buffer_copy(vault[12:])
     incoming, plain = Blob(len(sealed), sealed), Blob()
     assert crypt.CryptUnprotectData(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(plain))
     try:
         data = bytearray(ctypes.string_at(plain.data, plain.length))
-        assert data[:4] == b"ACP3"
-        if version == 2:
-            legacy = bytearray(b"ACP2") + data[4:-19]  # Drop the v3 PIN record.
+        assert data[:4] == b"ACP4"
+        if version == 3:
+            legacy = bytearray(b"ACP3") + data[4:-16]  # Drop v4 credential policies.
+        elif version == 2:
+            legacy = bytearray(b"ACP2") + data[4:-35]  # Drop PIN/policy records.
         else:
             assert version == 1
             legacy = bytearray(b"ACP1") + data[4:40]
@@ -121,16 +123,16 @@ class HmacSecretTests(unittest.TestCase):
 
     def test_get_info_and_development_client_pin(self):
         info = self.client.get_info()
-        self.assertEqual(info.extensions, ["hmac-secret"])
+        self.assertEqual(info.extensions, ["hmac-secret", "credProtect"])
         self.assertEqual(info.pin_uv_protocols, [2])
-        self.assertNotIn("clientPin", info.options)
+        self.assertFalse(info.options["clientPin"])
         self.assertNotIn("uv", info.options)
-        self.assertNotIn("pinUvAuthToken", info.options)
+        self.assertTrue(info.options["pinUvAuthToken"])
         first = self.client.client_pin(2, ClientPin.CMD.GET_KEY_AGREEMENT)[1]
         self.assertEqual(first, self.client.client_pin(2, ClientPin.CMD.GET_KEY_AGREEMENT)[1])
         self.assertEqual((first[1], first[3], first[-1]), (2, -25, 1))
         for params, status in (({}, 0x14), ({1: 2}, 0x14), ({1: 1, 2: 2}, 2),
-                               ({1: "2", 2: 2}, 0x11), ({1: 2, 2: 3}, 0x14), ({1: 2, 2: 9}, 0x3E)):
+                               ({1: "2", 2: 2}, 0x11), ({1: 2, 2: 3}, 0x14), ({1: 2, 2: 9}, 0x14)):
             with self.subTest(params=params), self.assertRaises(CtapError) as error:
                 self.client.send_cbor(Ctap2.CMD.CLIENT_PIN, params)
             self.assertEqual(int(error.exception.code), status)
@@ -288,7 +290,7 @@ class HmacSecretTests(unittest.TestCase):
                 self.assertEqual(int(response.auth_data.flags), 1)
                 self.assertEqual(response.auth_data.counter, 1)
                 # A successful counter update upgrades the file while preserving old keys.
-                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x03")
+                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x04")
                 new_created = self.register(client, peer)
                 request, shared = self.request(client=client)
                 self.assertEqual(len(self.output(self.assertion(request, client, peer, new_created), shared)), 32)

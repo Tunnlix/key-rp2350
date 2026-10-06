@@ -24,6 +24,11 @@ bool auth_credentials_configure_secrets(AuthCredentialService *service,
 AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65]);
+/* Same atomic creation, with explicit CTAP credential protection policy. The
+ * original entry point uses policy 1. Policy is committed with initial metadata. */
+AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
+    const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
+    bool discoverable, uint8_t cred_protect, AuthCredential *credential, uint8_t public_key[65]);
 
 /* RP binding is checked before returning metadata or signing. This does not
  * establish UP/UV itself: the future CTAP handler must authorize the operation. */

@@ -33,6 +33,10 @@ typedef struct {
     CtapClientPin *pin;
     bool awaiting_pin;
     CtapClientPinRequest pin_request;
+    bool awaiting_get_info;
+    bool awaiting_credential_prepare, prepare_make;
+    uint8_t credential_request[CTAPHID_MAX_MESSAGE_SIZE];
+    size_t credential_request_length;
 } CtaphidCtapBackend;
 
 /* Profile's advertised size must match the coordinator's receive capacity.
@@ -54,8 +58,9 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
 bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
 
-/* Optional development PIN maintenance binding, after credentials/reset.
- * Does not advertise clientPin/token/UV capabilities. The combined application
+/* Complete protocol 2 PIN/token binding, after credentials/reset. Enables
+ * clientPin, pinUvAuthToken and credProtect; built-in uv remains absent. The
+ * combined application
  * Reset callback must erase persistent PIN state as well as credentials/keys. */
 bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin);
 
@@ -69,6 +74,8 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id);
  * reply through complete_cbor; another device_poll then transmits it. Selection,
  * Reset, MakeCredential and normal GetAssertion remain pending with UPNEEDED.
  * GetAssertion with up=false completes without touch, with the UP bit cleared.
+ * PIN-bound credential requests are copied and validated in poll using the
+ * current injected clock; token authorization is rechecked after touch.
  * MakeCredential creates/signs only after confirmation; cancellation/resync
  * discards validated request state without creating credentials or changing
  * assertion counters. Counters persist before signing; failed signing may skip

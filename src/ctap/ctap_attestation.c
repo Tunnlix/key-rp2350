@@ -6,14 +6,15 @@
 bool ctap_attestation_encode(AuthCredentialService *service,
     const AuthCredential *credential, const uint8_t public_key[65],
     const uint8_t client_data_hash[32], const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
+    bool user_verified, bool cred_protect_requested,
     uint8_t *output, size_t capacity, size_t *length)
 {
     if (service == NULL || !auth_credential_valid(credential) || public_key == NULL ||
         public_key[0] != 4U || client_data_hash == NULL || aaguid == NULL || output == NULL || length == NULL) return false;
     /* Fixed portion: RP hash, flags, counter, AAGUID, ID length and ID. */
-    uint8_t data[212] = {0};
+    uint8_t data[224] = {0};
     memcpy(data, credential->rp_id_hash, 32U);
-    data[32] = hmac_secret == NULL ? 0x41U : 0xC1U;
+    data[32] = 0x41U | (user_verified ? 4U : 0U) | ((hmac_secret != NULL || cred_protect_requested) ? 0x80U : 0U);
     if (!omit) memcpy(data + 37U, aaguid, 16U);
     data[54] = 32U;
     memcpy(data + 55U, credential->credential_id, 32U);
@@ -28,10 +29,15 @@ bool ctap_attestation_encode(AuthCredentialService *service,
         cbor_write_int(&cose, -3) && cbor_write_bytes(&cose, public_key + 33U, 32U);
     if (!ok) return false;
     size_t data_length = 87U + cose.length;
-    if (hmac_secret != NULL) {
+    if (hmac_secret != NULL || cred_protect_requested) {
         CborWriter extension; cbor_writer_init(&extension, data + data_length, sizeof data - data_length - 32U);
-        if (!cbor_write_map(&extension, 1U) || !cbor_write_text(&extension, "hmac-secret") ||
-            !cbor_write_bool(&extension, *hmac_secret)) return false;
+        bool extensions_ok = cbor_write_map(&extension, (hmac_secret != NULL ? 1U : 0U) + (cred_protect_requested ? 1U : 0U));
+        /* Both keys have 11 bytes: credProtect precedes hmac-secret. */
+        if (cred_protect_requested) extensions_ok = extensions_ok && cbor_write_text(&extension, "credProtect") &&
+            cbor_write_uint(&extension, credential->cred_protect);
+        if (hmac_secret != NULL) extensions_ok = extensions_ok && cbor_write_text(&extension, "hmac-secret") &&
+            cbor_write_bool(&extension, *hmac_secret);
+        if (!extensions_ok) return false;
         data_length += extension.length;
     }
     uint8_t signature[72], digest[32];

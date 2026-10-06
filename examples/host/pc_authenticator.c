@@ -20,7 +20,8 @@
 #define PC_PRIVATE_BLOB_SIZE 104U
 #define PC_PLAIN_SIZE_V1 (40U + PC_CAPACITY * 137U + PC_CAPACITY * 168U)
 #define PC_PLAIN_SIZE_V2 (PC_PLAIN_SIZE_V1 + PC_CAPACITY * 65U)
-#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V2 + 19U)
+#define PC_PLAIN_SIZE_V3 (PC_PLAIN_SIZE_V2 + 19U)
+#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V3 + PC_CAPACITY)
 #define PC_SEALED_MAX 65536U
 
 typedef struct {
@@ -89,7 +90,7 @@ static uint32_t read_u32(const uint8_t *input)
 static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
 {
     uint8_t *cursor = plain;
-    memcpy(cursor, "ACP3", 4U); cursor += 4U;
+    memcpy(cursor, "ACP4", 4U); cursor += 4U;
     write_u32(cursor, state->generation); cursor += 4U;
     memcpy(cursor, state->device_identifier, 16U); cursor += 16U;
     memcpy(cursor, state->credential_store_state, 16U); cursor += 16U;
@@ -118,6 +119,9 @@ static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
     *cursor++ = state->pin.retries;
     *cursor++ = state->pin.code_points;
     memcpy(cursor, state->pin.hash, 16U);
+    cursor += 16U;
+    for (size_t i = 0U; i < PC_CAPACITY; ++i)
+        *cursor++ = state->records[i].used ? state->records[i].credential.cred_protect : 0U;
 }
 
 static int key_index(const PcState *state, const AuthKeyHandle *handle)
@@ -140,8 +144,9 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
 {
     if ((version == 1U && (length != PC_PLAIN_SIZE_V1 || memcmp(plain, "ACP1", 4U) != 0)) ||
         (version == 2U && (length != PC_PLAIN_SIZE_V2 || memcmp(plain, "ACP2", 4U) != 0)) ||
-        (version == 3U && (length != PC_PLAIN_SIZE || memcmp(plain, "ACP3", 4U) != 0)) ||
-        version < 1U || version > 3U) return false;
+        (version == 3U && (length != PC_PLAIN_SIZE_V3 || memcmp(plain, "ACP3", 4U) != 0)) ||
+        (version == 4U && (length != PC_PLAIN_SIZE || memcmp(plain, "ACP4", 4U) != 0)) ||
+        version < 1U || version > 4U) return false;
     memset(state, 0, sizeof *state);
     state->pin.retries = AUTH_PIN_MAX_RETRIES;
     const uint8_t *cursor = plain + 4U;
@@ -176,6 +181,7 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
         uint8_t used = *cursor++, algorithm = *cursor++;
         if (used > 1U) return false;
         record->used = used != 0U;
+        credential->cred_protect = record->used ? 1U : 0U;
         credential->algorithm = algorithm == 1U ? AUTH_COSE_ALG_ES256 : 0;
         memcpy(credential->credential_id, cursor, 32U); cursor += 32U;
         memcpy(credential->rp_id_hash, cursor, 32U); cursor += 32U;
@@ -195,14 +201,22 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
             }
         }
     }
-    if (version == 3U) {
+    if (version >= 3U) {
         uint8_t set = *cursor++;
         if (set > 1U) return false;
         state->pin.set = set != 0U;
         state->pin.retries = *cursor++;
         state->pin.code_points = *cursor++;
         memcpy(state->pin.hash, cursor, 16U);
+        cursor += 16U;
         if (!auth_pin_record_valid(&state->pin)) return false;
+    }
+    if (version == 4U) {
+        for (size_t i = 0U; i < PC_CAPACITY; ++i) {
+            uint8_t policy = *cursor++;
+            if (state->records[i].used ? (policy < 1U || policy > 3U) : policy != 0U) return false;
+            state->records[i].credential.cred_protect = policy;
+        }
     }
     return true;
 }
@@ -224,7 +238,7 @@ static AuthStatus commit(PcAuthenticator *pc, const PcState *next)
     AuthStatus result = AUTH_IO_ERROR;
     if (file != INVALID_HANDLE_VALUE) {
         uint8_t header[12];
-        memcpy(header, "APCV", 4U); write_u32(header + 4U, 3U); write_u32(header + 8U, output.cbData);
+        memcpy(header, "APCV", 4U); write_u32(header + 4U, 4U); write_u32(header + 8U, output.cbData);
         DWORD written = 0U;
         bool ok = WriteFile(file, header, sizeof header, &written, NULL) && written == sizeof header;
         if (ok) ok = WriteFile(file, output.pbData, output.cbData, &written, NULL) && written == output.cbData;
@@ -250,7 +264,7 @@ static AuthStatus load(PcAuthenticator *pc)
     AuthStatus result = AUTH_BAD_DATA;
     if (!GetFileSizeEx(file, &size) || size.QuadPart < 12 || size.QuadPart > 12 + PC_SEALED_MAX ||
         !ReadFile(file, header, sizeof header, &received, NULL) || received != sizeof header ||
-        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) < 1U || read_u32(header + 4U) > 3U) { CloseHandle(file); return result; }
+        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) < 1U || read_u32(header + 4U) > 4U) { CloseHandle(file); return result; }
     uint32_t bytes = read_u32(header + 8U);
     if (bytes == 0U || bytes > PC_SEALED_MAX || (uint64_t)size.QuadPart != 12U + bytes) { CloseHandle(file); return result; }
     uint8_t *sealed = malloc(bytes);

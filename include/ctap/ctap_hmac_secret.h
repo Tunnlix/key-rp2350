@@ -22,13 +22,13 @@ uint8_t ctap_hmac_secret_parse(const CborValue *input, CtapHmacSecret *request);
  * encrypted one/two HMAC outputs, or length=0 for a legacy key without secrets.
  * Failure leaves output/length untouched. Transient Z, shared keys, salts and
  * plaintext HMAC results are cleared on all paths. UV selection is explicit;
- * current authenticator always passes false because it has no UV provider. */
+ * caller passes true only after successful PIN token authorization. */
 uint8_t ctap_hmac_secret_evaluate(AuthCredentialService *service,
     const AuthCredential *credential, const CtapHmacSecret *request, bool user_verified,
     uint8_t output[80], size_t *length);
 
-/* Minimal ClientPIN support for hmac-secret: protocol 2 getKeyAgreement only.
- * Produces response CBOR without status. No PIN/token/UV features are enabled. */
+/* Key-agreement-only adapter for a service without the complete PIN binding.
+ * Produces response CBOR without status; full ClientPIN uses ctap_client_pin. */
 uint8_t ctap_hmac_secret_key_agreement(AuthCredentialService *service,
     const uint8_t *input, size_t input_length, uint8_t *output, size_t capacity, size_t *length);
 

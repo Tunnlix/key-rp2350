@@ -7,7 +7,8 @@
 
 /* Current PC platform: Windows CNG + user-scoped DPAPI. Credentials and provider
  * private keys and credential randoms persist in a versioned encrypted file.
- * v3 adds a PIN verifier/retry record; v1/v2 remain readable with an unset PIN.
+ * v4 adds credential protection; v3 PIN verifier/retries remain readable.
+ * v1/v2 start with an unset PIN; pre-v4 credentials use default policy 1.
  * v1 credentials remain readable without assigning new hmac secrets to them.
  * Ephemeral key agreement is kept only in memory and regenerated on Reset. Private
  * material never crosses AuthCrypto. This development provider is not a secure
@@ -35,7 +36,8 @@ AuthPinStorage pc_authenticator_pin_storage(PcAuthenticator *authenticator);
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *authenticator);
 
 /* Combined atomic key/metadata reset compatible with CtapResetStorage callback.
- * Rotates identifiers and preserves provider/transport configuration. */
+ * Rotates identifiers and preserves provider/transport configuration. Caller
+ * clears portable PIN/token RAM state after success (the CTAP backend does this). */
 bool pc_authenticator_factory_reset(void *context);
 
 #endif

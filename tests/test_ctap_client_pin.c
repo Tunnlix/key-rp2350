@@ -18,7 +18,19 @@ typedef struct {
     bool decrypt_fails, regenerate_fails, hash_fails, enforce_decrement;
     uint8_t expected_retries, mac_message[112];
     size_t mac_length;
+    Store *credential_store;
+    bool random_fails, encrypt_fails;
 } PinMock;
+static AuthStatus pin_random(void *ctx, uint8_t *out, size_t length)
+{ PinMock *m = ctx; if (m->random_fails) return AUTH_CRYPTO_ERROR; memset(out, 0xA5, length); return AUTH_OK; }
+static AuthStatus pin_generate(void *ctx, AuthKeyHandle *key, uint8_t out[65])
+{ return generate(((PinMock *)ctx)->credential_store, key, out); }
+static AuthStatus pin_public(void *ctx, const AuthKeyHandle *key, uint8_t out[65])
+{ return public_key(((PinMock *)ctx)->credential_store, key, out); }
+static AuthStatus pin_sign(void *ctx, const AuthKeyHandle *key, const uint8_t digest[32], uint8_t out[72], size_t *length)
+{ return sign(((PinMock *)ctx)->credential_store, key, digest, out, length); }
+static AuthStatus pin_destroy(void *ctx, const AuthKeyHandle *key)
+{ return destroy(((PinMock *)ctx)->credential_store, key); }
 static AuthStatus pin_read(void *ctx, AuthPinRecord *out)
 {
     PinMock *m = ctx; ++m->reads;
@@ -61,7 +73,10 @@ static AuthStatus mac(void *ctx, const uint8_t *key, size_t key_length,
 static AuthStatus aes(void *ctx, bool encrypt, const uint8_t key[32], const uint8_t iv[16],
     const uint8_t *in, size_t length, uint8_t *out)
 {
-    PinMock *m = ctx; (void)key; (void)iv; assert(!encrypt && (length == 16U || length == 64U)); ++m->decrypts;
+    PinMock *m = ctx; (void)key; (void)iv;
+    assert(length == 16U || length == 32U || length == 64U);
+    if (encrypt) { if (m->encrypt_fails) return AUTH_CRYPTO_ERROR; memcpy(out, in, length); return AUTH_OK; }
+    ++m->decrypts;
     if (length == 16U && m->enforce_decrement) assert(m->record.retries == m->expected_retries);
     if (m->decrypt_fails) return AUTH_CRYPTO_ERROR;
     memcpy(out, in, length); return AUTH_OK;
@@ -75,7 +90,10 @@ static AuthStatus regenerate(void *ctx)
 static void setup(CtapClientPin *pin, AuthCredentialService *service, Store *store, PinMock *m)
 {
     memset(m, 0, sizeof *m); m->record.retries = 8U; service_init(service, store);
+    m->credential_store = store;
     service->crypto.context = m; service->crypto.sha256 = pin_hash;
+    service->crypto.random = pin_random; service->crypto.generate_p256 = pin_generate;
+    service->crypto.public_key = pin_public; service->crypto.sign_p256_digest = pin_sign; service->crypto.destroy_key = pin_destroy;
     AuthSecretCrypto secrets = {m, agreement_public, agreement, mac, aes, supported, credential_mac, regenerate};
     assert(auth_credentials_configure_secrets(service, &secrets));
     AuthPinStorage storage = {m, pin_read, pin_write};
@@ -92,7 +110,7 @@ static CtapClientPinRequest request(uint8_t command, const uint8_t *text, size_t
 static uint8_t execute(CtapClientPin *pin, const CtapClientPinRequest *r)
 {
     uint8_t output[128]; memset(output, 0xEE, sizeof output); size_t length = 999U;
-    uint8_t status = ctap_client_pin_execute(pin, r, output, sizeof output, &length);
+    uint8_t status = ctap_client_pin_execute(pin, r, output, sizeof output, &length, 0U);
     if (status != 0U) assert(length == 999U && output[0] == 0xEEU);
     else if (r->subcommand >= 3U) assert(length == 0U && output[0] == 0xEEU);
     return status;
@@ -119,7 +137,7 @@ static void test_validation_and_pin_policy(void)
 {
     const struct { uint8_t bytes[8]; size_t size; uint8_t status; } cases[] = {
         {{0xA0},1U,0x14}, {{0xA1,2,0x61,'3'},4U,0x11}, {{0xA1,2,2},3U,0x14},
-        {{0xA2,1,1,2,2},5U,2}, {{0xA2,1,2,2,3},5U,0x14}, {{0xA1,2,9},3U,0x3E},
+        {{0xA2,1,1,2,2},5U,2}, {{0xA2,1,2,2,3},5U,0x14}, {{0xA1,2,9},3U,0x14},
         {{0xA2,2,1,2,1},5U,0x12}
     };
     CtapClientPinRequest prepared;
@@ -166,7 +184,7 @@ static void test_retries_and_power_cycle(void)
         assert(m.writes == writes && m.agreements == attempts);
         uint8_t out[16]; size_t length;
         CtapClientPinRequest retries = {0}; retries.subcommand = 1U;
-        assert(ctap_client_pin_execute(&pin, &retries, out, sizeof out, &length) == 0U);
+        assert(ctap_client_pin_execute(&pin, &retries, out, sizeof out, &length, 0U) == 0U);
         CborValue map, count, blocked;
         assert(cbor_read_document(out, length, &map) && cbor_map_uint(&map, 3U, &count) && count.value == remaining);
         assert(cbor_map_uint(&map, 4U, &blocked) && blocked.encoded[0] == (pin.consecutive_failures >= 3U ? 0xF5U : 0xF4U));
@@ -276,8 +294,9 @@ static void test_backend_abort_reset_and_advertising(void)
     assert(ctap_get_info_encode(&f.backend.profile, out, sizeof out, &length));
     CborValue map, options, ignored;
     assert(cbor_read_document(out, length, &map) && cbor_map_uint(&map, 4U, &options));
-    assert(!cbor_map_text(&options, "clientPin", &ignored) && !cbor_map_text(&options, "pinUvAuthToken", &ignored) &&
-        !cbor_map_text(&options, "uv", &ignored));
+    assert(cbor_map_text(&options, "clientPin", &ignored) && ignored.encoded[0] == 0xF4U);
+    assert(cbor_map_text(&options, "pinUvAuthToken", &ignored) && ignored.encoded[0] == 0xF5U);
+    assert(!cbor_map_text(&options, "uv", &ignored));
     for (unsigned failure = 0U; failure < 2U; ++failure) {
         fixture_init(&f); seed(&f.pin); f.pin.consecutive_failures = 3U; f.pin.faulted = true;
         f.reset_fails = failure != 0U;
@@ -291,10 +310,166 @@ static void test_backend_abort_reset_and_advertising(void)
         assert(f.pin.consecutive_failures == (failure ? 3U : 0U));
     }
 }
+
+static CtapClientPinRequest token_request(const AuthPinRecord *record, uint8_t permissions)
+{
+    CtapClientPinRequest r = request(9U, (const uint8_t *)"", 0U, record);
+    r.permissions = permissions; r.rp_present = true; r.rp_length = 11U;
+    memcpy(r.rp_id, "example.com", r.rp_length); return r;
+}
+static void issue(Fixture *f, uint8_t permissions, uint32_t now)
+{
+    CtapClientPinRequest r = token_request(&f->mock.record, permissions);
+    uint8_t out[80]; size_t length;
+    assert(ctap_client_pin_execute(&f->pin, &r, out, sizeof out, &length, now) == 0U);
+    CborValue map, encrypted;
+    assert(cbor_read_document(out, length, &map) && cbor_map_uint(&map, 2U, &encrypted) && encrypted.value == 48U);
+    assert(f->pin.token_active && f->pin.permissions == permissions && f->mock.record.retries == 8U);
+}
+static size_t make_request(uint8_t out[512], bool auth, uint8_t policy, const uint8_t *excluded)
+{
+    CborWriter w; cbor_writer_init(&w, out, 512U); uint8_t hash_bytes[32] = {0x42}, mac_bytes[32]; memset(mac_bytes, 0x3C, 32U);
+    assert(cbor_write_map(&w, 4U + (auth ? 2U : 0U) + (policy ? 1U : 0U) + (excluded ? 1U : 0U)) &&
+        cbor_write_uint(&w, 1U) && cbor_write_bytes(&w, hash_bytes, 32U) &&
+        cbor_write_uint(&w, 2U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "id") && cbor_write_text(&w, "example.com") &&
+        cbor_write_uint(&w, 3U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "id") && cbor_write_bytes(&w, NULL, 0U) &&
+        cbor_write_uint(&w, 4U) && cbor_write_array(&w, 1U) && cbor_write_map(&w, 2U) &&
+        cbor_write_text(&w, "alg") && cbor_write_int(&w, -7) && cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
+    if (excluded) assert(cbor_write_uint(&w, 5U) && cbor_write_array(&w, 1U) && cbor_write_map(&w, 2U) &&
+        cbor_write_text(&w, "id") && cbor_write_bytes(&w, excluded, 32U) &&
+        cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
+    if (policy) assert(cbor_write_uint(&w, 6U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "credProtect") && cbor_write_uint(&w, policy));
+    if (auth) assert(cbor_write_uint(&w, 8U) && cbor_write_bytes(&w, mac_bytes, 32U) && cbor_write_uint(&w, 9U) && cbor_write_uint(&w, 2U));
+    return w.length;
+}
+static size_t assertion_request(uint8_t out[512], const uint8_t id[32], bool auth, bool up, bool malformed_tail)
+{
+    CborWriter w; cbor_writer_init(&w, out, 512U); uint8_t hash_bytes[32] = {0x42}, mac_bytes[32]; memset(mac_bytes, 0x3C, 32U);
+    assert(cbor_write_map(&w, auth ? 6U : 4U) && cbor_write_uint(&w, 1U) && cbor_write_text(&w, "example.com") &&
+        cbor_write_uint(&w, 2U) && cbor_write_bytes(&w, hash_bytes, 32U) && cbor_write_uint(&w, 3U) &&
+        cbor_write_array(&w, malformed_tail ? 2U : 1U) && cbor_write_map(&w, 2U) &&
+        cbor_write_text(&w, "id") && cbor_write_bytes(&w, id, 32U) && cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
+    if (malformed_tail) assert(cbor_write_map(&w, 2U) && cbor_write_text(&w, "id") && cbor_write_uint(&w, 1U) &&
+        cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
+    assert(cbor_write_uint(&w, 5U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "up") && cbor_write_bool(&w, up));
+    if (auth) assert(cbor_write_uint(&w, 6U) && cbor_write_bytes(&w, mac_bytes, 32U) && cbor_write_uint(&w, 7U) && cbor_write_uint(&w, 2U));
+    return w.length;
+}
+static void test_tokens_policy_and_provider_failures(void)
+{
+    Fixture f; fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
+    uint8_t input[512], output[512], aaguid[16] = {0}; size_t length, n = make_request(input, true, 3U, NULL);
+    CtapMakeCredential mc;
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && mc.user_verified);
+    assert(ctap_make_credential_finish_at(&f.service, &mc, aaguid, output, sizeof output, &length, 1U) == 0U);
+    CborValue map, data, extension, policy;
+    assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 0xC5U);
+    assert(cbor_read_document(data.data + 164U, (size_t)data.value - 164U, &extension) &&
+        cbor_map_text(&extension, "credProtect", &policy) && policy.value == 3U);
+    assert(f.store.record.cred_protect == 3U && f.store.signatures == 1U && !f.pin.token_active);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 2U, input, n, &mc) == 0x33U);
+    CtapGetAssertion ga;
+    n = assertion_request(input, f.store.record.credential_id, false, true, false);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x2EU);
+    issue(&f, 1U, 0U); n = assertion_request(input, f.store.record.credential_id, true, true, false);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x33U);
+    issue(&f, 2U, 0U);
+    n = assertion_request(input, f.store.record.credential_id, true, false, true);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x11U && !f.pin.token_used);
+    n = assertion_request(input, f.store.record.credential_id, true, false, false);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0U && ga.user_verified);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 1U) == 0U && f.pin.token_active);
+    assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 4U);
+    issue(&f, 2U, 2U); /* A previously prepared request cannot switch to a new generation. */
+    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 2U) == 0x33U);
+    n = assertion_request(input, f.store.record.credential_id, true, true, false);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 2U, input, n, &ga) == 0U);
+    f.store.counter_fails = true;
+    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 3U) == 0x7FU && !f.pin.token_active);
+    f.store.counter_fails = false; assert(f.store.record.signature_count == 1U && f.store.signatures == 2U);
+    n = make_request(input, false, 1U, f.store.record.credential_id);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && !mc.credential_excluded);
+    issue(&f, 1U, 0U); n = make_request(input, true, 1U, f.store.record.credential_id);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && mc.credential_excluded);
+    for (unsigned failure = 0U; failure < 3U; ++failure) {
+        fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
+        CtapClientPinRequest r = token_request(&f.mock.record, 1U); size_t unchanged = 777U;
+        f.mock.random_fails = failure == 0U; f.mock.encrypt_fails = failure == 1U;
+        assert(ctap_client_pin_execute(&f.pin, &r, output, failure == 2U ? 1U : sizeof output, &unchanged, 1U) == 0x7FU);
+        assert(!f.pin.token_active && unchanged == 777U && f.mock.record.retries == 8U);
+    }
+}
+static void test_token_time_wrap_and_waiting_abort(void)
+{
+    Fixture f; fixture_init(&f); seed(&f.pin);
+    uint32_t start = UINT32_MAX - 99U; issue(&f, 1U, start);
+    ctap_client_pin_poll(&f.pin, start + 29999U); assert(f.pin.token_active);
+    ctap_client_pin_poll(&f.pin, start + 30000U); assert(!f.pin.token_active);
+    issue(&f, 1U, start); f.pin.token_used = true;
+    ctap_client_pin_poll(&f.pin, start + 599999U); assert(f.pin.token_active);
+    ctap_client_pin_poll(&f.pin, start + 600000U); assert(!f.pin.token_active);
+    for (unsigned mode = 0U; mode < 3U; ++mode) {
+        fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
+        uint8_t input[513]; input[0] = CTAP_COMMAND_MAKE_CREDENTIAL;
+        size_t n = 1U + make_request(input + 1U, true, 3U, NULL);
+        assert(ctaphid_send_response(1U, 0x10U, input, n, receive_report, &f) == CTAPHID_RESPONSE_OK);
+        assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK);
+        /* No token usage/crypto before main-loop polling or after stale ownership. */
+        assert(f.backend.awaiting_credential_prepare && !f.pin.token_used && f.store.generated == 0U);
+        if (mode == 0U) {
+            uint8_t cancel[64] = {0,0,0,1,0x91};
+            assert(ctaphid_device_receive_report(&f.device, cancel, sizeof cancel, 1U) == CTAPHID_DEVICE_OK);
+            assert(!f.backend.awaiting_credential_prepare && f.pin.token_active && !f.pin.token_used);
+            assert(f.backend.credential_request_length == 0U && f.backend.credential_request[0] == 0U);
+        } else if (mode == 1U) {
+            assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 30000U) == CTAPHID_DEVICE_OK);
+            assert(f.backend.response[0] == 0x33U && f.store.generated == 0U); /* Initial deadline at actual poll clock. */
+        } else {
+            f.backend.presence_timeout_ms = 700000U;
+            assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 0U) == CTAPHID_DEVICE_OK && f.pin.token_used);
+            assert(ctaphid_ctap_backend_signal_presence(&f.backend, f.backend.operation_id, true, 600000U));
+            assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 600000U) == CTAPHID_DEVICE_OK);
+            assert(f.backend.response[0] == 0x33U && f.store.generated == 0U);
+        }
+    }
+    for (unsigned set = 0U; set < 2U; ++set) {
+        fixture_init(&f); if (set) seed(&f.pin);
+        const uint8_t probe[] = {CTAP_COMMAND_MAKE_CREDENTIAL, 0xA1, 8U, 0x40};
+        assert(ctaphid_send_response(1U, 0x10U, probe, sizeof probe, receive_report, &f) == CTAPHID_RESPONSE_OK);
+        assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(f.backend.awaiting_presence && f.store.generated == 0U);
+        assert(ctaphid_ctap_backend_signal_presence(&f.backend, f.backend.operation_id, true, 1U));
+        assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 1U) == CTAPHID_DEVICE_OK);
+        assert(f.backend.response[0] == (set ? 0x31U : 0x35U) && f.store.generated == 0U);
+    }
+}
+static void test_get_info_reads_pin_state_and_fails_closed(void)
+{
+    for (unsigned state = 0U; state < 3U; ++state) {
+        Fixture f; fixture_init(&f); if (state != 0U) seed(&f.pin);
+        f.mock.bad_record = state == 2U;
+        const uint8_t info[] = {CTAP_COMMAND_GET_INFO};
+        assert(ctaphid_send_response(1U, 0x10U, info, sizeof info, receive_report, &f) == CTAPHID_RESPONSE_OK);
+        assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(f.backend.response[0] == (state == 2U ? 0x7FU : 0U));
+        if (state == 2U) { assert(f.pin.faulted && !f.pin.token_active); continue; }
+        assert(f.backend.profile.pin_set == (state == 1U));
+        uint8_t out[256]; size_t length; CborValue map, options, value;
+        assert(ctap_get_info_encode(&f.backend.profile, out, sizeof out, &length));
+        assert(cbor_read_document(out, length, &map) && cbor_map_uint(&map, 4U, &options));
+        assert(cbor_map_text(&options, "clientPin", &value) && value.encoded[0] == (state == 1U ? 0xF5U : 0xF4U));
+        assert(cbor_map_text(&options, "pinUvAuthToken", &value) && value.encoded[0] == 0xF5U);
+        assert(!cbor_map_text(&options, "uv", &value));
+    }
+}
 int main(void)
 {
     test_validation_and_pin_policy(); test_retries_and_power_cycle(); test_change_and_failure_ordering();
     test_backend_abort_reset_and_advertising();
-    puts("ClientPIN tests passed (PIN policy, durable retries, blocking, failures, CANCEL/INIT and Reset).");
+    test_tokens_policy_and_provider_failures(); test_token_time_wrap_and_waiting_abort();
+    test_get_info_reads_pin_state_and_fails_closed();
+    puts("ClientPIN tests passed (tokens, permissions, credProtect, UV, expiry/wrap, failures, CANCEL/INIT and Reset).");
     return 0;
 }

@@ -158,7 +158,7 @@ class GetAssertionTests(unittest.TestCase):
                  (3, [{"id": self.credential.credential_id}], 0x11),
                  (3, [{"type": "public-key", "id": self.credential.credential_id, "transports": [1]}], 0x11),
                  (4, [], 0x11), (5, [], 0x11), (5, {"rk": False}, 0x2B), (5, {"rk": True}, 0x2B),
-                 (5, {"uv": True}, 0x2C), (5, {"up": 0}, 0x11), (6, b"", 0x14), (7, "1", 0x11)]
+                 (5, {"uv": True}, 0x2C), (5, {"up": 0}, 0x11), (6, bytes(32), 0x14), (7, "1", 0x11)]
         for key, value, expected in cases:
             with self.subTest(key=key, value=value):
                 request = self.request()
