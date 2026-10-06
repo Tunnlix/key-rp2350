@@ -10,13 +10,16 @@ import subprocess
 import sys
 import unittest
 from unittest.mock import patch
+from threading import Event
 
 CLIENT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(CLIENT_DIR))
 
 from build_harness import build_harness, find_compiler
 from fido2_harness import HarnessConnection, open_harness
-from fido2.ctap import CtapError
+from fido2.ctap import CtapError, STATUS
+from fido2.ctap2 import Ctap2
+from fido2 import cbor
 from fido2.hid import CAPABILITY, CTAPHID, ConnectionFailure
 
 
@@ -49,7 +52,7 @@ class PythonFido2Tests(unittest.TestCase):
         self.assertNotIn(cid, (0, 0xFFFFFFFF))
         self.assertEqual(self.device.version, 2)
         self.assertEqual(self.device.device_version, (0, 1, 0))
-        self.assertEqual(self.device.capabilities, CAPABILITY.WINK | CAPABILITY.NMSG)
+        self.assertEqual(self.device.capabilities, CAPABILITY.WINK | CAPABILITY.NMSG | CAPABILITY.CBOR)
         self.assertEqual(self.device.ping(b"actual CID"), b"actual CID")
         self.assertEqual(int.from_bytes(self.connection.sent_reports[-1][:4], "big"), cid)
 
@@ -94,14 +97,86 @@ class PythonFido2Tests(unittest.TestCase):
         response = self.device.call(CTAPHID.INIT, nonce)
         self.assertEqual(response[:8], nonce)
         self.assertEqual(response[8:12], assigned)
-        self.assertEqual(response[12:], bytes([2, 0, 1, 0, 9]))
+        self.assertEqual(response[12:], bytes([2, 0, 1, 0, 13]))
         self.assertEqual(self.device.ping(b"resynchronized"), b"resynchronized")
 
     def test_unimplemented_commands_and_invalid_wink(self):
-        self.assertFalse(self.device.capabilities & CAPABILITY.CBOR)
-        self.assert_ctap_error(CTAPHID.CBOR, b"\x04", CtapError.ERR.INVALID_COMMAND)
+        self.assertTrue(self.device.capabilities & CAPABILITY.CBOR)
         self.assert_ctap_error(CTAPHID.LOCK, b"\x01", CtapError.ERR.INVALID_COMMAND)
         self.assert_ctap_error(CTAPHID.WINK, b"\x01", CtapError.ERR.INVALID_LENGTH)
+
+    def test_get_info_through_standard_ctap2_client(self):
+        client = Ctap2(self.device, strict_cbor=True)
+        info = client.get_info()
+        self.assertEqual(info.versions, ["FIDO_2_3"])
+        self.assertEqual(bytes(info.aaguid), bytes(16))
+        self.assertEqual(info.max_msg_size, 1024)
+        self.assertEqual(info.options, {"rk": False, "up": True, "plat": False})
+        self.assertEqual(info.extensions, [])
+        self.assertEqual(info.pin_uv_protocols, [])
+        self.assertEqual(info.algorithms, [])
+        reply = self.device.call(CTAPHID.CBOR, b"\x04")
+        self.assertEqual(reply[0], 0)
+        decoded = cbor.decode(reply[1:])
+        self.assertEqual(set(decoded), {1, 3, 4, 5})
+        self.assertEqual(cbor.encode(decoded), reply[1:])
+
+    def test_ctap_errors_are_cbor_statuses(self):
+        client = Ctap2(self.device)
+        with self.assertRaises(CtapError) as raised:
+            client.send_cbor(Ctap2.CMD.MAKE_CREDENTIAL, {})
+        self.assertEqual(raised.exception.code, CtapError.ERR.INVALID_COMMAND)
+        # Unsupported CTAP commands are CBOR replies, not HID transport errors.
+        self.assertEqual(self.connection.received_reports[-1][4:8], b"\x90\x00\x01\x01")
+        self.assertEqual(self.device.call(CTAPHID.CBOR, b"\x04\xA0"), b"\x03")
+        self.assertEqual(client.get_info().versions, ["FIDO_2_3"])
+
+    def test_selection_simulated_touch(self):
+        client = Ctap2(self.device)
+        self.assertFalse(self.connection.confirm_presence())  # No pre-request touch caching.
+        statuses = []
+
+        def confirm(status):
+            statuses.append(int(status))
+            if status == STATUS.UPNEEDED:
+                self.assertTrue(self.connection.confirm_presence())
+
+        client.selection(on_keepalive=confirm)
+        self.assertIn(2, statuses)
+        self.assertEqual(self.connection.received_reports[-1][4:8], b"\x90\x00\x01\x00")
+        # Each new selection requires its own fresh touch.
+        client.selection(on_keepalive=confirm)
+        self.assertGreaterEqual(statuses.count(2), 2)
+
+    def test_selection_denial_and_cancel(self):
+        client = Ctap2(self.device)
+        with self.assertRaises(CtapError) as raised:
+            client.selection(on_keepalive=lambda status: self.connection.deny_presence() if status == STATUS.UPNEEDED else None)
+        self.assertEqual(raised.exception.code, CtapError.ERR.OPERATION_DENIED)
+        cancelled = Event()
+        with self.assertRaises(CtapError) as raised:
+            client.selection(event=cancelled, on_keepalive=lambda status: cancelled.set())
+        self.assertEqual(raised.exception.code, CtapError.ERR.KEEPALIVE_CANCEL)
+        self.assertTrue(any(report[4] == 0x91 for report in self.connection.sent_reports))
+        self.assertEqual(client.get_info().versions, ["FIDO_2_3"])
+
+    def test_selection_without_presence_provider(self):
+        other = open_harness(self.executable, user_presence=False)
+        try:
+            client = Ctap2(other)
+            self.assertFalse(client.info.options["up"])
+            with self.assertRaises(CtapError) as raised:
+                client.selection()
+            self.assertEqual(raised.exception.code, CtapError.ERR.INVALID_COMMAND)
+        finally:
+            other.close()
+
+    def test_manual_main_presence_demo_auto_touch(self):
+        result = subprocess.run([str(self.executable), "--presence-demo", "--auto-touch-ms", "200"],
+                                capture_output=True, timeout=3.0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(b"UPNEEDED", result.stdout)
+        self.assertIn(b"Selection result: 0x00", result.stdout)
 
     def test_timeout_while_input_is_silent(self):
         # Reuse the initial report generated by python-fido2 for a valid PING,

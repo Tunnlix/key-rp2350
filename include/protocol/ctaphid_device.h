@@ -39,7 +39,7 @@ typedef bool (*CtaphidSubmitReport)(void *context,
     const uint8_t report[CTAPHID_REPORT_SIZE], uint64_t transfer_id);
 typedef void (*CtaphidAbortReport)(void *context, uint64_t transfer_id);
 
-/* Optional future CBOR backend. start returns promptly and schedules work.
+/* Optional CBOR backend. start returns promptly and schedules/prepares work.
  * Complete later with complete_cbor(), or update status with set_keepalive().
  * request includes the CTAP command byte and remains valid until completion or
  * abort. abort must stop all access/work before returning. Both hooks are required

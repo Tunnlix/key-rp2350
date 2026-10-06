@@ -56,8 +56,10 @@ def build_harness() -> Path:
     output = ROOT / "build" / ("ctaphid_harness.exe" if os.name == "nt" else "ctaphid_harness")
     output.parent.mkdir(exist_ok=True)
     sources = [ROOT / "examples/host/main.c", ROOT / "examples/host/stdio_transport.c",
-               ROOT / "examples/host/host_actions.c"]
+               ROOT / "examples/host/host_actions.c", ROOT / "examples/host/host_clock.c",
+               ROOT / "examples/host/host_presence.c"]
     sources.extend(sorted((ROOT / "src/protocol").glob("*.c")))
+    sources.extend(sorted((ROOT / "src/ctap").glob("*.c")))
     # GCC's helper tools/DLLs may also live in bin. Only the compiler subprocess
     # receives this PATH addition; the user's terminal configuration is untouched.
     compiler_env = dict(os.environ)

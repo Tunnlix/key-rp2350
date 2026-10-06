@@ -1,14 +1,20 @@
 #include "protocol/ctaphid_device.h"
+#include "protocol/ctaphid_ctap_backend.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "stdio_transport.h"
 #include "host_actions.h"
+#include "host_clock.h"
+#include "host_presence.h"
 
 /* Host demonstration transport. Display outgoing wire bytes; a binary pipe or
  * USB transport can replace this callback without changing the handlers. */
 typedef struct {
     FILE *output;
     uint32_t allocated_cid;
+    bool compact_keepalive;
+    uint8_t last_keepalive_status, last_ctap_status;
 } HostTransport;
 
 static bool display_response_report(
@@ -17,6 +23,14 @@ static bool display_response_report(
     HostTransport *transport = context;
     FILE *output = transport->output;
     (void)transfer_id; /* Synchronous transport finishes before returning. */
+    if (report[4] == 0x90U && report[6] != 0U) transport->last_ctap_status = report[7];
+    if (transport->compact_keepalive && report[4] == 0xBBU) {
+        if (transport->last_keepalive_status != report[7]) {
+            transport->last_keepalive_status = report[7];
+            if (fprintf(output, "KEEPALIVE: %s\n", report[7] == 2U ? "UPNEEDED (waiting for touch)" : "PROCESSING") < 0) return false;
+        }
+        return fflush(output) == 0;
+    }
     if (report[4] == 0x86U && report[5] == 0U && report[6] == 17U) {
         transport->allocated_cid = ((uint32_t)report[15] << 24) |
             ((uint32_t)report[16] << 16) | ((uint32_t)report[17] << 8) | report[18];
@@ -30,16 +44,39 @@ static bool display_response_report(
 
 int main(int argc, char **argv)
 {
-    if (argc == 2 && strcmp(argv[1], "--stdio") == 0) return ctaphid_host_run_stdio();
-    if (argc != 1) {
-        fprintf(stderr, "Usage: %s [--stdio]\n", argv[0]);
+    if (argc == 2 && strcmp(argv[1], "--stdio") == 0) return ctaphid_host_run_stdio(NULL);
+    if (argc == 4 && strcmp(argv[1], "--stdio") == 0 && strcmp(argv[2], "--presence-control") == 0) {
+        return ctaphid_host_run_stdio(argv[3]);
+    }
+    bool presence_demo = argc >= 2 && strcmp(argv[1], "--presence-demo") == 0;
+    uint32_t auto_touch_ms = UINT32_MAX;
+    if (presence_demo && argc == 4 && strcmp(argv[2], "--auto-touch-ms") == 0) {
+        char *end;
+        unsigned long delay = strtoul(argv[3], &end, 10);
+        if (end == argv[3] || *end != '\0' || delay > INT32_MAX) return 2;
+        auto_touch_ms = (uint32_t)delay;
+    } else if (!(argc == 1 || (presence_demo && argc == 2))) {
+        fprintf(stderr, "Usage: %s [--stdio [--presence-control DIR] | --presence-demo [--auto-touch-ms N]]\n", argv[0]);
         return 2;
     }
-    HostTransport transport = {stdout, 0U};
+    HostTransport transport = {0};
+    transport.output = stdout;
+    transport.compact_keepalive = presence_demo;
+    transport.last_ctap_status = 0xFFU;
     CtaphidDeviceConfig config = {0};
     config.submit_report = display_response_report;
     config.transport_context = &transport;
     config.wink_action = ctaphid_host_wink;
+    CtapGetInfoProfile profile = {0}; /* Development AAGUID. */
+    profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE;
+    profile.user_presence = presence_demo;
+    HostPresence simulation;
+    if (!ctaphid_host_presence_init(&simulation, NULL, presence_demo, auto_touch_ms)) return 1;
+    CtaphidCtapBackend backend;
+    if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
+    config.start_cbor = ctaphid_ctap_backend_start;
+    config.abort_cbor = ctaphid_ctap_backend_abort;
+    config.cbor_context = &backend;
     CtaphidDevice device;
     if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) return 1;
 
@@ -55,17 +92,23 @@ int main(int argc, char **argv)
         /* WINK: identification action followed by an empty response. */
         { 0x00, 0x00, 0x00, 0x01, 0x88, 0x00, 0x00 },
         /* MSG is rejected with ERR_INVALID_CMD; no CTAP1 operation is run. */
-        { 0x00, 0x00, 0x00, 0x01, 0x83, 0x00, 0x01, 0x00 }
+        { 0x00, 0x00, 0x00, 0x01, 0x83, 0x00, 0x01, 0x00 },
+        /* CTAPHID_CBOR wraps CTAP authenticatorGetInfo (0x04). */
+        { 0x00, 0x00, 0x00, 0x01, 0x90, 0x00, 0x01, 0x04 },
+        /* Optional manual demo: authenticatorSelection asks for a fresh touch. */
+        { 0x00, 0x00, 0x00, 0x01, 0x90, 0x00, 0x01, 0x0B }
     };
     const char *descriptions[] = {
-        "INIT", "PING 1", "PING 2 initial", "PING 2 continuation", "WINK", "MSG unsupported"
+        "INIT", "PING 1", "PING 2 initial", "PING 2 continuation", "WINK", "MSG unsupported", "GetInfo", "Selection"
     };
     for (size_t i = 0; i < CTAPHID_INITIAL_PAYLOAD_SIZE; ++i) {
         reports[2][7U + i] = (uint8_t)i;
     }
 
     uint32_t current_time_ms = 0U;
-    for (size_t i = 0; i < sizeof reports / sizeof reports[0]; ++i) {
+    size_t report_count = sizeof reports / sizeof reports[0] - (presence_demo ? 0U : 1U);
+    for (size_t i = 0; i < report_count; ++i) {
+        if (presence_demo) current_time_ms = ctaphid_host_now_ms();
         /* Host uses the actual CID from INIT, rather than assuming allocation 1. */
         if (i != 0U) {
             reports[i][0] = (uint8_t)(transport.allocated_cid >> 24);
@@ -80,7 +123,29 @@ int main(int argc, char **argv)
             return 1;
         }
         if (ctaphid_device_poll(&device, current_time_ms) != CTAPHID_DEVICE_OK) return 1;
+        if (ctaphid_ctap_backend_poll(&backend, &device, current_time_ms) != CTAPHID_DEVICE_OK) return 1;
+        if (presence_demo && !ctaphid_host_presence_poll(&simulation, &backend, current_time_ms)) return 1;
+        if (ctaphid_ctap_backend_poll(&backend, &device, current_time_ms) != CTAPHID_DEVICE_OK) return 1;
+        if (ctaphid_device_poll(&device, current_time_ms) != CTAPHID_DEVICE_OK) return 1;
         current_time_ms += 10U;
     }
+    while (presence_demo && device.phase != CTAPHID_DEVICE_IDLE) {
+        uint32_t now = ctaphid_host_now_ms();
+        if (ctaphid_device_poll(&device, now) != CTAPHID_DEVICE_OK) return 1;
+        if (ctaphid_ctap_backend_poll(&backend, &device, now) != CTAPHID_DEVICE_OK) return 1;
+        if (!ctaphid_host_presence_poll(&simulation, &backend, now)) return 1;
+        if (simulation.cancel_requested) {
+            simulation.cancel_requested = false;
+            uint32_t cid = transport.allocated_cid;
+            uint8_t cancel[64] = {(uint8_t)(cid >> 24), (uint8_t)(cid >> 16),
+                (uint8_t)(cid >> 8), (uint8_t)cid, 0x91U};
+            if (ctaphid_device_receive_report(&device, cancel, sizeof cancel, now) != CTAPHID_DEVICE_OK) return 1;
+        }
+        if (ctaphid_ctap_backend_poll(&backend, &device, now) != CTAPHID_DEVICE_OK) return 1;
+        if (ctaphid_device_poll(&device, now) != CTAPHID_DEVICE_OK) return 1;
+        ctaphid_host_sleep_ms(10U);
+    }
+    if (presence_demo) printf("Selection result: 0x%02X (00=confirmed, 27=denied, 2D=cancelled, 2F=timed out)\n",
+        (unsigned int)transport.last_ctap_status);
     return 0;
 }
