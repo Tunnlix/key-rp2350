@@ -41,6 +41,19 @@ void ctaphid_reassembler_reset(
     CtaphidReassembler *reassembler
 );
 
+/* Reset an active incomplete message when its inactivity timeout has elapsed.
+ * Returns true if the message was expired and reset; otherwise leaves state
+ * unchanged and returns false. reassembler must not be NULL.
+ * Call periodically even when no reports arrive. current_time_ms must use the
+ * same monotonic millisecond counter as ctaphid_reassemble_packet().
+ * Save channel_id before calling if needed to send ERR_MSG_TIMEOUT: reset clears
+ * message metadata. This function sends no response and does not time out
+ * completed messages or command processing. */
+bool ctaphid_reassembler_expire_if_timed_out(
+    CtaphidReassembler *reassembler,
+    uint32_t current_time_ms
+);
+
 /* Assemble host-to-authenticator request reports decoded by the parser.
  * Input and state storage must not overlap. INVALID_PACKET leaves state intact.
  * COMPLETE ends assembly and preserves metadata and buffer[0..received_length)

@@ -189,6 +189,69 @@ static void test_timeouts(void)
     assert(!state.is_active && state.channel_id == 0U && state.received_length == 0U);
 }
 
+static void test_explicit_expiry(void)
+{
+    CtaphidReassembler state = {0};
+    CtaphidReassembler saved = state;
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 5000U));
+    assert(memcmp(&state, &saved, sizeof state) == 0);
+
+    CtaphidParsedPacket packet = parse_report(1U, 0x81U, 200U, 0U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 100U) == CTAPHID_REASSEMBLE_INCOMPLETE);
+    saved = state;
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 3099U));
+    assert(memcmp(&state, &saved, sizeof state) == 0);
+    assert(ctaphid_reassembler_expire_if_timed_out(&state, 3100U));
+    assert(!state.is_active && !state.has_complete_message);
+    assert(state.channel_id == 0U && state.command == 0U);
+    assert(state.expected_length == 0U && state.received_length == 0U);
+    assert(state.expected_sequence == 0U && state.last_activity_time_ms == 0U);
+    assert(memcmp(state.buffer, saved.buffer, sizeof state.buffer) == 0);
+    saved = state;
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 3101U));
+    assert(memcmp(&state, &saved, sizeof state) == 0);
+
+    /* Expiry without an incoming report also handles counter wraparound. */
+    assert(ctaphid_reassemble_packet(&state, &packet, UINT32_MAX - 100U) ==
+        CTAPHID_REASSEMBLE_INCOMPLETE);
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 2898U));
+    assert(ctaphid_reassembler_expire_if_timed_out(&state, 2899U));
+
+    /* Valid continuation data refreshes the inactivity deadline. */
+    assert(ctaphid_reassemble_packet(&state, &packet, 4000U) == CTAPHID_REASSEMBLE_INCOMPLETE);
+    packet = parse_report(1U, 0U, 0U, 57U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 6999U) == CTAPHID_REASSEMBLE_INCOMPLETE);
+    saved = state;
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 9998U));
+    assert(memcmp(&state, &saved, sizeof state) == 0);
+    assert(ctaphid_reassembler_expire_if_timed_out(&state, 9999U));
+
+    /* Completed data remains available for dispatch, regardless of age. */
+    packet = parse_report(1U, 0x81U, 3U, 0U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 10000U) == CTAPHID_REASSEMBLE_COMPLETE);
+    saved = state;
+    assert(!ctaphid_reassembler_expire_if_timed_out(&state, 20000U));
+    assert(memcmp(&state, &saved, sizeof state) == 0);
+}
+
+static void test_expiry_continues_assembly(void)
+{
+    CtaphidReassembler state = {0};
+    CtaphidParsedPacket packet = parse_report(1U, 0x81U, 200U, 0U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 0U) == CTAPHID_REASSEMBLE_INCOMPLETE);
+
+    /* A fragmented request on another CID starts in the same call as expiry. */
+    packet = parse_report(2U, 0x81U, 60U, 100U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 3000U) == CTAPHID_REASSEMBLE_INCOMPLETE);
+    assert(state.is_active && state.channel_id == 2U && state.received_length == 57U);
+    packet = parse_report(2U, 0U, 0U, 157U);
+    assert(ctaphid_reassemble_packet(&state, &packet, 3001U) == CTAPHID_REASSEMBLE_COMPLETE);
+    assert(state.has_complete_message && state.received_length == 60U);
+    for (size_t i = 0; i < 60U; ++i) {
+        assert(state.buffer[i] == (uint8_t)(100U + i));
+    }
+}
+
 static void test_reassembler_validation(void)
 {
     CtaphidReassembler state = {0};
@@ -223,6 +286,8 @@ int main(void)
     test_arbitration();
     test_sequence_errors();
     test_timeouts();
+    test_explicit_expiry();
+    test_expiry_continues_assembly();
     test_reassembler_validation();
     puts("CTAPHID parser/reassembler tests passed (all payload lengths 0..1024).");
     return 0;

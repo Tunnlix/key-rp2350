@@ -58,10 +58,8 @@ CtaphidReassembleResult ctaphid_reassemble_packet(
         return CTAPHID_REASSEMBLE_INVALID_PACKET;
     }
 
-    /* Expire the old message before considering the incoming packet. */
-    if (ctaphid_reassembler_is_timed_out(reassembler, current_time_ms)) {
-        ctaphid_reassembler_reset(reassembler);
-    }
+    /* Discard expired assembly, then continue processing the incoming packet. */
+    (void)ctaphid_reassembler_expire_if_timed_out(reassembler, current_time_ms);
 
     /* No CBOR operation is processed here; the caller handles processing-time CANCEL. */
     if (packet->packet_type == CTAPHID_PACKET_INITIAL &&
@@ -200,6 +198,17 @@ static bool ctaphid_reassembler_is_timed_out(
         current_time_ms -
         reassembler->last_activity_time_ms
     ) >= CTAPHID_TRANSACTION_TIMEOUT_MS;
+}
+
+bool ctaphid_reassembler_expire_if_timed_out(
+    CtaphidReassembler *reassembler,
+    uint32_t current_time_ms
+) {
+    if (ctaphid_reassembler_is_timed_out(reassembler, current_time_ms)) {
+        ctaphid_reassembler_reset(reassembler);
+        return true;
+    }
+    return false;
 }
 
 static void ctaphid_reassembler_copy_fragment(
