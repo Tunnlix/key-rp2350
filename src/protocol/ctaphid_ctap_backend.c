@@ -42,6 +42,19 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     backend->presence_started = false;
     backend->awaiting_make_credential = false;
     memset(&backend->make_credential, 0, sizeof backend->make_credential);
+    backend->awaiting_get_assertion = false;
+    memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
+    if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_GET_ASSERTION && backend->credentials != NULL) {
+        uint8_t status = ctap_get_assertion_prepare(backend->credentials, request + 1U,
+            request_length - 1U, &backend->get_assertion);
+        backend->awaiting_get_assertion = status == CTAP_STATUS_OK;
+        backend->awaiting_presence = backend->awaiting_get_assertion && backend->get_assertion.user_presence_required;
+        backend->awaiting_reset = backend->reset_authorized = false;
+        backend->response[0] = status;
+        backend->response_length = backend->awaiting_get_assertion ? 0U : 1U;
+        backend->pending = true;
+        return;
+    }
     if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_MAKE_CREDENTIAL && backend->credentials != NULL) {
         uint8_t status = ctap_make_credential_prepare(backend->credentials, request + 1U,
             request_length - 1U, &backend->make_credential);
@@ -79,6 +92,8 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id)
         backend->awaiting_reset = backend->reset_authorized = false;
         backend->awaiting_make_credential = false;
         memset(&backend->make_credential, 0, sizeof backend->make_credential);
+        backend->awaiting_get_assertion = false;
+        memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
     }
 }
 
@@ -126,6 +141,10 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->response[0] = ctap_reset_commit(&backend->reset, backend->operation_id, &backend->presence);
         }
         backend->response_length = 1U;
+        if (backend->awaiting_get_assertion && presence != CTAP_PRESENCE_CONFIRMED) {
+            backend->response[0] = CTAP_STATUS_OPERATION_DENIED;
+            backend->awaiting_get_assertion = false;
+        }
         if (backend->awaiting_make_credential) {
             /* Exclusion waits for UP but returns EXCLUDED even after timeout.
              * Normal registration refusal/timeout is OPERATION_DENIED (6.1.2).
@@ -141,6 +160,15 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
         }
     }
+    if (backend->awaiting_get_assertion) {
+        /* Only outside coordinator callbacks, after fresh UP or explicit up=false.
+         * CANCEL/resync aborts before this point, including silent requests. */
+        size_t encoded_length = 0U;
+        uint8_t status = ctap_get_assertion_finish(backend->credentials, &backend->get_assertion,
+            backend->response + 1U, sizeof backend->response - 1U, &encoded_length);
+        backend->response[0] = status;
+        backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+    }
     CtaphidDeviceResult result = ctaphid_device_complete_cbor(device, backend->operation_id,
         backend->response, backend->response_length);
     backend->pending = false;
@@ -152,6 +180,8 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     backend->awaiting_reset = backend->reset_authorized = false;
     backend->awaiting_make_credential = false;
     memset(&backend->make_credential, 0, sizeof backend->make_credential);
+    backend->awaiting_get_assertion = false;
+    memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
     return result == CTAPHID_DEVICE_INVALID_STATE ? CTAPHID_DEVICE_IGNORED : result;
 }
 

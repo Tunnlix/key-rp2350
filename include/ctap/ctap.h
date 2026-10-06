@@ -4,6 +4,7 @@
 #include "ctap/ctap_get_info.h"
 
 #define CTAP_COMMAND_MAKE_CREDENTIAL 0x01U
+#define CTAP_COMMAND_GET_ASSERTION 0x02U
 #define CTAP_COMMAND_GET_INFO 0x04U
 #define CTAP_COMMAND_RESET 0x07U
 #define CTAP_COMMAND_SELECTION 0x0BU
@@ -20,6 +21,7 @@
 #define CTAP_STATUS_KEY_STORE_FULL 0x28U
 #define CTAP_STATUS_UNSUPPORTED_OPTION 0x2BU
 #define CTAP_STATUS_INVALID_OPTION 0x2CU
+#define CTAP_STATUS_NO_CREDENTIALS 0x2EU
 #define CTAP_STATUS_OTHER 0x7FU
 #define CTAP_STATUS_OPERATION_DENIED 0x27U
 #define CTAP_STATUS_USER_ACTION_TIMEOUT 0x2FU
@@ -44,8 +46,8 @@ typedef enum {
  * command byte; trailing data is rejected. Selection also takes no inputs and
  * is supported only with profile.user_presence. Reset also takes no inputs and
  * returns OPERATION_DENIED when user interaction cannot be collected. Remaining
- * commands are unsupported by this stateless entry point. MakeCredential uses
- * ctap_make_credential_prepare/finish via the backend's bound credential service.
+ * commands are unsupported by this stateless entry point. MakeCredential and
+ * GetAssertion use their prepare/finish handlers with the bound credential service.
  */
 CtapExecutionResult ctap_execute(const CtapGetInfoProfile *profile,
     const uint8_t *request, size_t request_length,

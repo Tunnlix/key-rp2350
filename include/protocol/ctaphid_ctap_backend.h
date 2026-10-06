@@ -5,6 +5,7 @@
 #include "ctap/ctap_user_presence.h"
 #include "ctap/ctap_reset.h"
 #include "ctap/ctap_make_credential.h"
+#include "ctap/ctap_get_assertion.h"
 #include "protocol/ctaphid_device.h"
 
 /* Bridge between CTAP command execution and the HID coordinator. CTAP code does
@@ -26,6 +27,8 @@ typedef struct {
     AuthCredentialService *credentials;
     bool awaiting_make_credential;
     CtapMakeCredential make_credential;
+    bool awaiting_get_assertion;
+    CtapGetAssertion get_assertion;
 } CtaphidCtapBackend;
 
 /* Profile's advertised size must match the coordinator's receive capacity.
@@ -41,7 +44,7 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
 
 /* Bind an initialized portable service once before requests. Caller keeps it
  * alive for this backend's lifetime. Requires a configured UP provider; makes
- * GetInfo advertise ES256 registration and packed self-attestation. */
+ * Enables ES256 registration/assertions and packed self-attestation. */
 bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
 
@@ -53,9 +56,12 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id);
 
 /* Call outside coordinator callbacks, after device_poll. Delivers the prepared
  * reply through complete_cbor; another device_poll then transmits it. Selection,
- * Reset and MakeCredential remain pending with UPNEEDED until touch or timeout.
+ * Reset, MakeCredential and normal GetAssertion remain pending with UPNEEDED.
+ * GetAssertion with up=false completes without touch, with the UP bit cleared.
  * MakeCredential creates/signs only after confirmation; cancellation/resync
- * discards validated request state without creating keys or credentials.
+ * discards validated request state without creating credentials or changing
+ * assertion counters. Counters persist before signing; failed signing may skip
+ * a counter value, and must never roll it back.
  * now_ms must share the device's clock. Stale operation results are discarded. */
 CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     CtaphidDevice *device, uint32_t now_ms);

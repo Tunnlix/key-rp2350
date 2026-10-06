@@ -25,7 +25,7 @@ typedef struct {
  * report rk=false, up=profile.user_presence, plat=false. With MakeCredential
  * configured, advertise ES256 and packed self-attestation (none is implicit),
  * and makeCredUvNotRqd=true. PIN/UV and extensions are omitted. FIDO_2_3 is the
- * development target; GetAssertion is still necessary for conformance.
+ * development target; full authenticator conformance has not been established.
  */
 bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     uint8_t *output, size_t capacity, size_t *output_length);

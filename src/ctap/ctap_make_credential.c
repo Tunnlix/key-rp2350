@@ -1,20 +1,9 @@
 #include "ctap/ctap_make_credential.h"
 #include "ctap/ctap_attestation.h"
 #include "ctap/cbor_reader.h"
+#include "ctap/ctap_request.h"
 
 #include <string.h>
-
-static uint8_t string_keys(const CborValue *map)
-{
-    if (map->major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    const uint8_t *cursor = map->data, *end = map->encoded + map->encoded_length;
-    CborValue key, value;
-    for (uint64_t i = 0; i < map->value; ++i) {
-        if (!cbor_read_next(&cursor, end, &key) || !cbor_read_next(&cursor, end, &value)) return CTAP_STATUS_INVALID_CBOR;
-        if (key.major != 3U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    }
-    return CTAP_STATUS_OK;
-}
 
 static uint8_t member(const CborValue *map, const char *name, uint8_t type, bool required, CborValue *value)
 {
@@ -33,7 +22,7 @@ static uint8_t algorithms(const CborValue *array)
     bool supported = false;
     for (uint64_t i = 0; i < array->value; ++i) {
         if (!cbor_read_next(&cursor, end, &entry)) return CTAP_STATUS_INVALID_CBOR;
-        uint8_t status = string_keys(&entry);
+        uint8_t status = ctap_request_text_map(&entry);
         if (status != 0U) return status;
         if (!cbor_map_text(&entry, "type", &type) || !cbor_map_text(&entry, "alg", &algorithm)) return CTAP_STATUS_INVALID_CBOR;
         if (type.major != 3U || algorithm.major > 1U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
@@ -56,20 +45,11 @@ static uint8_t exclusions(AuthCredentialService *service, const CborValue *array
     if (array->major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (array->value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
     const uint8_t *cursor = array->data, *end = array->encoded + array->encoded_length;
-    CborValue entry, type, id, transports, transport;
+    CborValue entry, type, id;
     for (uint64_t i = 0; i < array->value; ++i) {
         if (!cbor_read_next(&cursor, end, &entry)) return CTAP_STATUS_INVALID_CBOR;
-        uint8_t status = string_keys(&entry);
+        uint8_t status = ctap_request_descriptor(&entry, &id, &type);
         if (status != 0U) return status;
-        if (member(&entry, "type", 3U, true, &type) != 0U || member(&entry, "id", 2U, true, &id) != 0U)
-            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (cbor_map_text(&entry, "transports", &transports)) {
-            if (transports.major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            const uint8_t *next = transports.data, *limit = transports.encoded + transports.encoded_length;
-            for (uint64_t j = 0; j < transports.value; ++j) {
-                if (!cbor_read_next(&next, limit, &transport) || transport.major != 3U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            }
-        }
         /* Unknown credential types and other authenticators' ID sizes cannot
          * refer to our records. Still validate the entire list before touch. */
         if (cbor_text_equal(&type, "public-key") && id.value == 32U) {
@@ -86,21 +66,14 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared)
 {
     if (service == NULL || prepared == NULL) return CTAP_STATUS_OTHER;
-    CborValue map, fields[12] = {{0}};
+    CborValue value, fields[12] = {{0}};
     bool present[12] = {false};
-    if (!cbor_read_document(parameters, length, &map)) return CTAP_STATUS_INVALID_CBOR;
-    if (map.major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    const uint8_t *cursor = map.data, *end = map.encoded + map.encoded_length;
-    CborValue key, value;
-    for (uint64_t i = 0; i < map.value; ++i) {
-        if (!cbor_read_next(&cursor, end, &key) || !cbor_read_next(&cursor, end, &value)) return CTAP_STATUS_INVALID_CBOR;
-        if (key.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (key.value < 12U) { fields[key.value] = value; present[key.value] = true; }
-    }
+    uint8_t status = ctap_request_map(parameters, length, 12U, fields, present);
+    if (status != 0U) return status;
     for (size_t i = 1U; i <= 4U; ++i) if (!present[i]) return CTAP_STATUS_MISSING_PARAMETER;
     if (fields[1].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (fields[1].value != 32U) return CTAP_STATUS_INVALID_LENGTH;
-    uint8_t status = string_keys(&fields[2]);
+    status = ctap_request_text_map(&fields[2]);
     if (status != 0U) return status;
     CborValue rp, user;
     status = member(&fields[2], "id", 3U, true, &rp);
@@ -108,7 +81,7 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     if (rp.value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
     status = member(&fields[2], "name", 3U, false, &value);
     if (status != 0U) return status;
-    status = string_keys(&fields[3]);
+    status = ctap_request_text_map(&fields[3]);
     if (status != 0U) return status;
     status = member(&fields[3], "id", 2U, true, &user);
     if (status != 0U) return status;
@@ -126,7 +99,7 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     status = algorithms(&fields[4]);
     if (status != 0U) return status;
     if (present[7]) {
-        status = string_keys(&fields[7]);
+        status = ctap_request_text_map(&fields[7]);
         if (status != 0U) return status;
         const char *names[] = {"uv", "rk", "up"};
         bool enabled[3] = {false, false, true};
@@ -141,7 +114,7 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     }
     if (present[10]) return fields[10].major == 0U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (present[6]) {
-        status = string_keys(&fields[6]);
+        status = ctap_request_text_map(&fields[6]);
         if (status != 0U) return status;
     }
     CtapMakeCredential result = {0};
