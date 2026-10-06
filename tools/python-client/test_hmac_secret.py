@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 import tempfile
 from threading import Event
+import os
 import unittest
 
 from fido2 import cbor
@@ -21,7 +22,7 @@ from build_harness import build_harness
 from fido2_harness import open_harness
 
 
-def rewrite_as_legacy_vault(path):
+def rewrite_as_legacy_vault(path, version=1):
     """Construct a valid old-format fixture in a private test directory. No
     decrypted keys/randoms are logged or returned, and live peers are closed."""
     class Blob(ctypes.Structure):
@@ -36,18 +37,22 @@ def rewrite_as_legacy_vault(path):
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
     vault = path.read_bytes()
-    assert vault[:8] == b"APCV\x00\x00\x00\x02"
+    assert vault[:8] == b"APCV\x00\x00\x00\x03"
     sealed = (ctypes.c_ubyte * (len(vault) - 12)).from_buffer_copy(vault[12:])
     incoming, plain = Blob(len(sealed), sealed), Blob()
     assert crypt.CryptUnprotectData(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(plain))
     try:
         data = bytearray(ctypes.string_at(plain.data, plain.length))
-        assert data[:4] == b"ACP2"
-        legacy = bytearray(b"ACP1") + data[4:40]
-        for index in range(16):
-            offset = 40 + index * 202
-            legacy.extend(data[offset:offset + 137])  # Drop secret-present flag and randoms.
-        legacy.extend(data[40 + 16 * 202:])
+        assert data[:4] == b"ACP3"
+        if version == 2:
+            legacy = bytearray(b"ACP2") + data[4:-19]  # Drop the v3 PIN record.
+        else:
+            assert version == 1
+            legacy = bytearray(b"ACP1") + data[4:40]
+            for index in range(16):
+                offset = 40 + index * 202
+                legacy.extend(data[offset:offset + 137])  # Drop secret flag/randoms.
+            legacy.extend(data[40 + 16 * 202:40 + 16 * 202 + 16 * 168])
         data[:] = bytes(len(data))
     finally:
         ctypes.memset(plain.data, 0, plain.length)
@@ -57,7 +62,7 @@ def rewrite_as_legacy_vault(path):
     incoming, encrypted = Blob(len(raw), raw), Blob()
     try:
         assert crypt.CryptProtectData(ctypes.byref(incoming), "Legacy test fixture", None, None, None, 1, ctypes.byref(encrypted))
-        path.write_bytes(b"APCV\x00\x00\x00\x01" + encrypted.length.to_bytes(4, "big") +
+        path.write_bytes(b"APCV" + version.to_bytes(4, "big") + encrypted.length.to_bytes(4, "big") +
                         ctypes.string_at(encrypted.data, encrypted.length))
     finally:
         ctypes.memset(raw, 0, len(raw))
@@ -65,6 +70,7 @@ def rewrite_as_legacy_vault(path):
             kernel.LocalFree(encrypted.data)
 
 
+@unittest.skipUnless(os.name == "nt", "Current subprocess provider requires Windows CNG/DPAPI")
 class HmacSecretTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -113,7 +119,7 @@ class HmacSecretTests(unittest.TestCase):
         self.assertIn(len(encrypted), (48, 80))
         return self.protocol.decrypt(shared, encrypted)
 
-    def test_get_info_and_key_agreement_only_client_pin(self):
+    def test_get_info_and_development_client_pin(self):
         info = self.client.get_info()
         self.assertEqual(info.extensions, ["hmac-secret"])
         self.assertEqual(info.pin_uv_protocols, [2])
@@ -124,7 +130,7 @@ class HmacSecretTests(unittest.TestCase):
         self.assertEqual(first, self.client.client_pin(2, ClientPin.CMD.GET_KEY_AGREEMENT)[1])
         self.assertEqual((first[1], first[3], first[-1]), (2, -25, 1))
         for params, status in (({}, 0x14), ({1: 2}, 0x14), ({1: 1, 2: 2}, 2),
-                               ({1: "2", 2: 2}, 0x11), ({1: 2, 2: 1}, 0x3E), ({1: 2, 2: 3}, 0x3E)):
+                               ({1: "2", 2: 2}, 0x11), ({1: 2, 2: 3}, 0x14), ({1: 2, 2: 9}, 0x3E)):
             with self.subTest(params=params), self.assertRaises(CtapError) as error:
                 self.client.send_cbor(Ctap2.CMD.CLIENT_PIN, params)
             self.assertEqual(int(error.exception.code), status)
@@ -282,7 +288,7 @@ class HmacSecretTests(unittest.TestCase):
                 self.assertEqual(int(response.auth_data.flags), 1)
                 self.assertEqual(response.auth_data.counter, 1)
                 # A successful counter update upgrades the file while preserving old keys.
-                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x02")
+                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x03")
                 new_created = self.register(client, peer)
                 request, shared = self.request(client=client)
                 self.assertEqual(len(self.output(self.assertion(request, client, peer, new_created), shared)), 32)

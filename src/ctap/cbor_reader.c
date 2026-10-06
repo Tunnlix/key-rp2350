@@ -2,8 +2,9 @@
 
 #include <string.h>
 
-static bool utf8(const uint8_t *data, size_t length)
+bool cbor_utf8_valid(const uint8_t *data, size_t length)
 {
+    if (data == NULL && length != 0U) return false;
     for (size_t i = 0; i < length;) {
         uint8_t first = data[i++];
         if (first < 0x80U) continue;
@@ -50,7 +51,7 @@ static bool read_value(const uint8_t **cursor, const uint8_t *end, unsigned dept
     CborValue value = {start, *cursor, 0U, argument, major};
     if (major == 2U || major == 3U) {
         if (argument > (uint64_t)(end - *cursor)) return false;
-        if (major == 3U && !utf8(*cursor, (size_t)argument)) return false;
+        if (major == 3U && !cbor_utf8_valid(*cursor, (size_t)argument)) return false;
         *cursor += (size_t)argument;
     } else if (major == 4U || major == 5U) {
         if (depth >= 4U || argument > (uint64_t)(end - *cursor) / (major == 5U ? 2U : 1U)) return false;

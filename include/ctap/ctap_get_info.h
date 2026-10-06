@@ -26,7 +26,8 @@ typedef struct {
  * report rk=false, up=profile.user_presence, plat=false. With MakeCredential
  * configured, advertise ES256 and packed self-attestation (none is implicit),
  * and makeCredUvNotRqd=true. hmac-secret adds extensions and pinUvAuthProtocols=[2]
- * for key agreement; clientPin, uv and pinUvAuthToken options remain omitted.
+ * for key agreement; clientPin, uv and pinUvAuthToken options remain omitted
+ * while the development PIN maintenance handler lacks token authorization.
  * FIDO_2_3 is the
  * development target; full authenticator conformance has not been established.
  */

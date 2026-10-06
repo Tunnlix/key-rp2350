@@ -3,6 +3,7 @@
 import hashlib
 import tempfile
 from threading import Event
+import os
 import unittest
 
 from cryptography.exceptions import InvalidSignature
@@ -21,6 +22,7 @@ from build_harness import build_harness
 from fido2_harness import open_harness
 
 
+@unittest.skipUnless(os.name == "nt", "Current subprocess provider requires Windows CNG/DPAPI")
 class GetAssertionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

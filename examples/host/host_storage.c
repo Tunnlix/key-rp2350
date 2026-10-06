@@ -70,8 +70,10 @@ bool ctaphid_host_storage_init(HostStorage *storage, const char *control_directo
     AuthCrypto crypto = pc_authenticator_crypto(storage->authenticator);
     AuthStorage provider = pc_authenticator_storage(storage->authenticator);
     AuthSecretCrypto secrets = pc_authenticator_secrets(storage->authenticator);
+    AuthPinStorage pin = pc_authenticator_pin_storage(storage->authenticator);
     if (!auth_credentials_init(&storage->credentials, &crypto, &provider) ||
         !auth_credentials_configure_secrets(&storage->credentials, &secrets) ||
+        !ctap_client_pin_init(&storage->pin, &storage->credentials, &pin) ||
         !publish_snapshot(storage)) { ctaphid_host_storage_close(storage); return false; }
     return true;
 }
@@ -81,6 +83,7 @@ void ctaphid_host_storage_close(HostStorage *storage)
     if (storage == NULL) return;
     pc_authenticator_close(storage->authenticator);
     storage->authenticator = NULL;
+    auth_secure_zero(&storage->pin, sizeof storage->pin);
 #ifdef _WIN32
     if (storage->owns_temporary_directory) {
         char file[1100];

@@ -6,6 +6,7 @@
 #include "ctap/ctap_reset.h"
 #include "ctap/ctap_make_credential.h"
 #include "ctap/ctap_get_assertion.h"
+#include "ctap/ctap_client_pin.h"
 #include "protocol/ctaphid_device.h"
 
 /* Bridge between CTAP command execution and the HID coordinator. CTAP code does
@@ -29,6 +30,9 @@ typedef struct {
     CtapMakeCredential make_credential;
     bool awaiting_get_assertion;
     CtapGetAssertion get_assertion;
+    CtapClientPin *pin;
+    bool awaiting_pin;
+    CtapClientPinRequest pin_request;
 } CtaphidCtapBackend;
 
 /* Profile's advertised size must match the coordinator's receive capacity.
@@ -49,6 +53,11 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
  * protocol 2 getKeyAgreement. No PIN setup/token/UV capability is implied. */
 bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
+
+/* Optional development PIN maintenance binding, after credentials/reset.
+ * Does not advertise clientPin/token/UV capabilities. The combined application
+ * Reset callback must erase persistent PIN state as well as credentials/keys. */
+bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin);
 
 /* Config callbacks: start prepares a reply, abort discards it. Neither callback
  * reenters the coordinator. context must point to an initialized backend. */

@@ -23,6 +23,7 @@ from fido2 import cbor
 from fido2.hid import CAPABILITY, CTAPHID, ConnectionFailure
 
 
+@unittest.skipUnless(os.name == "nt", "Current subprocess provider requires Windows CNG/DPAPI")
 class PythonFido2Tests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -23,5 +23,7 @@ bool cbor_map_uint(const CborValue *map, uint64_t key, CborValue *value);
 bool cbor_map_int(const CborValue *map, int64_t key, CborValue *value);
 bool cbor_map_text(const CborValue *map, const char *key, CborValue *value);
 bool cbor_text_equal(const CborValue *value, const char *text);
+/* Same Unicode scalar validation used for CBOR text, also for decrypted PINs. */
+bool cbor_utf8_valid(const uint8_t *data, size_t length);
 
 #endif

@@ -3,6 +3,7 @@
 import hashlib
 import tempfile
 from threading import Event
+import os
 import unittest
 
 from cryptography.hazmat.primitives import hashes
@@ -23,6 +24,7 @@ def parameters():
             4: [{"type": "public-key", "alg": -7}]}
 
 
+@unittest.skipUnless(os.name == "nt", "Current subprocess provider requires Windows CNG/DPAPI")
 class MakeCredentialTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

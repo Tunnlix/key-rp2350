@@ -89,5 +89,21 @@ def build_provider_test_driver() -> Path:
     return output
 
 
+def build_pin_core_peer() -> Path:
+    """Test-only shared library; Python supplies real crypto to portable PIN C."""
+    compiler = find_compiler()
+    output = ROOT / "build" / ("pin_core_peer.dll" if os.name == "nt" else "pin_core_peer.so")
+    output.parent.mkdir(exist_ok=True)
+    sources = [ROOT / "tools/python-client/pin_core_peer.c"]
+    sources.extend(sorted((ROOT / "src/ctap").glob("*.c")))
+    sources.extend(sorted((ROOT / "src/authenticator").glob("*.c")))
+    compiler_env = dict(os.environ)
+    compiler_env["PATH"] = str(compiler.parent) + os.pathsep + compiler_env.get("PATH", "")
+    subprocess.run([str(compiler), "-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
+                    "-shared", *([] if os.name == "nt" else ["-fPIC"]), "-I", str(ROOT / "include"),
+                    *map(str, sources), "-o", str(output)], cwd=ROOT, env=compiler_env, check=True)
+    return output
+
+
 if __name__ == "__main__":
     print(build_harness())

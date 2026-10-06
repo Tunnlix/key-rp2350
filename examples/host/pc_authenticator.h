@@ -3,9 +3,11 @@
 
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_secret_crypto.h"
+#include "authenticator/auth_pin.h"
 
 /* Current PC platform: Windows CNG + user-scoped DPAPI. Credentials and provider
  * private keys and credential randoms persist in a versioned encrypted file.
+ * v3 adds a PIN verifier/retry record; v1/v2 remain readable with an unset PIN.
  * v1 credentials remain readable without assigning new hmac secrets to them.
  * Ephemeral key agreement is kept only in memory and regenerated on Reset. Private
  * material never crosses AuthCrypto. This development provider is not a secure
@@ -29,6 +31,7 @@ void pc_authenticator_close(PcAuthenticator *authenticator);
 AuthCrypto pc_authenticator_crypto(PcAuthenticator *authenticator);
 AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *authenticator);
 AuthStorage pc_authenticator_storage(PcAuthenticator *authenticator);
+AuthPinStorage pc_authenticator_pin_storage(PcAuthenticator *authenticator);
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *authenticator);
 
 /* Combined atomic key/metadata reset compatible with CtapResetStorage callback.

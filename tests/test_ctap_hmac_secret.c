@@ -64,7 +64,7 @@ static AuthStatus credential_hmac(void *context, const AuthKeyHandle *key, bool 
 static void configure(AuthCredentialService *service, Store *store, SecretMock *mock)
 {
     service_init(service, store);
-    AuthSecretCrypto crypto = {mock, agreement_public, ecdh, hmac, aes, secret_available, credential_hmac};
+    AuthSecretCrypto crypto = {mock, agreement_public, ecdh, hmac, aes, secret_available, credential_hmac, NULL};
     AuthSecretCrypto invalid = crypto; invalid.ecdh = NULL;
     assert(!auth_credentials_configure_secrets(service, &invalid));
     assert(auth_credentials_configure_secrets(service, &crypto));

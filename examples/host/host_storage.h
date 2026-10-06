@@ -3,12 +3,14 @@
 
 #include "pc_authenticator.h"
 #include "authenticator/auth_credentials.h"
+#include "ctap/ctap_client_pin.h"
 
 /* PC application binding, not embedded storage. Optional --store-dir persists
  * across runs; otherwise a private temporary vault is used for testing. */
 typedef struct {
     PcAuthenticator *authenticator;
     AuthCredentialService credentials;
+    CtapClientPin pin;
     char vault_directory[1024], snapshot_path[1024], temporary_path[1024];
     bool owns_temporary_directory;
 } HostStorage;

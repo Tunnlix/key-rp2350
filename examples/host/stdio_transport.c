@@ -153,6 +153,10 @@ int ctaphid_host_run_stdio(const char *presence_control_directory, const char *s
         ctaphid_host_storage_close(&storage);
         return 1;
     }
+    if (profile.user_presence && !ctaphid_ctap_backend_configure_pin(&backend, &storage.pin)) {
+        ctaphid_host_storage_close(&storage);
+        return 1;
+    }
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;

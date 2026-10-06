@@ -19,7 +19,8 @@
 #define PC_CAPACITY 16U
 #define PC_PRIVATE_BLOB_SIZE 104U
 #define PC_PLAIN_SIZE_V1 (40U + PC_CAPACITY * 137U + PC_CAPACITY * 168U)
-#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V1 + PC_CAPACITY * 65U)
+#define PC_PLAIN_SIZE_V2 (PC_PLAIN_SIZE_V1 + PC_CAPACITY * 65U)
+#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V2 + 19U)
 #define PC_SEALED_MAX 65536U
 
 typedef struct {
@@ -33,6 +34,7 @@ typedef struct {
     uint8_t device_identifier[16], credential_store_state[16];
     PcKey keys[PC_CAPACITY];
     PcRecord records[PC_CAPACITY];
+    AuthPinRecord pin;
 } PcState;
 
 struct PcAuthenticator {
@@ -87,7 +89,7 @@ static uint32_t read_u32(const uint8_t *input)
 static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
 {
     uint8_t *cursor = plain;
-    memcpy(cursor, "ACP2", 4U); cursor += 4U;
+    memcpy(cursor, "ACP3", 4U); cursor += 4U;
     write_u32(cursor, state->generation); cursor += 4U;
     memcpy(cursor, state->device_identifier, 16U); cursor += 16U;
     memcpy(cursor, state->credential_store_state, 16U); cursor += 16U;
@@ -112,6 +114,10 @@ static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
         write_u32(cursor, credential->signature_count); cursor += 4U;
         *cursor++ = credential->discoverable ? 1U : 0U;
     }
+    *cursor++ = state->pin.set ? 1U : 0U;
+    *cursor++ = state->pin.retries;
+    *cursor++ = state->pin.code_points;
+    memcpy(cursor, state->pin.hash, 16U);
 }
 
 static int key_index(const PcState *state, const AuthKeyHandle *handle)
@@ -132,9 +138,12 @@ static int record_index(const PcState *state, const uint8_t id[32])
 
 static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, PcState *state)
 {
-    if (version == 1U ? (length != PC_PLAIN_SIZE_V1 || memcmp(plain, "ACP1", 4U) != 0) :
-        (version != 2U || length != PC_PLAIN_SIZE || memcmp(plain, "ACP2", 4U) != 0)) return false;
+    if ((version == 1U && (length != PC_PLAIN_SIZE_V1 || memcmp(plain, "ACP1", 4U) != 0)) ||
+        (version == 2U && (length != PC_PLAIN_SIZE_V2 || memcmp(plain, "ACP2", 4U) != 0)) ||
+        (version == 3U && (length != PC_PLAIN_SIZE || memcmp(plain, "ACP3", 4U) != 0)) ||
+        version < 1U || version > 3U) return false;
     memset(state, 0, sizeof *state);
+    state->pin.retries = AUTH_PIN_MAX_RETRIES;
     const uint8_t *cursor = plain + 4U;
     state->generation = read_u32(cursor); cursor += 4U;
     memcpy(state->device_identifier, cursor, 16U); cursor += 16U;
@@ -146,7 +155,7 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
         key->used = used != 0U;
         memcpy(key->handle.bytes, cursor, 32U); cursor += 32U;
         memcpy(key->blob, cursor, 104U); cursor += 104U;
-        if (version == 2U) {
+        if (version >= 2U) {
             uint8_t has_secret = *cursor++;
             if (has_secret > 1U || (has_secret != 0U && !key->used)) return false;
             key->has_secret = has_secret != 0U;
@@ -186,6 +195,15 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
             }
         }
     }
+    if (version == 3U) {
+        uint8_t set = *cursor++;
+        if (set > 1U) return false;
+        state->pin.set = set != 0U;
+        state->pin.retries = *cursor++;
+        state->pin.code_points = *cursor++;
+        memcpy(state->pin.hash, cursor, 16U);
+        if (!auth_pin_record_valid(&state->pin)) return false;
+    }
     return true;
 }
 
@@ -206,7 +224,7 @@ static AuthStatus commit(PcAuthenticator *pc, const PcState *next)
     AuthStatus result = AUTH_IO_ERROR;
     if (file != INVALID_HANDLE_VALUE) {
         uint8_t header[12];
-        memcpy(header, "APCV", 4U); write_u32(header + 4U, 2U); write_u32(header + 8U, output.cbData);
+        memcpy(header, "APCV", 4U); write_u32(header + 4U, 3U); write_u32(header + 8U, output.cbData);
         DWORD written = 0U;
         bool ok = WriteFile(file, header, sizeof header, &written, NULL) && written == sizeof header;
         if (ok) ok = WriteFile(file, output.pbData, output.cbData, &written, NULL) && written == output.cbData;
@@ -232,7 +250,7 @@ static AuthStatus load(PcAuthenticator *pc)
     AuthStatus result = AUTH_BAD_DATA;
     if (!GetFileSizeEx(file, &size) || size.QuadPart < 12 || size.QuadPart > 12 + PC_SEALED_MAX ||
         !ReadFile(file, header, sizeof header, &received, NULL) || received != sizeof header ||
-        memcmp(header, "APCV", 4U) != 0 || (read_u32(header + 4U) != 1U && read_u32(header + 4U) != 2U)) { CloseHandle(file); return result; }
+        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) < 1U || read_u32(header + 4U) > 3U) { CloseHandle(file); return result; }
     uint32_t bytes = read_u32(header + 8U);
     if (bytes == 0U || bytes > PC_SEALED_MAX || (uint64_t)size.QuadPart != 12U + bytes) { CloseHandle(file); return result; }
     uint8_t *sealed = malloc(bytes);
@@ -287,6 +305,7 @@ AuthStatus pc_authenticator_open(const char *directory, PcAuthenticator **output
         new_agreement(pc, &pc->agreement) != AUTH_OK) { result = AUTH_CRYPTO_ERROR; goto failed; }
     result = load(pc);
     if (result == AUTH_NOT_FOUND) {
+        pc->state.pin.retries = AUTH_PIN_MAX_RETRIES;
         result = crypto_random(pc, pc->state.device_identifier, 16U);
         if (result == AUTH_OK) result = crypto_random(pc, pc->state.credential_store_state, 16U);
         if (result == AUTH_OK) result = commit(pc, &pc->state);
@@ -427,6 +446,18 @@ static AuthStatus secret_key_agreement(void *context, uint8_t output[65])
     return export_public(pc->agreement, output);
 }
 
+static AuthStatus secret_regenerate(void *context)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    BCRYPT_KEY_HANDLE fresh = NULL;
+    AuthStatus status = new_agreement(pc, &fresh);
+    if (status != AUTH_OK) return status;
+    BCryptDestroyKey(pc->agreement); pc->agreement = fresh;
+    return AUTH_OK;
+}
+
 static AuthStatus secret_ecdh(void *context, const uint8_t peer[65], uint8_t z[32])
 {
     PcAuthenticator *pc = context;
@@ -476,7 +507,7 @@ static AuthStatus secret_aes(void *context, bool encrypt, const uint8_t key[32],
 {
     PcAuthenticator *pc = context;
     if (pc == NULL || key == NULL || iv == NULL || input == NULL || output == NULL ||
-        (length != 32U && length != 64U)) return AUTH_INVALID_ARGUMENT;
+        (length != 16U && length != 32U && length != 64U)) return AUTH_INVALID_ARGUMENT;
     if (pc->faulted) return AUTH_IO_ERROR;
     BCRYPT_KEY_HANDLE handle = NULL;
     uint8_t mutable_iv[16], result[64]; ULONG count = 0U;
@@ -518,7 +549,7 @@ static AuthStatus secret_credential_hmac(void *context, const AuthKeyHandle *han
 AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *pc)
 {
     AuthSecretCrypto crypto = {pc, secret_key_agreement, secret_ecdh, secret_hmac, secret_aes,
-        secret_supported, secret_credential_hmac};
+        secret_supported, secret_credential_hmac, secret_regenerate};
     return crypto;
 }
 
@@ -617,6 +648,32 @@ AuthStorage pc_authenticator_storage(PcAuthenticator *pc)
     return storage;
 }
 
+static AuthStatus pin_read(void *context, AuthPinRecord *record)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || record == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    *record = pc->state.pin;
+    return AUTH_OK;
+}
+
+static AuthStatus pin_write(void *context, const AuthPinRecord *record)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || !auth_pin_record_valid(record)) return AUTH_INVALID_ARGUMENT;
+    PcState next = pc->state;
+    next.pin = *record;
+    AuthStatus status = commit(pc, &next);
+    SecureZeroMemory(&next, sizeof next);
+    return status;
+}
+
+AuthPinStorage pc_authenticator_pin_storage(PcAuthenticator *pc)
+{
+    AuthPinStorage storage = {pc, pin_read, pin_write};
+    return storage;
+}
+
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *pc)
 {
     PcAuthenticatorState result = {0};
@@ -636,6 +693,7 @@ bool pc_authenticator_factory_reset(void *context)
     PcAuthenticator *pc = context;
     if (pc == NULL || pc->state.generation == UINT32_MAX) return false;
     PcState next = {0};
+    next.pin.retries = AUTH_PIN_MAX_RETRIES;
     next.generation = pc->state.generation + 1U;
     if (crypto_random(pc, next.device_identifier, 16U) != AUTH_OK ||
         crypto_random(pc, next.credential_store_state, 16U) != AUTH_OK) return false;
@@ -658,6 +716,7 @@ void pc_authenticator_close(PcAuthenticator *pc) { (void)pc; }
 AuthCrypto pc_authenticator_crypto(PcAuthenticator *pc) { (void)pc; AuthCrypto value = {0}; return value; }
 AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *pc) { (void)pc; AuthSecretCrypto value = {0}; return value; }
 AuthStorage pc_authenticator_storage(PcAuthenticator *pc) { (void)pc; AuthStorage value = {0}; return value; }
+AuthPinStorage pc_authenticator_pin_storage(PcAuthenticator *pc) { (void)pc; AuthPinStorage value = {0}; return value; }
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *pc) { (void)pc; PcAuthenticatorState value = {0}; return value; }
 bool pc_authenticator_factory_reset(void *pc) { (void)pc; return false; }
 #endif

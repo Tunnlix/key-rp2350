@@ -36,16 +36,36 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
     return true;
 }
 
+bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin)
+{
+    if (backend == NULL || pin == NULL || backend->pending || backend->pin != NULL ||
+        backend->credentials == NULL || pin->service != backend->credentials || pin->faulted ||
+        !backend->reset_configured || backend->reset.reset_storage == NULL) return false;
+    backend->pin = pin;
+    return true;
+}
+
 void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     const uint8_t *request, size_t request_length)
 {
     CtaphidCtapBackend *backend = context;
     backend->operation_id = operation_id;
     backend->presence_started = false;
+    backend->awaiting_pin = false;
+    auth_secure_zero(&backend->pin_request, sizeof backend->pin_request);
     backend->awaiting_make_credential = false;
     memset(&backend->make_credential, 0, sizeof backend->make_credential);
     backend->awaiting_get_assertion = false;
     memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
+    if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_CLIENT_PIN && backend->pin != NULL) {
+        uint8_t status = ctap_client_pin_prepare(request + 1U, request_length - 1U, &backend->pin_request);
+        backend->awaiting_pin = status == CTAP_STATUS_OK;
+        backend->awaiting_presence = backend->awaiting_reset = backend->reset_authorized = false;
+        backend->response[0] = status;
+        backend->response_length = backend->awaiting_pin ? 0U : 1U;
+        backend->pending = true;
+        return;
+    }
     if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_CLIENT_PIN &&
         backend->credentials != NULL && backend->profile.hmac_secret) {
         size_t encoded_length = 0U;
@@ -97,6 +117,8 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id)
     CtaphidCtapBackend *backend = context;
     if (backend->pending && backend->operation_id == operation_id) {
         backend->pending = false;
+        backend->awaiting_pin = false;
+        auth_secure_zero(&backend->pin_request, sizeof backend->pin_request);
         backend->response_length = 0U;
         backend->awaiting_presence = false;
         backend->presence_started = false;
@@ -152,6 +174,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             (presence == CTAP_PRESENCE_DENIED ? CTAP_STATUS_OPERATION_DENIED : CTAP_STATUS_USER_ACTION_TIMEOUT);
         if (presence == CTAP_PRESENCE_CONFIRMED && backend->awaiting_reset) {
             backend->response[0] = ctap_reset_commit(&backend->reset, backend->operation_id, &backend->presence);
+            if (backend->response[0] == CTAP_STATUS_OK) ctap_client_pin_reset_state(backend->pin);
         }
         backend->response_length = 1U;
         if (backend->awaiting_get_assertion && presence != CTAP_PRESENCE_CONFIRMED) {
@@ -173,6 +196,13 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
         }
     }
+    if (backend->awaiting_pin) {
+        size_t encoded_length = 0U;
+        uint8_t status = ctap_client_pin_execute(backend->pin, &backend->pin_request,
+            backend->response + 1U, sizeof backend->response - 1U, &encoded_length);
+        backend->response[0] = status;
+        backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+    }
     if (backend->awaiting_get_assertion) {
         /* Only outside coordinator callbacks, after fresh UP or explicit up=false.
          * CANCEL/resync aborts before this point, including silent requests. */
@@ -185,6 +215,8 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     CtaphidDeviceResult result = ctaphid_device_complete_cbor(device, backend->operation_id,
         backend->response, backend->response_length);
     backend->pending = false;
+    backend->awaiting_pin = false;
+    auth_secure_zero(&backend->pin_request, sizeof backend->pin_request);
     backend->response_length = 0U;
     backend->awaiting_presence = false;
     backend->presence_started = false;
