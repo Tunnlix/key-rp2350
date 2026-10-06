@@ -7,6 +7,7 @@
 #include "host_actions.h"
 #include "host_clock.h"
 #include "host_presence.h"
+#include "host_storage.h"
 
 /* Host demonstration transport. Display outgoing wire bytes; a binary pipe or
  * USB transport can replace this callback without changing the handlers. */
@@ -44,11 +45,13 @@ static bool display_response_report(
 
 int main(int argc, char **argv)
 {
+    uint32_t powered_at_ms = ctaphid_host_now_ms();
     if (argc == 2 && strcmp(argv[1], "--stdio") == 0) return ctaphid_host_run_stdio(NULL);
     if (argc == 4 && strcmp(argv[1], "--stdio") == 0 && strcmp(argv[2], "--presence-control") == 0) {
         return ctaphid_host_run_stdio(argv[3]);
     }
-    bool presence_demo = argc >= 2 && strcmp(argv[1], "--presence-demo") == 0;
+    bool reset_demo = argc >= 2 && strcmp(argv[1], "--reset-demo") == 0;
+    bool presence_demo = reset_demo || (argc >= 2 && strcmp(argv[1], "--presence-demo") == 0);
     uint32_t auto_touch_ms = UINT32_MAX;
     if (presence_demo && argc == 4 && strcmp(argv[2], "--auto-touch-ms") == 0) {
         char *end;
@@ -56,7 +59,7 @@ int main(int argc, char **argv)
         if (end == argv[3] || *end != '\0' || delay > INT32_MAX) return 2;
         auto_touch_ms = (uint32_t)delay;
     } else if (!(argc == 1 || (presence_demo && argc == 2))) {
-        fprintf(stderr, "Usage: %s [--stdio [--presence-control DIR] | --presence-demo [--auto-touch-ms N]]\n", argv[0]);
+        fprintf(stderr, "Usage: %s [--stdio [--presence-control DIR] | --presence-demo | --reset-demo] [--auto-touch-ms N]\n", argv[0]);
         return 2;
     }
     HostTransport transport = {0};
@@ -74,6 +77,9 @@ int main(int argc, char **argv)
     if (!ctaphid_host_presence_init(&simulation, NULL, presence_demo, auto_touch_ms)) return 1;
     CtaphidCtapBackend backend;
     if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
+    HostStorage storage;
+    if (!ctaphid_host_storage_init(&storage, NULL) ||
+        !ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) return 1;
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;
@@ -106,7 +112,12 @@ int main(int argc, char **argv)
     }
 
     uint32_t current_time_ms = 0U;
-    size_t report_count = sizeof reports / sizeof reports[0] - (presence_demo ? 0U : 1U);
+    size_t report_count = sizeof reports / sizeof reports[0];
+    if (reset_demo) {
+        reports[report_count - 1U][7] = CTAP_COMMAND_RESET;
+        descriptions[report_count - 1U] = "Reset";
+    }
+    if (!presence_demo) --report_count;
     for (size_t i = 0; i < report_count; ++i) {
         if (presence_demo) current_time_ms = ctaphid_host_now_ms();
         /* Host uses the actual CID from INIT, rather than assuming allocation 1. */
@@ -145,7 +156,10 @@ int main(int argc, char **argv)
         if (ctaphid_device_poll(&device, now) != CTAPHID_DEVICE_OK) return 1;
         ctaphid_host_sleep_ms(10U);
     }
-    if (presence_demo) printf("Selection result: 0x%02X (00=confirmed, 27=denied, 2D=cancelled, 2F=timed out)\n",
+    if (presence_demo) printf("%s result: 0x%02X (00=confirmed, 27=denied, 2D=cancelled, 2F=timed out, 30=outside reset window)\n",
+        reset_demo ? "Reset" : "Selection",
         (unsigned int)transport.last_ctap_status);
+    if (reset_demo) printf("Volatile mock storage: generation=%u, records=%u, PIN set=%s\n",
+        (unsigned int)storage.generation, (unsigned int)storage.mock_credential_count, storage.mock_pin_set ? "true" : "false");
     return 0;
 }

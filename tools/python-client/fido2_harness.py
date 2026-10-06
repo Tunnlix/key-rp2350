@@ -14,6 +14,7 @@ from queue import Empty, Queue
 import subprocess
 from threading import Thread
 import tempfile
+import json
 
 from fido2.hid import ConnectionFailure, CtapHidDevice
 from fido2.hid.base import CtapHidConnection, HidDescriptor
@@ -143,6 +144,12 @@ class HarnessConnection(CtapHidConnection):
 
     def deny_presence(self) -> bool:
         return self._presence_event("deny")
+
+    def simulated_storage_state(self) -> dict:
+        """Inspect volatile test data; no actual credential/PIN features implied."""
+        if self._presence_directory is None:
+            raise ValueError("Simulation control is disabled")
+        return json.loads((Path(self._presence_directory.name) / "factory-state").read_text(encoding="ascii"))
 
     def __enter__(self) -> HarnessConnection:
         return self

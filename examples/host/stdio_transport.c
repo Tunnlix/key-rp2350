@@ -6,6 +6,7 @@
 #include "host_actions.h"
 #include "host_clock.h"
 #include "host_presence.h"
+#include "host_storage.h"
 #include "protocol/ctaphid_device.h"
 #include "protocol/ctaphid_ctap_backend.h"
 
@@ -74,6 +75,7 @@ static bool send_binary_report(void *context,
 
 int ctaphid_host_run_stdio(const char *presence_control_directory)
 {
+    uint32_t powered_at_ms = ctaphid_host_now_ms();
 #ifdef _WIN32
     if (_setmode(_fileno(stdin), _O_BINARY) == -1 ||
         _setmode(_fileno(stdout), _O_BINARY) == -1) {
@@ -92,6 +94,9 @@ int ctaphid_host_run_stdio(const char *presence_control_directory)
     if (!ctaphid_host_presence_init(&simulation, presence_control_directory, false, UINT32_MAX)) return 1;
     CtaphidCtapBackend backend;
     if (!ctaphid_ctap_backend_init(&backend, &profile)) return 1;
+    HostStorage storage;
+    if (!ctaphid_host_storage_init(&storage, presence_control_directory) ||
+        !ctaphid_ctap_backend_configure_reset(&backend, powered_at_ms, ctaphid_host_storage_reset, &storage)) return 1;
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;

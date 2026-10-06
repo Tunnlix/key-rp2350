@@ -11,6 +11,11 @@ CtapExecutionResult ctap_execute(const CtapGetInfoProfile *profile,
     uint8_t encoded[CTAP_MAX_RESPONSE_SIZE];
     size_t length = 1U;
     if (request_length == 0U) encoded[0] = CTAP_STATUS_INVALID_LENGTH;
+    else if (request[0] == CTAP_COMMAND_RESET) {
+        if (request_length != 1U) encoded[0] = CTAP_STATUS_INVALID_LENGTH;
+        else if (!profile->user_presence) encoded[0] = CTAP_STATUS_OPERATION_DENIED;
+        else return CTAP_EXECUTION_WAIT_FACTORY_RESET;
+    }
     else if (request[0] == CTAP_COMMAND_SELECTION) {
         if (!profile->user_presence) encoded[0] = CTAP_STATUS_INVALID_COMMAND;
         else if (request_length != 1U) encoded[0] = CTAP_STATUS_INVALID_LENGTH;

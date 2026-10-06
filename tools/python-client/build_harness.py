@@ -57,7 +57,7 @@ def build_harness() -> Path:
     output.parent.mkdir(exist_ok=True)
     sources = [ROOT / "examples/host/main.c", ROOT / "examples/host/stdio_transport.c",
                ROOT / "examples/host/host_actions.c", ROOT / "examples/host/host_clock.c",
-               ROOT / "examples/host/host_presence.c"]
+               ROOT / "examples/host/host_presence.c", ROOT / "examples/host/host_storage.c"]
     sources.extend(sorted((ROOT / "src/protocol").glob("*.c")))
     sources.extend(sorted((ROOT / "src/ctap").glob("*.c")))
     # GCC's helper tools/DLLs may also live in bin. Only the compiler subprocess
@@ -66,7 +66,8 @@ def build_harness() -> Path:
     compiler_env["PATH"] = str(compiler.parent) + os.pathsep + compiler_env.get("PATH", "")
     subprocess.run(
         [str(compiler), "-std=c17", "-Wall", "-Wextra", "-Wpedantic", "-Werror",
-         "-I", str(ROOT / "include"), *map(str, sources), "-o", str(output)],
+         "-I", str(ROOT / "include"), *map(str, sources),
+         *(["-lbcrypt"] if os.name == "nt" else []), "-o", str(output)],
         cwd=ROOT, env=compiler_env, check=True,
     )
     return output
