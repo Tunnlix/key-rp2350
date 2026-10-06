@@ -44,7 +44,9 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
 
 /* Bind an initialized portable service once before requests. Caller keeps it
  * alive for this backend's lifetime. Requires a configured UP provider; makes
- * Enables ES256 registration/assertions and packed self-attestation. */
+ * Enables ES256 registration/assertions and packed self-attestation. Bind the
+ * service's optional secret provider before this call to enable hmac-secret and
+ * protocol 2 getKeyAgreement. No PIN setup/token/UV capability is implied. */
 bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
 

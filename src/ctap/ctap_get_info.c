@@ -12,11 +12,13 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     uint8_t encoded[CTAP_GET_INFO_MAX_CBOR_SIZE];
     CborWriter writer;
     cbor_writer_init(&writer, encoded, sizeof encoded);
-    bool ok = cbor_write_map(&writer, profile->make_credential ? 6U : 4U) &&
+    bool ok = cbor_write_map(&writer, (profile->make_credential ? 6U : 4U) + (profile->hmac_secret ? 2U : 0U)) &&
         /* Integer map keys are in increasing canonical order. */
         cbor_write_uint(&writer, 0x01U) && cbor_write_array(&writer, 1U) &&
-        cbor_write_text(&writer, "FIDO_2_3") &&
-        cbor_write_uint(&writer, 0x03U) &&
+        cbor_write_text(&writer, "FIDO_2_3");
+    if (profile->hmac_secret) ok = ok && cbor_write_uint(&writer, 0x02U) &&
+        cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "hmac-secret");
+    ok = ok && cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
         cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, profile->make_credential ? 4U : 3U) &&
         /* String keys sort by length, then bytes: rk, up, plat.
@@ -26,6 +28,8 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         cbor_write_text(&writer, "plat") && cbor_write_bool(&writer, false);
     if (profile->make_credential) ok = ok && cbor_write_text(&writer, "makeCredUvNotRqd") && cbor_write_bool(&writer, true);
     ok = ok && cbor_write_uint(&writer, 0x05U) && cbor_write_uint(&writer, profile->max_message_size);
+    if (profile->hmac_secret) ok = ok && cbor_write_uint(&writer, 0x06U) &&
+        cbor_write_array(&writer, 1U) && cbor_write_uint(&writer, 2U);
     if (profile->make_credential) ok = ok &&
         cbor_write_uint(&writer, 0x0AU) && cbor_write_array(&writer, 1U) && cbor_write_map(&writer, 2U) &&
         cbor_write_text(&writer, "alg") && cbor_write_int(&writer, -7) &&

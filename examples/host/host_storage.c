@@ -69,7 +69,9 @@ bool ctaphid_host_storage_init(HostStorage *storage, const char *control_directo
     }
     AuthCrypto crypto = pc_authenticator_crypto(storage->authenticator);
     AuthStorage provider = pc_authenticator_storage(storage->authenticator);
+    AuthSecretCrypto secrets = pc_authenticator_secrets(storage->authenticator);
     if (!auth_credentials_init(&storage->credentials, &crypto, &provider) ||
+        !auth_credentials_configure_secrets(&storage->credentials, &secrets) ||
         !publish_snapshot(storage)) { ctaphid_host_storage_close(storage); return false; }
     return true;
 }

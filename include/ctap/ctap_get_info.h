@@ -15,6 +15,7 @@ typedef struct {
     uint32_t max_message_size;
     bool user_presence; /* Set only when a platform presence provider is connected. */
     bool make_credential; /* ES256 provider + UP configured; set by the backend. */
+    bool hmac_secret; /* Complete secret provider bound; protocol 2 key agreement. */
 } CtapGetInfoProfile;
 
 /* Encode the GetInfo map only (without status byte or HID framing). Returns
@@ -24,7 +25,9 @@ typedef struct {
  * CTAP 2.3 section 6.4: versions, aaguid, options, maxMsgSize. Options currently
  * report rk=false, up=profile.user_presence, plat=false. With MakeCredential
  * configured, advertise ES256 and packed self-attestation (none is implicit),
- * and makeCredUvNotRqd=true. PIN/UV and extensions are omitted. FIDO_2_3 is the
+ * and makeCredUvNotRqd=true. hmac-secret adds extensions and pinUvAuthProtocols=[2]
+ * for key agreement; clientPin, uv and pinUvAuthToken options remain omitted.
+ * FIDO_2_3 is the
  * development target; full authenticator conformance has not been established.
  */
 bool ctap_get_info_encode(const CtapGetInfoProfile *profile,

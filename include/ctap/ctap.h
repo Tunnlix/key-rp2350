@@ -6,6 +6,7 @@
 #define CTAP_COMMAND_MAKE_CREDENTIAL 0x01U
 #define CTAP_COMMAND_GET_ASSERTION 0x02U
 #define CTAP_COMMAND_GET_INFO 0x04U
+#define CTAP_COMMAND_CLIENT_PIN 0x06U
 #define CTAP_COMMAND_RESET 0x07U
 #define CTAP_COMMAND_SELECTION 0x0BU
 #define CTAP_STATUS_OK 0x00U
@@ -26,6 +27,8 @@
 #define CTAP_STATUS_OPERATION_DENIED 0x27U
 #define CTAP_STATUS_USER_ACTION_TIMEOUT 0x2FU
 #define CTAP_STATUS_NOT_ALLOWED 0x30U
+#define CTAP_STATUS_PIN_AUTH_INVALID 0x33U
+#define CTAP_STATUS_INVALID_SUBCOMMAND 0x3EU
 #define CTAP_MAX_RESPONSE_SIZE 512U
 
 typedef enum {
@@ -48,6 +51,7 @@ typedef enum {
  * returns OPERATION_DENIED when user interaction cannot be collected. Remaining
  * commands are unsupported by this stateless entry point. MakeCredential and
  * GetAssertion use their prepare/finish handlers with the bound credential service.
+ * ClientPIN getKeyAgreement is routed by the backend's optional secret provider.
  */
 CtapExecutionResult ctap_execute(const CtapGetInfoProfile *profile,
     const uint8_t *request, size_t request_length,

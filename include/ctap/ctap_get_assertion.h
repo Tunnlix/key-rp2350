@@ -3,14 +3,16 @@
 
 #include "ctap/ctap.h"
 #include "authenticator/auth_credentials.h"
+#include "ctap/ctap_hmac_secret.h"
 
 /* Owned, validated request state. No borrowed receive-buffer pointers or keys.
  * First eligible RP-bound allowList credential wins; the whole list is validated.
  * rk=false means no discoverable lookup, account enumeration or next-assertion
- * state. No PIN/UV or extensions are advertised/implemented. */
+ * state. hmac-secret supports protocol 2 with UP; no PIN/UV features are enabled. */
 typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], credential_id[32];
     bool user_presence_required;
+    CtapHmacSecret hmac_secret;
 } CtapGetAssertion;
 
 /* Validate CBOR, options, descriptors and RP binding. No counter updates/signing.
@@ -26,7 +28,9 @@ uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
  * back. Failures leave output/length unchanged. CANCEL/INIT before this call
  * discards prepared state without updating counters or signing.
  * Rechecks the selected credential's existence and RP binding. Caller provides
- * at least 192 bytes; storage and signing errors fail closed with OTHER.
+ * at least 192 bytes, or 288 for an hmac-secret request. The extension requires
+ * UP and is evaluated before counter updates; its encrypted output is signed
+ * inside authenticator data with ED set. Storage/signing errors fail with OTHER.
  * Output must not overlap inputs/service. */
 uint8_t ctap_get_assertion_finish(AuthCredentialService *service,
     const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length);

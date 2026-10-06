@@ -10,6 +10,7 @@ typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], user_id[64];
     size_t user_id_length;
     bool credential_excluded, omit_attestation;
+    bool hmac_secret_requested;
 } CtapMakeCredential;
 
 /* Validate the parameter map and check RP-bound exclusion before asking for UP.

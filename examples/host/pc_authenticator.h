@@ -2,9 +2,12 @@
 #define PC_AUTHENTICATOR_H
 
 #include "authenticator/auth_platform.h"
+#include "authenticator/auth_secret_crypto.h"
 
 /* Current PC platform: Windows CNG + user-scoped DPAPI. Credentials and provider
- * private keys persist in a versioned, authenticated encrypted file. Private
+ * private keys and credential randoms persist in a versioned encrypted file.
+ * v1 credentials remain readable without assigning new hmac secrets to them.
+ * Ephemeral key agreement is kept only in memory and regenerated on Reset. Private
  * material never crosses AuthCrypto. This development provider is not a secure
  * element or a protection against whole-file rollback by its owning OS user.
  * Do not copy the provider/file format into RP2350 firmware. */
@@ -24,6 +27,7 @@ AuthStatus pc_authenticator_open(const char *directory, PcAuthenticator **output
 AuthStatus pc_authenticator_random(uint8_t *output, size_t length);
 void pc_authenticator_close(PcAuthenticator *authenticator);
 AuthCrypto pc_authenticator_crypto(PcAuthenticator *authenticator);
+AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *authenticator);
 AuthStorage pc_authenticator_storage(PcAuthenticator *authenticator);
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *authenticator);
 

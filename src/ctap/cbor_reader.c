@@ -88,14 +88,14 @@ bool cbor_text_equal(const CborValue *value, const char *text)
         value->value == strlen(text) && memcmp(value->data, text, strlen(text)) == 0;
 }
 
-static bool map_lookup(const CborValue *map, uint64_t number, const char *text, CborValue *output)
+static bool map_lookup(const CborValue *map, uint8_t major, uint64_t number, const char *text, CborValue *output)
 {
     if (map == NULL || map->major != 5U || output == NULL) return false;
     const uint8_t *cursor = map->data, *end = map->encoded + map->encoded_length;
     CborValue key, value;
     for (uint64_t i = 0; i < map->value; ++i) {
         if (!cbor_read_next(&cursor, end, &key) || !cbor_read_next(&cursor, end, &value)) return false;
-        if (text == NULL ? key.major == 0U && key.value == number : cbor_text_equal(&key, text)) {
+        if (text == NULL ? key.major == major && key.value == number : cbor_text_equal(&key, text)) {
             *output = value;
             return true;
         }
@@ -104,6 +104,9 @@ static bool map_lookup(const CborValue *map, uint64_t number, const char *text, 
 }
 
 bool cbor_map_uint(const CborValue *map, uint64_t key, CborValue *value)
-{ return map_lookup(map, key, NULL, value); }
+{ return map_lookup(map, 0U, key, NULL, value); }
+bool cbor_map_int(const CborValue *map, int64_t key, CborValue *value)
+{ return key >= 0 ? map_lookup(map, 0U, (uint64_t)key, NULL, value) :
+    map_lookup(map, 1U, (uint64_t)(-(key + 1)), NULL, value); }
 bool cbor_map_text(const CborValue *map, const char *key, CborValue *value)
-{ return key != NULL && map_lookup(map, 0U, key, value); }
+{ return key != NULL && map_lookup(map, 0U, 0U, key, value); }

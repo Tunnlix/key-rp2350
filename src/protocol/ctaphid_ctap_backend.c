@@ -11,6 +11,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     memset(backend, 0, sizeof *backend);
     backend->profile = copied;
     backend->profile.make_credential = false; /* Only binding enables this claim. */
+    backend->profile.hmac_secret = false;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
     return true;
 }
@@ -22,6 +23,7 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
         !backend->profile.user_presence) return false;
     backend->credentials = service;
     backend->profile.make_credential = true;
+    backend->profile.hmac_secret = auth_secret_crypto_valid(&service->secrets);
     return true;
 }
 
@@ -44,6 +46,17 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     memset(&backend->make_credential, 0, sizeof backend->make_credential);
     backend->awaiting_get_assertion = false;
     memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
+    if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_CLIENT_PIN &&
+        backend->credentials != NULL && backend->profile.hmac_secret) {
+        size_t encoded_length = 0U;
+        uint8_t status = ctap_hmac_secret_key_agreement(backend->credentials, request + 1U,
+            request_length - 1U, backend->response + 1U, sizeof backend->response - 1U, &encoded_length);
+        backend->awaiting_presence = backend->awaiting_reset = backend->reset_authorized = false;
+        backend->response[0] = status;
+        backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+        backend->pending = true;
+        return;
+    }
     if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_GET_ASSERTION && backend->credentials != NULL) {
         uint8_t status = ctap_get_assertion_prepare(backend->credentials, request + 1U,
             request_length - 1U, &backend->get_assertion);

@@ -20,6 +20,7 @@ typedef struct {
 bool cbor_read_document(const uint8_t *input, size_t length, CborValue *value);
 bool cbor_read_next(const uint8_t **cursor, const uint8_t *end, CborValue *value);
 bool cbor_map_uint(const CborValue *map, uint64_t key, CborValue *value);
+bool cbor_map_int(const CborValue *map, int64_t key, CborValue *value);
 bool cbor_map_text(const CborValue *map, const char *key, CborValue *value);
 bool cbor_text_equal(const CborValue *value, const char *text);
 

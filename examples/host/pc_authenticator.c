@@ -11,12 +11,22 @@
 #include <bcrypt.h>
 #include <wincrypt.h>
 
+/* Some MinGW SDK headers omit this documented Windows CNG KDF name. */
+#ifndef BCRYPT_KDF_RAW_SECRET
+#define BCRYPT_KDF_RAW_SECRET L"TRUNCATE"
+#endif
+
 #define PC_CAPACITY 16U
 #define PC_PRIVATE_BLOB_SIZE 104U
-#define PC_PLAIN_SIZE (40U + PC_CAPACITY * 137U + PC_CAPACITY * 168U)
+#define PC_PLAIN_SIZE_V1 (40U + PC_CAPACITY * 137U + PC_CAPACITY * 168U)
+#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V1 + PC_CAPACITY * 65U)
 #define PC_SEALED_MAX 65536U
 
-typedef struct { bool used; AuthKeyHandle handle; uint8_t blob[104]; } PcKey;
+typedef struct {
+    bool used; AuthKeyHandle handle; uint8_t blob[104];
+    bool has_secret;
+    uint8_t cred_random[2][32]; /* With UV, without UV; never returned to core. */
+} PcKey;
 typedef struct { bool used; AuthCredential credential; } PcRecord;
 typedef struct {
     uint32_t generation;
@@ -28,7 +38,8 @@ typedef struct {
 struct PcAuthenticator {
     char file[1024], temporary[1024];
     HANDLE lock;
-    BCRYPT_ALG_HANDLE ec, sha;
+    BCRYPT_ALG_HANDLE ec, sha, hmac, aes, ecdh;
+    BCRYPT_KEY_HANDLE agreement;
     PcState state;
     bool faulted;
 };
@@ -76,7 +87,7 @@ static uint32_t read_u32(const uint8_t *input)
 static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
 {
     uint8_t *cursor = plain;
-    memcpy(cursor, "ACP1", 4U); cursor += 4U;
+    memcpy(cursor, "ACP2", 4U); cursor += 4U;
     write_u32(cursor, state->generation); cursor += 4U;
     memcpy(cursor, state->device_identifier, 16U); cursor += 16U;
     memcpy(cursor, state->credential_store_state, 16U); cursor += 16U;
@@ -85,6 +96,8 @@ static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
         *cursor++ = key->used ? 1U : 0U;
         memcpy(cursor, key->handle.bytes, 32U); cursor += 32U;
         memcpy(cursor, key->blob, 104U); cursor += 104U;
+        *cursor++ = key->has_secret ? 1U : 0U;
+        memcpy(cursor, key->cred_random, 64U); cursor += 64U;
     }
     for (size_t i = 0; i < PC_CAPACITY; ++i) {
         const PcRecord *record = &state->records[i];
@@ -117,9 +130,10 @@ static int record_index(const PcState *state, const uint8_t id[32])
     return -1;
 }
 
-static bool decode_state(const uint8_t *plain, size_t length, PcState *state)
+static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, PcState *state)
 {
-    if (length != PC_PLAIN_SIZE || memcmp(plain, "ACP1", 4U) != 0) return false;
+    if (version == 1U ? (length != PC_PLAIN_SIZE_V1 || memcmp(plain, "ACP1", 4U) != 0) :
+        (version != 2U || length != PC_PLAIN_SIZE || memcmp(plain, "ACP2", 4U) != 0)) return false;
     memset(state, 0, sizeof *state);
     const uint8_t *cursor = plain + 4U;
     state->generation = read_u32(cursor); cursor += 4U;
@@ -132,6 +146,12 @@ static bool decode_state(const uint8_t *plain, size_t length, PcState *state)
         key->used = used != 0U;
         memcpy(key->handle.bytes, cursor, 32U); cursor += 32U;
         memcpy(key->blob, cursor, 104U); cursor += 104U;
+        if (version == 2U) {
+            uint8_t has_secret = *cursor++;
+            if (has_secret > 1U || (has_secret != 0U && !key->used)) return false;
+            key->has_secret = has_secret != 0U;
+            memcpy(key->cred_random, cursor, 64U); cursor += 64U;
+        }
         if (key->used) {
             BCRYPT_ECCKEY_BLOB header;
             memcpy(&header, key->blob, sizeof header);
@@ -186,7 +206,7 @@ static AuthStatus commit(PcAuthenticator *pc, const PcState *next)
     AuthStatus result = AUTH_IO_ERROR;
     if (file != INVALID_HANDLE_VALUE) {
         uint8_t header[12];
-        memcpy(header, "APCV", 4U); write_u32(header + 4U, 1U); write_u32(header + 8U, output.cbData);
+        memcpy(header, "APCV", 4U); write_u32(header + 4U, 2U); write_u32(header + 8U, output.cbData);
         DWORD written = 0U;
         bool ok = WriteFile(file, header, sizeof header, &written, NULL) && written == sizeof header;
         if (ok) ok = WriteFile(file, output.pbData, output.cbData, &written, NULL) && written == output.cbData;
@@ -212,7 +232,7 @@ static AuthStatus load(PcAuthenticator *pc)
     AuthStatus result = AUTH_BAD_DATA;
     if (!GetFileSizeEx(file, &size) || size.QuadPart < 12 || size.QuadPart > 12 + PC_SEALED_MAX ||
         !ReadFile(file, header, sizeof header, &received, NULL) || received != sizeof header ||
-        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) != 1U) { CloseHandle(file); return result; }
+        memcmp(header, "APCV", 4U) != 0 || (read_u32(header + 4U) != 1U && read_u32(header + 4U) != 2U)) { CloseHandle(file); return result; }
     uint32_t bytes = read_u32(header + 8U);
     if (bytes == 0U || bytes > PC_SEALED_MAX || (uint64_t)size.QuadPart != 12U + bytes) { CloseHandle(file); return result; }
     uint8_t *sealed = malloc(bytes);
@@ -221,12 +241,23 @@ static AuthStatus load(PcAuthenticator *pc)
     CloseHandle(file);
     DATA_BLOB input = {bytes, sealed}, output = {0};
     if (read && CryptUnprotectData(&input, NULL, NULL, NULL, NULL, CRYPTPROTECT_UI_FORBIDDEN, &output)) {
-        if (decode_state(output.pbData, output.cbData, &pc->state)) result = AUTH_OK;
+        if (decode_state(output.pbData, output.cbData, read_u32(header + 4U), &pc->state)) result = AUTH_OK;
         SecureZeroMemory(output.pbData, output.cbData);
         LocalFree(output.pbData);
     }
     free(sealed);
     return result;
+}
+
+static AuthStatus new_agreement(PcAuthenticator *pc, BCRYPT_KEY_HANDLE *output)
+{
+    BCRYPT_KEY_HANDLE key = NULL;
+    if (BCryptGenerateKeyPair(pc->ecdh, &key, 256U, 0U) != 0 || BCryptFinalizeKeyPair(key, 0U) != 0) {
+        if (key != NULL) BCryptDestroyKey(key);
+        return AUTH_CRYPTO_ERROR;
+    }
+    *output = key;
+    return AUTH_OK;
 }
 
 AuthStatus pc_authenticator_open(const char *directory, PcAuthenticator **output)
@@ -248,7 +279,12 @@ AuthStatus pc_authenticator_open(const char *directory, PcAuthenticator **output
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_DELETE_ON_CLOSE, NULL);
     if (pc->lock == INVALID_HANDLE_VALUE) { result = AUTH_BUSY; goto failed; }
     if (BCryptOpenAlgorithmProvider(&pc->ec, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0U) != 0 ||
-        BCryptOpenAlgorithmProvider(&pc->sha, BCRYPT_SHA256_ALGORITHM, NULL, 0U) != 0) { result = AUTH_CRYPTO_ERROR; goto failed; }
+        BCryptOpenAlgorithmProvider(&pc->sha, BCRYPT_SHA256_ALGORITHM, NULL, 0U) != 0 ||
+        BCryptOpenAlgorithmProvider(&pc->hmac, BCRYPT_SHA256_ALGORITHM, NULL, BCRYPT_ALG_HANDLE_HMAC_FLAG) != 0 ||
+        BCryptOpenAlgorithmProvider(&pc->aes, BCRYPT_AES_ALGORITHM, NULL, 0U) != 0 ||
+        BCryptSetProperty(pc->aes, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_CBC, sizeof BCRYPT_CHAIN_MODE_CBC, 0U) != 0 ||
+        BCryptOpenAlgorithmProvider(&pc->ecdh, BCRYPT_ECDH_P256_ALGORITHM, NULL, 0U) != 0 ||
+        new_agreement(pc, &pc->agreement) != AUTH_OK) { result = AUTH_CRYPTO_ERROR; goto failed; }
     result = load(pc);
     if (result == AUTH_NOT_FOUND) {
         result = crypto_random(pc, pc->state.device_identifier, 16U);
@@ -266,6 +302,10 @@ failed:
 void pc_authenticator_close(PcAuthenticator *pc)
 {
     if (pc == NULL) return;
+    if (pc->agreement != NULL) BCryptDestroyKey(pc->agreement);
+    if (pc->ecdh != NULL) BCryptCloseAlgorithmProvider(pc->ecdh, 0U);
+    if (pc->hmac != NULL) BCryptCloseAlgorithmProvider(pc->hmac, 0U);
+    if (pc->aes != NULL) BCryptCloseAlgorithmProvider(pc->aes, 0U);
     if (pc->ec != NULL) BCryptCloseAlgorithmProvider(pc->ec, 0U);
     if (pc->sha != NULL) BCryptCloseAlgorithmProvider(pc->sha, 0U);
     if (pc->lock != INVALID_HANDLE_VALUE) CloseHandle(pc->lock);
@@ -329,7 +369,11 @@ static AuthStatus crypto_generate(void *context, AuthKeyHandle *handle, uint8_t 
         export_public(key, public_key) == AUTH_OK &&
         BCryptExportKey(key, NULL, BCRYPT_ECCPRIVATE_BLOB, created->blob, sizeof created->blob, &count, 0U) == 0 && count == sizeof created->blob) {
         created->used = true;
-        result = commit(pc, &next);
+        result = crypto_random(pc, (uint8_t *)created->cred_random, sizeof created->cred_random);
+        if (result == AUTH_OK) {
+            created->has_secret = true;
+            result = commit(pc, &next);
+        }
         if (result == AUTH_OK) { *handle = created->handle; memcpy(output, public_key, 65U); }
     }
     if (key != NULL) BCryptDestroyKey(key);
@@ -371,6 +415,110 @@ static AuthStatus crypto_destroy(void *context, const AuthKeyHandle *handle)
 AuthCrypto pc_authenticator_crypto(PcAuthenticator *pc)
 {
     AuthCrypto crypto = {pc, crypto_random, crypto_sha256, crypto_generate, crypto_public, crypto_sign, crypto_destroy};
+    return crypto;
+}
+
+/* Small native primitive adapters; HKDF and CTAP processing stay in core. */
+static AuthStatus secret_key_agreement(void *context, uint8_t output[65])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || output == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    return export_public(pc->agreement, output);
+}
+
+static AuthStatus secret_ecdh(void *context, const uint8_t peer[65], uint8_t z[32])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || peer == NULL || z == NULL || peer[0] != 4U) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    uint8_t blob[72], raw[32];
+    BCRYPT_ECCKEY_BLOB header = {BCRYPT_ECDH_PUBLIC_P256_MAGIC, 32U};
+    memcpy(blob, &header, sizeof header); memcpy(blob + sizeof header, peer + 1U, 64U);
+    BCRYPT_KEY_HANDLE key = NULL; BCRYPT_SECRET_HANDLE secret = NULL;
+    ULONG count = 0U;
+    AuthStatus result = AUTH_BAD_DATA;
+    if (BCryptImportKeyPair(pc->ecdh, NULL, BCRYPT_ECCPUBLIC_BLOB, &key, blob, sizeof blob, 0U) == 0 &&
+        BCryptSecretAgreement(pc->agreement, key, &secret, 0U) == 0) {
+        result = AUTH_CRYPTO_ERROR;
+        if (BCryptDeriveKey(secret, BCRYPT_KDF_RAW_SECRET, NULL, raw, sizeof raw, &count, 0U) == 0 && count == 32U) {
+            /* CNG RAW_SECRET is little endian; CTAP's Z is big endian. */
+            for (size_t i = 0U; i < 32U; ++i) z[i] = raw[31U - i];
+            result = AUTH_OK;
+        }
+    }
+    SecureZeroMemory(raw, sizeof raw);
+    if (secret != NULL) BCryptDestroySecret(secret);
+    if (key != NULL) BCryptDestroyKey(key);
+    return result;
+}
+
+static AuthStatus secret_hmac(void *context, const uint8_t *key, size_t key_length,
+    const uint8_t *message, size_t message_length, uint8_t output[32])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || output == NULL || (key == NULL && key_length != 0U) ||
+        (message == NULL && message_length != 0U) || key_length > ULONG_MAX || message_length > ULONG_MAX) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    BCRYPT_HASH_HANDLE hash = NULL;
+    uint8_t result[32];
+    NTSTATUS status = BCryptCreateHash(pc->hmac, &hash, NULL, 0U, (PUCHAR)key, (ULONG)key_length, 0U);
+    if (status == 0 && message_length != 0U) status = BCryptHashData(hash, (PUCHAR)message, (ULONG)message_length, 0U);
+    if (status == 0) status = BCryptFinishHash(hash, result, sizeof result, 0U);
+    if (hash != NULL) BCryptDestroyHash(hash);
+    if (status == 0) memcpy(output, result, sizeof result);
+    SecureZeroMemory(result, sizeof result);
+    return status == 0 ? AUTH_OK : AUTH_CRYPTO_ERROR;
+}
+
+static AuthStatus secret_aes(void *context, bool encrypt, const uint8_t key[32], const uint8_t iv[16],
+    const uint8_t *input, size_t length, uint8_t *output)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || key == NULL || iv == NULL || input == NULL || output == NULL ||
+        (length != 32U && length != 64U)) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    BCRYPT_KEY_HANDLE handle = NULL;
+    uint8_t mutable_iv[16], result[64]; ULONG count = 0U;
+    memcpy(mutable_iv, iv, 16U);
+    NTSTATUS status = BCryptGenerateSymmetricKey(pc->aes, &handle, NULL, 0U, (PUCHAR)key, 32U, 0U);
+    if (status == 0) {
+        status = encrypt ? BCryptEncrypt(handle, (PUCHAR)input, (ULONG)length, NULL, mutable_iv, 16U,
+            result, (ULONG)length, &count, 0U) : BCryptDecrypt(handle, (PUCHAR)input, (ULONG)length, NULL, mutable_iv, 16U,
+            result, (ULONG)length, &count, 0U);
+    }
+    if (handle != NULL) BCryptDestroyKey(handle);
+    if (status == 0 && count == length) memcpy(output, result, length);
+    SecureZeroMemory(result, sizeof result); SecureZeroMemory(mutable_iv, sizeof mutable_iv);
+    return status == 0 && count == length ? AUTH_OK : AUTH_CRYPTO_ERROR;
+}
+
+static AuthStatus secret_supported(void *context, const AuthKeyHandle *handle, bool *supported)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || handle == NULL || supported == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    int index = key_index(&pc->state, handle);
+    if (index < 0) return AUTH_NOT_FOUND;
+    *supported = pc->state.keys[index].has_secret;
+    return AUTH_OK;
+}
+
+static AuthStatus secret_credential_hmac(void *context, const AuthKeyHandle *handle, bool uv,
+    const uint8_t salt[32], uint8_t output[32])
+{
+    PcAuthenticator *pc = context;
+    bool supported;
+    AuthStatus status = secret_supported(context, handle, &supported);
+    if (status != AUTH_OK || !supported) return status == AUTH_OK ? AUTH_NOT_FOUND : status;
+    int index = key_index(&pc->state, handle);
+    return secret_hmac(pc, pc->state.keys[index].cred_random[uv ? 0U : 1U], 32U, salt, 32U, output);
+}
+
+AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *pc)
+{
+    AuthSecretCrypto crypto = {pc, secret_key_agreement, secret_ecdh, secret_hmac, secret_aes,
+        secret_supported, secret_credential_hmac};
     return crypto;
 }
 
@@ -491,7 +639,11 @@ bool pc_authenticator_factory_reset(void *context)
     next.generation = pc->state.generation + 1U;
     if (crypto_random(pc, next.device_identifier, 16U) != AUTH_OK ||
         crypto_random(pc, next.credential_store_state, 16U) != AUTH_OK) return false;
+    BCRYPT_KEY_HANDLE fresh = NULL;
+    if (new_agreement(pc, &fresh) != AUTH_OK) { SecureZeroMemory(&next, sizeof next); return false; }
     AuthStatus result = commit(pc, &next);
+    if (result == AUTH_OK) { BCryptDestroyKey(pc->agreement); pc->agreement = fresh; }
+    else BCryptDestroyKey(fresh);
     SecureZeroMemory(&next, sizeof next);
     return result == AUTH_OK;
 }
@@ -504,6 +656,7 @@ AuthStatus pc_authenticator_random(uint8_t *output, size_t length)
 { (void)output; (void)length; return AUTH_UNSUPPORTED; }
 void pc_authenticator_close(PcAuthenticator *pc) { (void)pc; }
 AuthCrypto pc_authenticator_crypto(PcAuthenticator *pc) { (void)pc; AuthCrypto value = {0}; return value; }
+AuthSecretCrypto pc_authenticator_secrets(PcAuthenticator *pc) { (void)pc; AuthSecretCrypto value = {0}; return value; }
 AuthStorage pc_authenticator_storage(PcAuthenticator *pc) { (void)pc; AuthStorage value = {0}; return value; }
 PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *pc) { (void)pc; PcAuthenticatorState value = {0}; return value; }
 bool pc_authenticator_factory_reset(void *pc) { (void)pc; return false; }

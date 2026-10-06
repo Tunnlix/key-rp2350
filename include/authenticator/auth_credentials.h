@@ -2,12 +2,19 @@
 #define AUTH_CREDENTIALS_H
 
 #include "authenticator/auth_platform.h"
+#include "authenticator/auth_secret_crypto.h"
 
 /* Pure core composition; no files, OS, heap, or private-key access. */
-typedef struct { AuthCrypto crypto; AuthStorage storage; } AuthCredentialService;
+typedef struct { AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets; } AuthCredentialService;
 
 bool auth_credentials_init(AuthCredentialService *service,
     const AuthCrypto *crypto, const AuthStorage *storage);
+
+/* Optional provider binding before accepting requests. All callbacks are
+ * required together. The provider generates/stores randoms with credential keys;
+ * core metadata never contains their bytes. Bind once after service init. */
+bool auth_credentials_configure_secrets(AuthCredentialService *service,
+    const AuthSecretCrypto *secrets);
 
 /* Store a new credential with a random ID and provider-owned P-256 key. Output
  * is published only after metadata persistence succeeds. On insert failure the

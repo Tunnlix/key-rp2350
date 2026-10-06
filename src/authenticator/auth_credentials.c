@@ -12,6 +12,16 @@ bool auth_credentials_init(AuthCredentialService *service,
         storage->find_rp == NULL || storage->count == NULL || storage->update_counter == NULL) return false;
     service->crypto = *crypto;
     service->storage = *storage;
+    memset(&service->secrets, 0, sizeof service->secrets);
+    return true;
+}
+
+bool auth_credentials_configure_secrets(AuthCredentialService *service,
+    const AuthSecretCrypto *secrets)
+{
+    if (service == NULL || !auth_secret_crypto_valid(secrets) ||
+        auth_secret_crypto_valid(&service->secrets)) return false;
+    service->secrets = *secrets;
     return true;
 }
 

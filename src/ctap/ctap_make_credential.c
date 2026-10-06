@@ -113,11 +113,16 @@ uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
         if (enabled[1]) return CTAP_STATUS_UNSUPPORTED_OPTION;
     }
     if (present[10]) return fields[10].major == 0U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    CtapMakeCredential result = {0};
     if (present[6]) {
         status = ctap_request_text_map(&fields[6]);
         if (status != 0U) return status;
+        if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[6], "hmac-secret", &value)) {
+            if (value.major != 7U || (value.encoded[0] != 0xF4U && value.encoded[0] != 0xF5U))
+                return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+            result.hmac_secret_requested = value.encoded[0] == 0xF5U;
+        }
     }
-    CtapMakeCredential result = {0};
     if (present[11]) {
         if (fields[11].major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         const uint8_t *next = fields[11].data, *limit = fields[11].encoded + fields[11].encoded_length;
@@ -150,8 +155,11 @@ uint8_t ctap_make_credential_finish(AuthCredentialService *service,
     AuthStatus status = auth_credentials_create(service, prepared->rp_id_hash,
         prepared->user_id, prepared->user_id_length, false, &credential, public_key);
     if (status != AUTH_OK) return status == AUTH_CAPACITY ? CTAP_STATUS_KEY_STORE_FULL : CTAP_STATUS_OTHER;
-    if (!ctap_attestation_encode(service, &credential, public_key, prepared->client_data_hash, aaguid,
-        prepared->omit_attestation, output, capacity, length)) {
+    bool has_secret = false;
+    bool ready = !prepared->hmac_secret_requested || (auth_secret_crypto_valid(&service->secrets) &&
+        service->secrets.credential_supported(service->secrets.context, &credential.key, &has_secret) == AUTH_OK);
+    if (!ready || !ctap_attestation_encode(service, &credential, public_key, prepared->client_data_hash, aaguid,
+        prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL, output, capacity, length)) {
         (void)auth_credentials_delete(service, credential.credential_id, credential.rp_id_hash);
         return CTAP_STATUS_OTHER;
     }
