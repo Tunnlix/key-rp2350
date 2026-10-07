@@ -336,6 +336,38 @@ static void assert_management_scratch_cleared(const CtapCredentialManagement *st
     for (size_t i = 0U; i < sizeof state->scratch; ++i) assert(bytes[i] == 0U);
 }
 
+static void test_management_missing_parameters_precede_protocol_errors(void)
+{
+    Fixture f; setup(&f); AuthCredential original = create(&f, "example.com", 1U, 1U);
+    CtapCredentialManagement state = {0};
+    /* Missing rpIDHash, descriptor, update descriptor, or update user. */
+    const uint8_t commands[] = {4U, 6U, 7U, 7U};
+    for (size_t i = 0U; i < sizeof commands; ++i) {
+        for (unsigned mode = 0U; mode < 4U; ++mode) {
+            token(&f, CTAP_PIN_PERMISSION_CM, NULL);
+            uint8_t request[256], output[32], mac[32]; memset(mac, 0x3C, sizeof mac);
+            CborWriter w; cbor_writer_init(&w, request, sizeof request);
+            assert(cbor_write_map(&w, mode == 0U ? 3U : 4U) &&
+                cbor_write_uint(&w, 1U) && cbor_write_uint(&w, commands[i]) &&
+                cbor_write_uint(&w, 2U) && cbor_write_map(&w, i >= 2U ? 1U : 0U));
+            if (i == 2U) assert(cbor_write_uint(&w, 3U) && cbor_write_map(&w, 1U) &&
+                cbor_write_text(&w, "id") && cbor_write_bytes(&w, original.user_id, original.user_id_length));
+            if (i == 3U) assert(cbor_write_uint(&w, 2U) && ctap_credential_descriptor_write(&w, original.credential_id));
+            assert(cbor_write_uint(&w, 3U) && cbor_write_uint(&w, mode == 1U ? 1U : 2U));
+            if (mode != 0U) assert(cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, mac, mode == 2U ? 31U : 32U));
+            memset(output, 0xEE, sizeof output); size_t length = 999U;
+            uint64_t revision = f.service.metadata_revision;
+            assert(ctap_credential_management_execute(&f.service, &f.pin, &state, request, w.length,
+                output, sizeof output, &length, 0U) ==
+                (mode == 0U ? CTAP_STATUS_PUAT_REQUIRED : CTAP_STATUS_MISSING_PARAMETER));
+            assert(length == 999U && output[0] == 0xEEU && !f.pin.token_used);
+            assert(f.service.metadata_revision == revision && f.pool.destroyed == 0U);
+            assert(memcmp(&f.pool.records[0], &original, sizeof original) == 0);
+            assert_management_scratch_cleared(&state);
+        }
+    }
+}
+
 static void test_management_authentication_precedes_unknown_credential(void)
 {
     Fixture f; setup(&f);
@@ -484,6 +516,7 @@ static void test_resident_workspace_lifetime(void)
 int main(void)
 { test_atomic_lifecycle_failures();test_registration_failure_preserves_replaced_credential();test_discovery_privacy_and_sequence_failures();test_backend_channel_resync_and_cancel();test_management_failures_and_channel_binding();
   test_management_authentication_precedes_unknown_credential();
+  test_management_missing_parameters_precede_protocol_errors();
   test_management_workspace_lifetime();
   test_resident_workspace_lifetime();
   puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }

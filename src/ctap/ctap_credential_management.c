@@ -69,8 +69,6 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
     ctap_credential_management_clear(state);
     if (!present[4]) return CTAP_STATUS_PUAT_REQUIRED;
     if (!present[3] || (command >= 4U && !present[2])) return CTAP_STATUS_MISSING_PARAMETER;
-    if (fields[3].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
-    if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
     CborValue params[4] = {{0}}; bool supplied[4] = {false};
     uint8_t id[32] = {0}, rp_hash[32] = {0}; AuthCredential *updated = &state->scratch.updated_user;
     bool supported_descriptor = true;
@@ -78,14 +76,18 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
         status = ctap_request_map(fields[2].encoded, fields[2].encoded_length, 4U, params, supplied);
         if (status != CTAP_STATUS_OK) return status;
     }
+    /* Required subcommand fields precede protocol and MAC checks (§6.8.4–6). */
+    if ((command == 4U && !supplied[1]) ||
+        (command >= 6U && !supplied[2]) || (command == 7U && !supplied[3]))
+        return CTAP_STATUS_MISSING_PARAMETER;
+    if (fields[3].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
+    if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
     if (command == 4U) {
-        if (!supplied[1]) return CTAP_STATUS_MISSING_PARAMETER;
         if (params[1].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         if (params[1].value != 32U) return CTAP_STATUS_INVALID_PARAMETER;
         memcpy(rp_hash, params[1].data, 32U);
     }
     if (command == 6U || command == 7U) {
-        if (!supplied[2] || (command == 7U && !supplied[3])) return CTAP_STATUS_MISSING_PARAMETER;
         CborValue credential_id, type;
         status = ctap_request_descriptor(&params[2], &credential_id, &type);
         if (status != CTAP_STATUS_OK) return status;
