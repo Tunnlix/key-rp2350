@@ -54,7 +54,7 @@ static void verify_init_reply(const InitTransport *transport, uint32_t request_c
 static void test_broadcast_allocation_and_existing_channel(void)
 {
     CtaphidChannelManager channels = {0};
-    for (uint32_t cid = 1U; cid <= CTAPHID_MAX_CHANNELS; ++cid) {
+    for (uint32_t cid = 1U; cid <= 64U; ++cid) {
         CtaphidReassembler message = assemble_init(UINT32_MAX, 8U);
         InitTransport transport = {0};
         assert(ctaphid_dispatch_message(&message, &channels, capture_report, &transport) == CTAPHID_DISPATCH_OK);
@@ -71,20 +71,17 @@ static void test_broadcast_allocation_and_existing_channel(void)
         verify_init_reply(&transport, cid, cid);
         assert(memcmp(&channels, &saved, sizeof channels) == 0);
     }
-    CtaphidChannelManager saved = channels;
     CtaphidReassembler message = assemble_init(UINT32_MAX, 8U);
     InitTransport transport = {0};
     assert(ctaphid_dispatch_message(&message, &channels, capture_report, &transport) == CTAPHID_DISPATCH_OK);
-    const uint8_t error[64] = {0xFF, 0xFF, 0xFF, 0xFF, 0xBF, 0x00, 0x01, 0x7F};
-    assert(transport.attempts == 1U && !message.has_complete_message);
-    assert(memcmp(transport.report, error, sizeof error) == 0);
-    assert(memcmp(&channels, &saved, sizeof channels) == 0);
+    verify_init_reply(&transport, UINT32_MAX, 65U);
+    assert(ctaphid_channels_is_allocated(&channels, 1U));
     message = assemble_init(UINT32_MAX, 8U);
     memset(&transport, 0, sizeof transport);
     transport.fail = true;
     assert(ctaphid_dispatch_message(&message, &channels, capture_report, &transport) == CTAPHID_DISPATCH_RESPONSE_FAILED);
     assert(!message.has_complete_message && transport.attempts == 1U);
-    assert(memcmp(&channels, &saved, sizeof channels) == 0);
+    assert(ctaphid_channels_is_allocated(&channels, 66U));
 }
 
 static void test_big_endian_channel_and_id_exhaustion(void)

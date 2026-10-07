@@ -4,12 +4,12 @@
 
 #include "protocol/ctaphid_channels.h"
 
-static void test_allocation_and_capacity(void)
+static void test_allocation_beyond_former_capacity(void)
 {
     CtaphidChannelManager manager;
     ctaphid_channels_reset(&manager);
-    uint32_t allocated[CTAPHID_MAX_CHANNELS];
-    for (size_t i = 0; i < CTAPHID_MAX_CHANNELS; ++i) {
+    uint32_t allocated[64];
+    for (size_t i = 0; i < 64U; ++i) {
         assert(ctaphid_channels_allocate(&manager, &allocated[i]) == CTAPHID_CHANNEL_OK);
         assert(allocated[i] != 0U && allocated[i] != UINT32_MAX);
         for (size_t j = 0; j < i; ++j) assert(allocated[i] != allocated[j]);
@@ -18,11 +18,6 @@ static void test_allocation_and_capacity(void)
         }
         assert(!ctaphid_channels_is_allocated(&manager, allocated[i] + 1U));
     }
-    CtaphidChannelManager saved = manager;
-    uint32_t output = 0xABCDEFU;
-    assert(ctaphid_channels_allocate(&manager, &output) == CTAPHID_CHANNEL_TABLE_FULL);
-    assert(output == 0xABCDEFU);
-    assert(memcmp(&manager, &saved, sizeof manager) == 0);
 }
 
 static void test_lookup_and_reset(void)
@@ -65,12 +60,13 @@ static void test_id_exhaustion(void)
 {
     CtaphidChannelManager manager = {0};
     /* Seed the generator near its limit to exercise an otherwise unreachable
-     * boundary with a small test table. Production callers must not edit it. */
+     * boundary without billions of calls. Production callers must not edit it. */
     manager.next_channel_id = UINT32_MAX - 1U;
     uint32_t output = 0U;
     assert(ctaphid_channels_allocate(&manager, &output) == CTAPHID_CHANNEL_OK);
     assert(output == UINT32_MAX - 1U);
     assert(ctaphid_channels_is_allocated(&manager, output));
+    assert(!ctaphid_channels_is_allocated(&manager, output - 1U));
     CtaphidChannelManager saved = manager;
     output = 99U;
     assert(ctaphid_channels_allocate(&manager, &output) == CTAPHID_CHANNEL_IDS_EXHAUSTED);
@@ -94,7 +90,7 @@ static void test_independent_devices(void)
 
 int main(void)
 {
-    test_allocation_and_capacity();
+    test_allocation_beyond_former_capacity();
     test_lookup_and_reset();
     test_null_arguments();
     test_id_exhaustion();

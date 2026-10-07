@@ -510,6 +510,29 @@ static void test_wink_platform_binding(void)
     assert(fixture.mock.winks == 0U);
 }
 
+static void test_many_clients_preserve_transaction_ownership(void)
+{
+    for (unsigned phase = 0U; phase < 3U; ++phase) {
+        Fixture f;
+        setup(&f, true, true);
+        for (uint32_t i = 1U; i <= 48U; ++i) assert(allocate(&f, i) == i);
+        /* The oldest client remains usable after more than 16 later clients. */
+        uint8_t command = phase == 1U ? CTAPHID_COMMAND_CBOR : CTAPHID_COMMAND_PING;
+        uint16_t length = phase == 0U ? 100U : (phase == 1U ? 1U : 0U);
+        assert(initial(&f, 1U, command, length, 50U) == CTAPHID_DEVICE_OK);
+        poll_at(&f, 50U);
+        CtaphidDevicePhase active_phase = f.device.phase;
+        CtaphidChannelManager saved = f.device.channels;
+        assert(initial(&f, UINT32_MAX, CTAPHID_COMMAND_INIT, 8U, 51U) == CTAPHID_DEVICE_OK);
+        assert(f.device.control_count == 1U && f.device.control[0].bytes[7] == 0x06U);
+        poll_at(&f, 51U);
+        assert(f.device.phase == active_phase && f.device.active_channel_id == 1U);
+        assert(memcmp(&saved, &f.device.channels, sizeof saved) == 0);
+        assert(f.mock.cbor_aborts == 0U);
+        assert(!ctaphid_channels_is_allocated(&f.device.channels, 49U));
+    }
+}
+
 int main(void)
 {
     test_basic_commands();
@@ -524,6 +547,7 @@ int main(void)
     test_queue_backpressure();
     test_config_validation();
     test_wink_platform_binding();
+    test_many_clients_preserve_transaction_ownership();
     puts("CTAPHID device coordinator tests passed (CTAP 2.3 HID transaction behavior).");
     return 0;
 }

@@ -41,6 +41,20 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(ctap_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+# Per-function regression limit for the migrated credential-management module.
+# This is not a bound on a complete call chain or on provider/interrupt stack.
+set(CTAP_CM_STACK_BUDGET 1024 CACHE STRING "Credential-management stack bytes per function (GCC)")
+if(NOT CTAP_CM_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "CTAP_CM_STACK_BUDGET must be a positive integer")
+endif()
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(ctap_core PRIVATE -fstack-usage)
+    set_source_files_properties(src/ctap/ctap_credential_management.c PROPERTIES
+        COMPILE_OPTIONS "-Wstack-usage=${CTAP_CM_STACK_BUDGET}")
+else()
+    message(STATUS "Stack budget check unavailable with ${CMAKE_C_COMPILER_ID}; use a GCC build for stack reports")
+endif()
+
 # Off by default when included in firmware. Native tests require only a C host
 # compiler and the standard library, not a client, OS provider or USB integration.
 if(PROJECT_IS_TOP_LEVEL)

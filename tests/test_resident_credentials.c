@@ -198,7 +198,7 @@ static void test_discovery_privacy_and_sequence_failures(void)
 }
 static void test_backend_channel_resync_and_cancel(void)
 {
-    for(unsigned mode=0U;mode<3U;++mode){Fixture f;setup(&f);(void)create(&f,"example.com",1U,1U);(void)create(&f,"example.com",2U,1U);
+    for(unsigned mode=0U;mode<5U;++mode){Fixture f;setup(&f);(void)create(&f,"example.com",1U,1U);(void)create(&f,"example.com",2U,1U);
       token(&f,2U,"example.com");uint8_t bytes[257];bytes[0]=2U;size_t n=1U+discovery(bytes+1U,true);
       assert(ctaphid_send_response(1U,0x10U,bytes,n,receive,&f)==CTAPHID_RESPONSE_OK);
       assert(ctaphid_device_poll(&f.device,0U)==CTAPHID_DEVICE_OK);
@@ -208,6 +208,22 @@ static void test_backend_channel_resync_and_cancel(void)
       assert(ctaphid_ctap_backend_signal_presence(&f.backend,f.backend.operation_id,true,1U));
       assert(ctaphid_ctap_backend_poll(&f.backend,&f.device,1U)==CTAPHID_DEVICE_OK);
       assert(ctaphid_device_poll(&f.device,1U)==CTAPHID_DEVICE_OK&&f.backend.assertion_sequence.active);
+      if(mode>=3U){
+        const uint8_t nonce[8]={0};
+        for(uint32_t cid=3U;cid<=48U;++cid){
+          assert(ctaphid_send_response(UINT32_MAX,0x06U,nonce,sizeof nonce,receive,&f)==CTAPHID_RESPONSE_OK);
+          assert(ctaphid_device_poll(&f.device,2U)==CTAPHID_DEVICE_OK);
+          assert(ctaphid_channels_is_allocated(&f.device.channels,cid));
+          assert(f.backend.assertion_sequence.active);
+        }
+        /* Only the original CID can use its authenticated snapshot. */
+        uint8_t next[]={8U};assert(ctaphid_send_response(mode==3U?48U:1U,0x10U,next,1U,receive,&f)==CTAPHID_RESPONSE_OK);
+        assert(ctaphid_device_poll(&f.device,3U)==CTAPHID_DEVICE_OK);
+        assert(ctaphid_ctap_backend_poll(&f.backend,&f.device,3U)==CTAPHID_DEVICE_OK);
+        assert(f.backend.response[0]==(mode==3U?0x30U:0U)&&!f.backend.assertion_sequence.active);
+        assert(f.pool.signed_count==(mode==3U?1U:2U));
+        continue;
+      }
       if(mode==0U){uint8_t init[64]={0,0,0,1,0x86,0,8};assert(ctaphid_device_receive_report(&f.device,init,64U,2U)==CTAPHID_DEVICE_OK);
         assert(ctaphid_device_poll(&f.device,2U)==CTAPHID_DEVICE_OK&&!f.backend.assertion_sequence.active);}
       else{uint8_t next[]={8U};assert(ctaphid_send_response(2U,0x10U,next,1U,receive,&f)==CTAPHID_RESPONSE_OK);
@@ -250,8 +266,14 @@ static void test_management_failures_and_channel_binding(void)
     assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK);
     assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 0U) == CTAPHID_DEVICE_OK);
     assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK && f.backend.management.kind == 2U);
+    const uint8_t nonce[8] = {0};
+    for (uint32_t cid = 3U; cid <= 48U; ++cid) {
+        assert(ctaphid_send_response(UINT32_MAX, 0x06U, nonce, sizeof nonce, receive, &f) == CTAPHID_RESPONSE_OK);
+        assert(ctaphid_device_poll(&f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(f.backend.management.kind == 2U && f.backend.management_cid == 1U);
+    }
     n = management_request(bytes + 1U, 3U, NULL);
-    assert(ctaphid_send_response(2U, 0x10U, bytes, n + 1U, receive, &f) == CTAPHID_RESPONSE_OK);
+    assert(ctaphid_send_response(48U, 0x10U, bytes, n + 1U, receive, &f) == CTAPHID_RESPONSE_OK);
     assert(ctaphid_device_poll(&f.device, 1U) == CTAPHID_DEVICE_OK);
     assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 1U) == CTAPHID_DEVICE_OK && f.backend.response[0] == 0x30U);
     assert(ctaphid_device_poll(&f.device, 1U) == CTAPHID_DEVICE_OK);
@@ -262,6 +284,52 @@ static void test_management_failures_and_channel_binding(void)
     assert(ctaphid_device_receive_report(&f.device, cancel, sizeof cancel, 2U) == CTAPHID_DEVICE_OK);
     assert(f.pool.used[0] && f.pool.destroyed == 0U && !f.backend.awaiting_management);
 }
+static void assert_management_scratch_cleared(const CtapCredentialManagement *state)
+{
+    const unsigned char *bytes = (const unsigned char *)&state->scratch;
+    for (size_t i = 0U; i < sizeof state->scratch; ++i) assert(bytes[i] == 0U);
+}
+
+static void test_management_workspace_lifetime(void)
+{
+    Fixture f; setup(&f);
+    (void)create(&f, "example.com", 1U, 1U);
+    (void)create(&f, "other.example", 2U, 1U);
+    token(&f, CTAP_PIN_PERMISSION_CM, NULL);
+    CtapCredentialManagement first = {0}, second = {0};
+    uint8_t request[256], output[1024]; size_t length = 0U;
+    size_t n = management_request(request, 2U, NULL);
+    assert(ctap_credential_management_execute(&f.service, &f.pin, &first, request, n,
+        output, sizeof output, &length, 0U) == CTAP_STATUS_OK);
+    assert(first.kind == 2U && first.next == 1U && first.count == 2U);
+    assert_management_scratch_cleared(&first);
+
+    /* A separate instance can fail without destroying the first snapshot. */
+    memset(output, 0xEE, sizeof output); length = 99U;
+    assert(ctap_credential_management_execute(&f.service, &f.pin, &second, request, n,
+        output, 1U, &length, 0U) == CTAP_STATUS_OTHER);
+    assert(second.kind == 0U && first.kind == 2U && first.next == 1U);
+    assert(length == 99U);
+    for (size_t i = 0U; i < sizeof output; ++i) assert(output[i] == 0xEEU);
+    assert_management_scratch_cleared(&second);
+
+    n = management_request(request, 3U, NULL);
+    assert(ctap_credential_management_execute(&f.service, &f.pin, &first, request, n,
+        output, sizeof output, &length, 1U) == CTAP_STATUS_OK);
+    assert(first.kind == 0U);
+    assert_management_scratch_cleared(&first);
+
+    n = management_request(request, 2U, NULL); f.pool.read_fails = true;
+    assert(ctap_credential_management_execute(&f.service, &f.pin, &first, request, n,
+        output, sizeof output, &length, 2U) == CTAP_STATUS_OTHER);
+    assert_management_scratch_cleared(&first);
+    memset(&first.scratch, 0xA5, sizeof first.scratch);
+    assert(ctap_credential_management_execute(NULL, &f.pin, &first, request, n,
+        output, sizeof output, &length, 3U) == CTAP_STATUS_OTHER);
+    assert_management_scratch_cleared(&first);
+}
+
 int main(void)
 { test_atomic_lifecycle_failures();test_registration_failure_preserves_replaced_credential();test_discovery_privacy_and_sequence_failures();test_backend_channel_resync_and_cancel();test_management_failures_and_channel_binding();
+  test_management_workspace_lifetime();
   puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }

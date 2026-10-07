@@ -6,34 +6,27 @@
 
 #include "protocol/ctaphid_framing.h"
 
-#define CTAPHID_MAX_CHANNELS 16U
-
-typedef struct {
-    bool allocated;
-    uint32_t channel_id;
-} CtaphidChannel;
-
 /* One manager per device, owned by the caller. Initialize with {0} or reset
  * before use. Do not modify fields directly or call concurrently without
- * external synchronization. Allocations persist until a device-level reset. */
+ * external synchronization. Allocations persist until a device-level reset.
+ * Sequential CIDs form a range, so allocation needs no per-client table. */
 typedef struct {
-    CtaphidChannel channels[CTAPHID_MAX_CHANNELS];
+    uint32_t first_channel_id; /* Zero until the first successful allocation. */
     uint32_t next_channel_id;
 } CtaphidChannelManager;
 
 typedef enum {
     CTAPHID_CHANNEL_OK = 0,
     CTAPHID_CHANNEL_NULL_ARGUMENT,
-    CTAPHID_CHANNEL_TABLE_FULL,
     CTAPHID_CHANNEL_IDS_EXHAUSTED
 } CtaphidChannelResult;
 
 /* Clear all allocations and restart CID generation at 1. NULL is a no-op.
  * This invalidates previous allocations and can reuse old CIDs. Call only when
- * resetting the device; same-channel INIT must preserve the allocation table. */
+ * resetting the device; same-channel INIT must preserve the allocated range. */
 void ctaphid_channels_reset(CtaphidChannelManager *manager);
 
-/* Allocate a free table slot and a unique, non-reserved CID. No heap allocation.
+/* Allocate a unique, non-reserved CID with constant memory. No heap allocation.
  * Success writes channel_id; failure leaves manager and output unchanged.
  * channel_id must not overlap manager storage. IDs increase without wrapping;
  * exhaustion is reported rather than reusing an ID within the device lifetime. */

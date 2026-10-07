@@ -44,7 +44,7 @@ typedef enum {
  * to the device/backend; optional LOCK is unsupported.
  * channels is borrowed device-owned allocation state and must not be NULL.
  * Broadcast INIT allocates a CID; existing-channel INIT preserves that CID and
- * the allocation table. Other requests require an allocated CID. Allocation
+ * the allocated range. Other requests require an allocated CID. Allocation
  * exhaustion sends ERR_OTHER and consumes the request. An allocated CID remains
  * allocated even if its INIT reply fails to send: it may have reached the host.
  * Transaction resynchronization belongs to the reassembler/coordinator, not to
