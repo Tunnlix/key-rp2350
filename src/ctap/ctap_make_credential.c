@@ -62,6 +62,31 @@ static uint8_t exclusions(AuthCredentialService *service, const CborValue *array
     return CTAP_STATUS_OK;
 }
 
+/* Parse into owned state now; report extension errors only at step 15,
+ * after authorization, exclusion and presence (CTAP 2.3 §6.1.2). */
+static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *pin,
+    const CborValue *extensions, CtapMakeCredential *result)
+{
+    CborValue value;
+    uint8_t status;
+    if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(extensions, "hmac-secret", &value)) {
+        if (value.major != 7U || (value.encoded[0] != 0xF4U && value.encoded[0] != 0xF5U))
+            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        result->hmac_secret_requested = value.encoded[0] == 0xF5U;
+    }
+    if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(extensions, "hmac-secret-mc", &value)) {
+        if (!result->hmac_secret_requested) return CTAP_STATUS_MISSING_PARAMETER;
+        status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
+        if (status != CTAP_STATUS_OK) return status;
+    }
+    if (pin != NULL && cbor_map_text(extensions, "credProtect", &value)) {
+        if (value.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        if (value.value < 1U || value.value > 3U) return CTAP_STATUS_INVALID_PARAMETER;
+        result->cred_protect_requested = true; result->cred_protect = (uint8_t)value.value;
+    }
+    return CTAP_STATUS_OK;
+}
+
 uint8_t ctap_make_credential_prepare(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared)
 {
@@ -122,22 +147,8 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
     if (present[10]) return fields[10].major == 0U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (present[6]) {
         status = ctap_request_text_map(&fields[6]);
-        if (status != 0U) return status;
-        if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[6], "hmac-secret", &value)) {
-            if (value.major != 7U || (value.encoded[0] != 0xF4U && value.encoded[0] != 0xF5U))
-                return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            result->hmac_secret_requested = value.encoded[0] == 0xF5U;
-        }
-        if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[6], "hmac-secret-mc", &value)) {
-            if (!result->hmac_secret_requested) return CTAP_STATUS_MISSING_PARAMETER;
-            status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
-            if (status != CTAP_STATUS_OK) return status;
-        }
-        if (pin != NULL && cbor_map_text(&fields[6], "credProtect", &value)) {
-            if (value.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            if (value.value < 1U || value.value > 3U) return CTAP_STATUS_INVALID_PARAMETER;
-            result->cred_protect_requested = true; result->cred_protect = (uint8_t)value.value;
-        }
+        if (status != CTAP_STATUS_OK) return status;
+        result->extension_status = parse_extensions(service, pin, &fields[6], result);
     }
     if (present[11]) {
         if (fields[11].major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

@@ -422,6 +422,30 @@ static size_t assertion_request(uint8_t out[512], const uint8_t id[32], bool aut
 }
 /* §§6.1.2/6.2.2: token verification errors must precede credential effects,
  * both during preparation and when rechecking after the presence wait. */
+static void test_registration_extension_error_precedence(void)
+{
+    Fixture f; fixture_init(&f); seed(&f.pin);
+    uint8_t input[512], output[512], aaguid[16] = {0}; size_t length;
+    CtapMakeCredential mc; CtapMakeCredentialWorkspace workspace = {0};
+    size_t n = make_request(input, false, 1U, NULL);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc) == 0U);
+    assert(ctap_make_credential_finish_at(&f.service, &workspace, &mc, aaguid, output, sizeof output, &length, 0U) == 0U);
+    for (unsigned mode = 0U; mode < 3U; ++mode) {
+        issue(&f, mode == 0U ? CTAP_PIN_PERMISSION_GA : CTAP_PIN_PERMISSION_MC, 0U);
+        n = make_request(input, true, 4U, mode < 2U ? f.store.record.credential_id : NULL);
+        memset(output, 0xEE, sizeof output); length = 999U;
+        uint8_t status = ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc);
+        if (mode == 0U) assert(status == CTAP_STATUS_PIN_AUTH_INVALID && !f.pin.token_used);
+        else {
+            assert(status == CTAP_STATUS_OK);
+            assert(ctap_make_credential_finish_at(&f.service, &workspace, &mc, aaguid, output, sizeof output, &length, 1U) ==
+                (mode == 1U ? CTAP_STATUS_CREDENTIAL_EXCLUDED : CTAP_STATUS_INVALID_PARAMETER));
+            assert(!f.pin.token_active);
+        }
+        assert(f.store.generated == 1U && f.store.signatures == 1U && length == 999U && output[0] == 0xEEU);
+    }
+}
+
 static void test_credential_token_verification_errors(void)
 {
     for (unsigned assertion = 0U; assertion < 2U; ++assertion) {
@@ -581,6 +605,7 @@ int main(void)
     test_validation_and_pin_policy(); test_retries_and_power_cycle(); test_change_and_failure_ordering();
     test_client_pin_crypto_error_mapping();
     test_backend_abort_reset_and_advertising();
+    test_registration_extension_error_precedence();
     test_credential_token_verification_errors();
     test_token_permission_combinations();
     test_tokens_policy_and_provider_failures(); test_token_time_wrap_and_waiting_abort();

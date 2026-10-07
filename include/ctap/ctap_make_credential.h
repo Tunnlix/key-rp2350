@@ -6,7 +6,7 @@
 #include "ctap/ctap_client_pin.h"
 #include "ctap/ctap_hmac_secret.h"
 
-/* Validated request state owns only the data needed after touch. No borrowed
+/* Parsed request state (including deferred extension errors) owns only the data needed after touch. No borrowed
  * receive-buffer pointers, credential keys or platform details are retained. */
 typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], user_id[64];
@@ -18,6 +18,7 @@ typedef struct {
     CtapPinAuth auth;
     bool user_verified, cred_protect_requested;
     uint8_t cred_protect;
+    uint8_t extension_status; /* Deferred until after authorization/exclusion/UP. */
     bool discoverable;
     AuthCredential metadata;
 } CtapMakeCredential;
@@ -43,7 +44,8 @@ typedef struct {
  * Success means ready to wait for a fresh touch, not a created credential.
  * Preparation leaves output unchanged on failure and clears acquired scratch.
  * Prepared output must not alias workspace; prepare and finish share its guard.
- * Invalid/unsupported requests produce a CTAP status and never create keys.
+ * Extension-value errors are retained for finish, after authorization/exclusion
+ * and UP. Invalid/unsupported requests never create keys.
  * Supports ES256; resident creation requires the complete storage/PIN binding.
  * Unsupported extensions/options are ignored.
  * This entry point has no PIN binding; the with_pin variant adds protocol 2

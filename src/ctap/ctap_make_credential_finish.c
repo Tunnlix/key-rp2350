@@ -71,6 +71,7 @@ static uint8_t finish_at(AuthCredentialService *service,
         return CTAP_STATUS_CREDENTIAL_EXCLUDED;
     }
     ctap_client_pin_invalidate(prepared->pin); /* Fresh UP consumes MC/GA and UV state. */
+    if (prepared->extension_status != CTAP_STATUS_OK) return prepared->extension_status;
     if (prepared->hmac_secret_mc.requested) {
         uint8_t validated = ctap_hmac_secret_validate(service, &prepared->hmac_secret_mc);
         if (validated != CTAP_STATUS_OK) return validated;
