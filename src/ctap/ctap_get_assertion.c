@@ -29,6 +29,7 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     if (prepared->discovery && (!credential->discoverable || (credential->cred_protect != 1U && !prepared->user_verified)))
         return CTAP_STATUS_NO_CREDENTIALS;
     if (!continuation && prepared->user_presence_required) ctap_client_pin_invalidate(prepared->pin);
+    if (prepared->extension_status != CTAP_STATUS_OK) return prepared->extension_status;
     uint8_t *extension_output = workspace->scratch.phase.finish.extension_output; size_t extension_length = 0U;
     if (prepared->hmac_secret.requested) {
         if (!prepared->user_presence_required) return CTAP_STATUS_UNSUPPORTED_OPTION;

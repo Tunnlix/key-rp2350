@@ -48,9 +48,10 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
         status = ctap_request_text_map(&fields[4]);
         if (status != CTAP_STATUS_OK) return status;
         if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[4], "hmac-secret", &value)) {
-            status = ctap_hmac_secret_parse(&value, &result->hmac_secret);
-            if (status != CTAP_STATUS_OK) return status;
-            if (!result->user_presence_required) return CTAP_STATUS_UNSUPPORTED_OPTION;
+            /* Extension processing follows authorization, selection and UP (§6.2.2). */
+            result->extension_status = ctap_hmac_secret_parse(&value, &result->hmac_secret);
+            if (result->extension_status == CTAP_STATUS_OK && !result->user_presence_required)
+                result->extension_status = CTAP_STATUS_UNSUPPORTED_OPTION;
         }
         /* Other unsupported extensions and options have no effects/output. */
     }

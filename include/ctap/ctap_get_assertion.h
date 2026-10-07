@@ -14,6 +14,7 @@
 typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], credential_id[32];
     bool user_presence_required;
+    uint8_t extension_status;
     CtapHmacSecret hmac_secret;
     CtapClientPin *pin;
     CtapPinAuth auth;
@@ -55,7 +56,8 @@ uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapGetAssertion
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 
 /* Validate CBOR, options, descriptors and RP binding. No counter updates/signing.
- * OK means a credential was selected. Omitted allowList discovers resident
+ * OK means a credential was selected; extension-value errors are deferred to
+ * finish after authorization and UP. Omitted allowList discovers resident
  * records only; non-resident credentials always require explicit IDs.
  * Prepared output remains unchanged on failure. */
 uint8_t ctap_get_assertion_prepare(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace,

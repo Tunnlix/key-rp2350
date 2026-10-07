@@ -407,19 +407,51 @@ static size_t make_request(uint8_t out[512], bool auth, uint8_t policy, const ui
     if (auth) assert(cbor_write_uint(&w, 8U) && cbor_write_bytes(&w, mac_bytes, 32U) && cbor_write_uint(&w, 9U) && cbor_write_uint(&w, 2U));
     return w.length;
 }
-static size_t assertion_request(uint8_t out[512], const uint8_t id[32], bool auth, bool up, bool malformed_tail)
+static size_t assertion_request_extended(uint8_t out[512], const uint8_t id[32], bool auth, bool up, bool malformed_tail, bool bad_extension)
 {
     CborWriter w; cbor_writer_init(&w, out, 512U); uint8_t hash_bytes[32] = {0x42}, mac_bytes[32]; memset(mac_bytes, 0x3C, 32U);
-    assert(cbor_write_map(&w, auth ? 6U : 4U) && cbor_write_uint(&w, 1U) && cbor_write_text(&w, "example.com") &&
+    assert(cbor_write_map(&w, (auth ? 6U : 4U) + (bad_extension ? 1U : 0U)) && cbor_write_uint(&w, 1U) && cbor_write_text(&w, "example.com") &&
         cbor_write_uint(&w, 2U) && cbor_write_bytes(&w, hash_bytes, 32U) && cbor_write_uint(&w, 3U) &&
         cbor_write_array(&w, malformed_tail ? 2U : 1U) && cbor_write_map(&w, 2U) &&
         cbor_write_text(&w, "id") && cbor_write_bytes(&w, id, 32U) && cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
     if (malformed_tail) assert(cbor_write_map(&w, 2U) && cbor_write_text(&w, "id") && cbor_write_uint(&w, 1U) &&
         cbor_write_text(&w, "type") && cbor_write_text(&w, "public-key"));
+    if (bad_extension) assert(cbor_write_uint(&w, 4U) && cbor_write_map(&w, 1U) &&
+        cbor_write_text(&w, "hmac-secret") && cbor_write_map(&w, 0U));
     assert(cbor_write_uint(&w, 5U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "up") && cbor_write_bool(&w, up));
     if (auth) assert(cbor_write_uint(&w, 6U) && cbor_write_bytes(&w, mac_bytes, 32U) && cbor_write_uint(&w, 7U) && cbor_write_uint(&w, 2U));
     return w.length;
 }
+static size_t assertion_request(uint8_t out[512], const uint8_t id[32], bool auth, bool up, bool malformed_tail)
+{ return assertion_request_extended(out, id, auth, up, malformed_tail, false); }
+
+static void test_assertion_extension_error_precedence(void)
+{
+    Fixture f; fixture_init(&f); seed(&f.pin);
+    uint8_t input[512], output[512], aaguid[16] = {0}; size_t length;
+    CtapMakeCredential mc; CtapMakeCredentialWorkspace mc_workspace = {0};
+    CtapGetAssertion ga; CtapGetAssertionWorkspace ga_workspace = {0};
+    size_t n = make_request(input, false, 1U, NULL);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &mc_workspace, &f.pin, 0U, input, n, &mc) == 0U);
+    assert(ctap_make_credential_finish_at(&f.service, &mc_workspace, &mc, aaguid, output, sizeof output, &length, 0U) == 0U);
+    for (unsigned mode = 0U; mode < 4U; ++mode) {
+        issue(&f, mode == 0U ? CTAP_PIN_PERMISSION_MC : CTAP_PIN_PERMISSION_GA, 0U);
+        uint8_t id[32]; memcpy(id, f.store.record.credential_id, sizeof id);
+        if (mode == 1U) id[0] ^= 1U;
+        n = assertion_request_extended(input, id, true, mode != 3U, false, true);
+        memset(output, 0xEE, sizeof output); length = 999U;
+        uint8_t status = ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga);
+        if (mode < 2U) assert(status == (mode == 0U ? CTAP_STATUS_PIN_AUTH_INVALID : CTAP_STATUS_NO_CREDENTIALS));
+        else {
+            assert(status == CTAP_STATUS_OK);
+            assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace, &ga, output, sizeof output, &length, 1U) == CTAP_STATUS_MISSING_PARAMETER);
+            assert(f.pin.token_active == (mode == 3U));
+        }
+        assert(f.store.record.signature_count == 0U && f.store.signatures == 1U);
+        assert(length == 999U && output[0] == 0xEEU);
+    }
+}
+
 /* §§6.1.2/6.2.2: token verification errors must precede credential effects,
  * both during preparation and when rechecking after the presence wait. */
 static void test_registration_extension_error_precedence(void)
@@ -605,6 +637,7 @@ int main(void)
     test_validation_and_pin_policy(); test_retries_and_power_cycle(); test_change_and_failure_ordering();
     test_client_pin_crypto_error_mapping();
     test_backend_abort_reset_and_advertising();
+    test_assertion_extension_error_precedence();
     test_registration_extension_error_precedence();
     test_credential_token_verification_errors();
     test_token_permission_combinations();

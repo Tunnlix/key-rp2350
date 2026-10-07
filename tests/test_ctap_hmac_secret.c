@@ -172,7 +172,9 @@ static void test_assertion_extension_is_signed_and_bad_mac_does_not_increment(vo
       for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     assert(store.record.signature_count == 1U && store.signatures == 1U);
     request_length = assertion_request(request, false);
-    assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0x2BU);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == CTAP_STATUS_OK);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, response, sizeof response, &length) == CTAP_STATUS_UNSUPPORTED_OPTION);
+    assert(store.record.signature_count == 1U && store.signatures == 1U);
 }
 /* §§12.7–12.8 share salt authentication; bad input must not create a key. */
 static void test_registration_salt_authentication_precedes_creation(void)
