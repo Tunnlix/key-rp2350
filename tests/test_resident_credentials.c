@@ -11,7 +11,7 @@ typedef struct {
     AuthCredential records[2]; bool used[2], keys[3];
     unsigned random_counter, generated, destroyed, signed_count;
     bool hmac_fails, put_fails, erase_fails, update_fails, read_fails, enumerate_fails, sign_fails, destroy_fails;
-    bool state_random_fails, generate_fails;
+    bool state_random_fails, generate_fails, verify_fails;
     uint8_t store_state[16];
 } Pool;
 static AuthStatus random_bytes(void *ctx, uint8_t *out, size_t n)
@@ -73,7 +73,7 @@ static AuthStatus agreement_key(void *ctx,uint8_t out[65])
 static AuthStatus ecdh(void *ctx,const uint8_t peer[65],uint8_t out[32])
 { (void)ctx;(void)peer;memset(out,0x55,32U);return AUTH_OK; }
 static AuthStatus hmac(void *ctx,const uint8_t *key,size_t key_len,const uint8_t *in,size_t n,uint8_t out[32])
-{ (void)ctx;(void)key;(void)key_len;(void)in;(void)n;memset(out,0x3C,32U);return AUTH_OK; }
+{ Pool *p=ctx;(void)key;(void)key_len;(void)in;(void)n;if(p->verify_fails)return AUTH_CRYPTO_ERROR;memset(out,0x3C,32U);return AUTH_OK; }
 static AuthStatus aes(void *ctx,bool enc,const uint8_t key[32],const uint8_t iv[16],const uint8_t *in,size_t n,uint8_t *out)
 { (void)ctx;(void)enc;(void)key;(void)iv;memcpy(out,in,n);return AUTH_OK; }
 static AuthStatus supported(void *ctx,const AuthKeyHandle *key,bool *out)
@@ -343,8 +343,9 @@ static void test_management_authentication_precedes_unknown_credential(void)
     CtapCredentialManagement state = {0};
     for (uint8_t command = 6U; command <= 7U; ++command) {
         for (unsigned descriptor = 0U; descriptor < 3U; ++descriptor) {
-            for (unsigned authenticated = 0U; authenticated < 2U; ++authenticated) {
+            for (unsigned authenticated = 0U; authenticated < 3U; ++authenticated) {
                 token(&f, CTAP_PIN_PERMISSION_CM, NULL);
+                f.pool.verify_fails = authenticated == 2U;
                 uint8_t request[256], output[32], saved[32], id[32] = {0}, mac[32];
                 memset(mac, authenticated ? 0x3C : 0, sizeof mac);
                 CborWriter w; cbor_writer_init(&w, request, sizeof request);
@@ -361,7 +362,7 @@ static void test_management_authentication_precedes_unknown_credential(void)
                 size_t length = 999U; uint64_t revision = f.service.metadata_revision;
                 assert(ctap_credential_management_execute(&f.service, &f.pin, &state, request, w.length,
                     output, sizeof output, &length, 0U) ==
-                    (authenticated ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_PIN_AUTH_INVALID));
+                    (authenticated == 1U ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_PIN_AUTH_INVALID));
                 assert(length == 999U && memcmp(output, saved, sizeof output) == 0);
                 assert(f.service.metadata_revision == revision && f.pool.destroyed == 0U);
                 assert(memcmp(&f.pool.records[0], &original, sizeof original) == 0);

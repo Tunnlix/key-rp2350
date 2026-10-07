@@ -420,6 +420,45 @@ static size_t assertion_request(uint8_t out[512], const uint8_t id[32], bool aut
     if (auth) assert(cbor_write_uint(&w, 6U) && cbor_write_bytes(&w, mac_bytes, 32U) && cbor_write_uint(&w, 7U) && cbor_write_uint(&w, 2U));
     return w.length;
 }
+/* §§6.1.2/6.2.2: token verification errors must precede credential effects,
+ * both during preparation and when rechecking after the presence wait. */
+static void test_credential_token_verification_errors(void)
+{
+    for (unsigned assertion = 0U; assertion < 2U; ++assertion) {
+        Fixture f; fixture_init(&f); seed(&f.pin);
+        uint8_t input[512], output[512], aaguid[16] = {0}; size_t length = 777U;
+        CtapMakeCredential mc = {0}; CtapMakeCredentialWorkspace mc_workspace = {0};
+        CtapGetAssertion ga = {0}; CtapGetAssertionWorkspace ga_workspace = {0};
+        size_t n = make_request(input, false, 1U, NULL);
+        if (assertion) {
+            assert(ctap_make_credential_prepare_with_pin(&f.service, &mc_workspace, &f.pin, 0U, input, n, &mc) == 0U);
+            assert(ctap_make_credential_finish_at(&f.service, &mc_workspace, &mc, aaguid, output, sizeof output, &length, 0U) == 0U);
+            n = assertion_request(input, f.store.record.credential_id, true, true, false);
+        } else n = make_request(input, true, 1U, NULL);
+        issue(&f, assertion ? CTAP_PIN_PERMISSION_GA : CTAP_PIN_PERMISSION_MC, 0U);
+        size_t generated = f.store.generated, signatures = f.store.signatures;
+        uint32_t counter = f.store.record.signature_count;
+        memset(output, 0xEE, sizeof output); length = 777U;
+        for (unsigned finishing = 0U; finishing < 2U; ++finishing) {
+            f.mock.mac_fails = finishing == 0U;
+            uint8_t status = assertion ?
+                ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) :
+                ctap_make_credential_prepare_with_pin(&f.service, &mc_workspace, &f.pin, 0U, input, n, &mc);
+            if (finishing) {
+                assert(status == CTAP_STATUS_OK);
+                f.mock.mac_fails = true;
+                status = assertion ?
+                    ctap_get_assertion_finish_at(&f.service, &ga_workspace, &ga, output, sizeof output, &length, 1U) :
+                    ctap_make_credential_finish_at(&f.service, &mc_workspace, &mc, aaguid, output, sizeof output, &length, 1U);
+            }
+            assert(status == CTAP_STATUS_PIN_AUTH_INVALID);
+            assert(f.store.generated == generated && f.store.signatures == signatures && f.store.record.signature_count == counter);
+            assert(output[0] == 0xEEU && length == 777U && f.pin.token_active);
+            assert(f.pin.token_used == (finishing != 0U));
+        }
+    }
+}
+
 static void test_tokens_policy_and_provider_failures(void)
 {
     Fixture f; fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
@@ -542,6 +581,7 @@ int main(void)
     test_validation_and_pin_policy(); test_retries_and_power_cycle(); test_change_and_failure_ordering();
     test_client_pin_crypto_error_mapping();
     test_backend_abort_reset_and_advertising();
+    test_credential_token_verification_errors();
     test_token_permission_combinations();
     test_tokens_policy_and_provider_failures(); test_token_time_wrap_and_waiting_abort();
     test_get_info_reads_pin_state_and_fails_closed();

@@ -13,7 +13,7 @@
 /* Deterministic primitive mocks verify orchestration, not cryptographic math.
  * Validate the injected provider's real ECDH/HMAC/AES separately on the target. */
 typedef struct {
-    bool bad_peer, agreement_fails, hmac_fails, decrypt_fails, encrypt_fails, credential_fails, legacy;
+    bool bad_peer, agreement_fails, hmac_fails, verify_fails, decrypt_fails, encrypt_fails, credential_fails, legacy;
     size_t agreements, macs, decrypts, encrypts, evaluations;
     bool evaluated_with_uv;
 } SecretMock;
@@ -38,7 +38,7 @@ static AuthStatus hmac(void *context, const uint8_t *key, size_t key_length,
     case 4U: assert(key[0] == 0x3CU && (length == 48U || length == 80U)); break;
     default: assert(false);
     }
-    if (mock->hmac_fails) return AUTH_CRYPTO_ERROR;
+    if (mock->hmac_fails || (mock->verify_fails && mock->macs == 4U)) return AUTH_CRYPTO_ERROR;
     memset(output, 0x3C, 32U); return AUTH_OK;
 }
 static AuthStatus aes(void *context, bool encrypt, const uint8_t key[32], const uint8_t iv[16],
@@ -103,7 +103,7 @@ static void test_failure_output_and_legacy_handling(void)
     Store store = {0}; SecretMock mock = {0}; AuthCredentialService service;
     configure(&service, &store, &mock); AuthCredential credential = seed(&service);
     CtapHmacSecret request = input(false);
-    for (unsigned failure = 0U; failure < 7U; ++failure) {
+    for (unsigned failure = 0U; failure < 8U; ++failure) {
         mock = (SecretMock){0}; request = input(false);
         uint8_t expected = 0x7FU;
         switch (failure) {
@@ -114,11 +114,12 @@ static void test_failure_output_and_legacy_handling(void)
         case 4U: mock.decrypt_fails = true; expected = 2U; break;
         case 5U: mock.credential_fails = true; break;
         case 6U: mock.encrypt_fails = true; break;
+        case 7U: mock.verify_fails = true; expected = CTAP_STATUS_PIN_AUTH_INVALID; break;
         }
         uint8_t output[80]; memset(output, 0xEE, sizeof output); size_t length = 999U;
         assert(ctap_hmac_secret_evaluate(&service, &credential, &request, false, output, &length) == expected);
         assert(output[0] == 0xEEU && length == 999U);
-        if (failure < 4U) assert(mock.decrypts == 0U && mock.evaluations == 0U);
+        if (failure < 4U || failure == 7U) assert(mock.decrypts == 0U && mock.evaluations == 0U);
     }
     mock = (SecretMock){0}; mock.legacy = true; request = input(false);
     uint8_t output[80]; memset(output, 0xEE, sizeof output); size_t length = 999U;
@@ -173,6 +174,27 @@ static void test_assertion_extension_is_signed_and_bad_mac_does_not_increment(vo
     request_length = assertion_request(request, false);
     assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0x2BU);
 }
+/* §§12.7–12.8 share salt authentication; bad input must not create a key. */
+static void test_registration_salt_authentication_precedes_creation(void)
+{
+    for (unsigned provider_failure = 0U; provider_failure < 2U; ++provider_failure) {
+        Store store = {0}; SecretMock mock = {0}; AuthCredentialService service;
+        configure(&service, &store, &mock);
+        CtapMakeCredential prepared = {0}; CtapMakeCredentialWorkspace workspace = {0};
+        prepared.hmac_secret_requested = true; prepared.hmac_secret_mc = input(false);
+        if (provider_failure) mock.verify_fails = true;
+        else prepared.hmac_secret_mc.salt_auth[0] ^= 1U;
+        uint8_t output[512], aaguid[16] = {0}; memset(output, 0xEE, sizeof output);
+        size_t length = 999U;
+        assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid,
+            output, sizeof output, &length) == CTAP_STATUS_PIN_AUTH_INVALID);
+        assert(store.generated == 0U && store.signatures == 0U && !store.exists);
+        assert(mock.decrypts == 0U && mock.evaluations == 0U && length == 999U && output[0] == 0xEEU);
+        const unsigned char *bytes = (const unsigned char *)&workspace.scratch;
+        for (size_t i = 0U; i < sizeof workspace.scratch; ++i) assert(bytes[i] == 0U);
+    }
+}
+
 static void test_registration_extension_output_and_availability(void)
 {
     for (unsigned legacy = 0U; legacy < 2U; ++legacy) {
@@ -227,6 +249,7 @@ int main(void)
     test_protocol_two_kdf_and_uv_separation();
     test_failure_output_and_legacy_handling();
     test_assertion_extension_is_signed_and_bad_mac_does_not_increment();
+    test_registration_salt_authentication_precedes_creation();
     test_registration_extension_output_and_availability();
     test_no_extension_crypto_before_consent_or_after_abort();
     puts("hmac-secret tests passed (protocol 2 KDF, auth, UV separation, signed outputs, failure/abort behavior).");

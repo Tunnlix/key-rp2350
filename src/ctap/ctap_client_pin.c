@@ -308,7 +308,10 @@ uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
     uint8_t keys[64] = {0}; memcpy(keys, pin->token, 32U);
     uint8_t status = ctap_pin_protocol_verify(&pin->service->secrets, keys, client_data_hash, 32U, auth->mac, 32U);
     auth_secure_zero(keys, sizeof keys);
-    if (status == CTAP_STATUS_OK && mark_used) {
+    /* MC/GA return PIN_AUTH_INVALID for any token verification error,
+     * including a provider failure (§§6.1.2, 6.2.2). */
+    if (status != CTAP_STATUS_OK) return CTAP_STATUS_PIN_AUTH_INVALID;
+    if (mark_used) {
         auth->token_generation = pin->token_generation; pin->token_used = true;
     }
     return status;
@@ -326,6 +329,7 @@ uint8_t ctap_client_pin_authorize_management(CtapClientPin *pin, const uint8_t *
     uint8_t keys[64] = {0}; memcpy(keys, pin->token, 32U);
     uint8_t status = ctap_pin_protocol_verify(&pin->service->secrets, keys, message, message_length, mac, 32U);
     auth_secure_zero(keys, sizeof keys);
-    if (status == CTAP_STATUS_OK) pin->token_used = true;
-    return status;
+    if (status != CTAP_STATUS_OK) return CTAP_STATUS_PIN_AUTH_INVALID; /* §6.8 verification failure. */
+    pin->token_used = true;
+    return CTAP_STATUS_OK;
 }

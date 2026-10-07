@@ -37,7 +37,8 @@ static uint8_t decrypt_salts(const AuthSecretCrypto *crypto, const CtapHmacSecre
     if (status != CTAP_STATUS_OK) return status;
     status = ctap_pin_protocol_verify(crypto, keys, request->salt_enc, request->salt_enc_length,
         request->salt_auth, request->salt_auth_length);
-    if (status != CTAP_STATUS_OK) return status;
+    /* §12.7 maps all saltAuth verification failures to PIN_AUTH_INVALID. */
+    if (status != CTAP_STATUS_OK) return CTAP_STATUS_PIN_AUTH_INVALID;
     return crypto->aes256_cbc(crypto->context, false, keys + 32U, request->salt_enc,
         request->salt_enc + 16U, request->salt_enc_length - 16U, salts) == AUTH_OK ?
         CTAP_STATUS_OK : CTAP_STATUS_INVALID_PARAMETER;
