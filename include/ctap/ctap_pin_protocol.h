@@ -5,7 +5,9 @@
 #include "ctap/cbor_reader.h"
 #include "authenticator/auth_secret_crypto.h"
 
-/* Protocol 2 only: HMAC key followed by AES key. Helpers do not retain keys. */
+/* Protocol 2 only: HMAC key followed by AES key. The caller must wipe keys[64]
+ * after use, including after failure: a failed derivation can leave partial key
+ * material in that output. Helpers wipe their own intermediate secrets. */
 uint8_t ctap_pin_public_key_parse(const CborValue *map, uint8_t output[65]);
 bool ctap_pin_protocol_derive(const AuthSecretCrypto *crypto, const uint8_t z[32], uint8_t keys[64]);
 uint8_t ctap_pin_protocol_shared(const AuthSecretCrypto *crypto, const uint8_t peer[65], uint8_t keys[64]);

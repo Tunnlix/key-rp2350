@@ -56,7 +56,7 @@ AuthStatus auth_credentials_update_user(AuthCredentialService *service,
     const AuthCredential *credential);
 
 /* RP binding is checked before returning metadata or signing. This does not
- * establish UP/UV itself: the future CTAP handler must authorize the operation. */
+ * establish UP/UV itself: the CTAP handler must authorize the operation. */
 AuthStatus auth_credentials_get(AuthCredentialService *service,
     const uint8_t id[32], const uint8_t rp_hash[32], AuthCredential *credential);
 AuthStatus auth_credentials_sign_digest(AuthCredentialService *service,

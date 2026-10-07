@@ -58,6 +58,8 @@ uint8_t ctap_pin_key_agreement_encode(const AuthSecretCrypto *crypto,
 
 bool ctap_pin_equal(const uint8_t *left, const uint8_t *right, size_t length)
 {
+    /* Scan every byte; an early return would reveal the matching prefix.
+     * Check generated code/timing with the final compiler and target as well. */
     volatile uint8_t different = 0U;
     for (size_t i = 0U; i < length; ++i) different |= left[i] ^ right[i];
     return different == 0U;

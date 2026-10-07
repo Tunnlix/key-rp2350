@@ -6,11 +6,17 @@
 /* Optional hmac-secret primitives. Provider owns an ephemeral P-256 ECDH key
  * initialized at power-on and regenerated on factory reset. Its private bytes
  * never leave the provider. ecdh outputs the raw, big-endian x-coordinate Z;
- * the portable protocol layer applies HKDF. CBC has no padding, lengths 16/32/64.
+ * it must validate peer coordinates and reject infinity/off-curve points before
+ * scalar multiplication, returning AUTH_BAD_DATA or AUTH_INVALID_ARGUMENT.
+ * The COSE parser checks encoding only; it cannot establish curve membership.
+ * The portable protocol layer applies HKDF. CBC has no padding, lengths 16/32/64.
  * Credential randoms are two independent persistent 32-byte values generated
  * with each credential key, even when registration did not request hmac-secret.
  * They remain provider-owned and are erased with key deletion/factory reset.
  * credential_hmac returns NOT_FOUND for a legacy key without these randoms.
+ * Providers must use secret-independent crypto operations and erase their own
+ * private-key, shared-secret and plaintext scratch on success and failure.
+ * The core wipes only buffers that it owns, not callback-internal copies.
  * This interface also supports future chip-owned secret/key handles. */
 typedef struct {
     void *context;

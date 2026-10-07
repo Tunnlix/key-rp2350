@@ -56,7 +56,7 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
     uint32_t powered_at_ms, CtapResetStorage reset_storage, void *storage_context);
 
 /* Bind an initialized portable service once before requests. Caller keeps it
- * alive for this backend's lifetime. Requires a configured UP provider; makes
+ * alive for this backend's lifetime. Requires a configured UP provider.
  * Enables ES256 registration/assertions and packed self-attestation. Bind the
  * service's optional secret provider before this call to enable hmac-secret and
  * protocol 2 getKeyAgreement. No PIN setup/token/UV capability is implied. */
@@ -64,7 +64,7 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
 
 /* Complete protocol 2 PIN/token binding, after credentials/reset. Enables
- * clientPin, pinUvAuthToken and credProtect; built-in uv remains absent. The
+ * clientPin, pinUvAuthToken and credProtect; built-in uv remains absent.
  * Complete resident storage also enables rk/credMgmt; configure resync_channel
  * to ctaphid_ctap_backend_resync before accepting requests. The application
  * Reset callback must erase persistent PIN state as well as credentials/keys. */

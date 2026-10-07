@@ -8,6 +8,8 @@ bool cbor_utf8_valid(const uint8_t *data, size_t length)
 
 static bool key_before(const CborValue *left, const CborValue *right)
 {
+    /* CTAP orders major types first, then encoded length and bytes within a
+     * type. Strict ordering also rejects duplicate keys before any lookup. */
     if (left->major != right->major) return left->major < right->major;
     if (left->encoded_length != right->encoded_length) return left->encoded_length < right->encoded_length;
     return memcmp(left->encoded, right->encoded, left->encoded_length) < 0;

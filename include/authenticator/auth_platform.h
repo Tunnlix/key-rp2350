@@ -38,6 +38,12 @@ typedef struct { uint8_t bytes[AUTH_KEY_HANDLE_SIZE]; } AuthKeyHandle;
 /* No private key bytes. Core caller validates CTAP parameters/user consent before
  * using these operations. Callbacks are serial, bounded, and non-reentrant.
  * Contexts remain application-owned and outlive all copies of these interfaces. */
+/* random must be a cryptographically secure generator and fail when unavailable.
+ * P-256 providers validate their keys, protect scalar/nonce operations against
+ * side channels, and wipe internal secret scratch on every exit. Signing returns
+ * a complete DER ECDSA signature of at most AUTH_ES256_DER_MAX_SIZE bytes;
+ * signature_length is an output, not an input capacity. Key-generation failure
+ * must clean up any partially created key before returning. */
 typedef struct {
     void *context;
     AuthStatus (*random)(void *, uint8_t *, size_t);

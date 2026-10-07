@@ -7,7 +7,6 @@
 #define CTAPHID_INITIAL_MARKER 0x80U
 #define CTAPHID_MAX_COMMAND 0x7FU
 
-/* Step 1: reject invalid inputs before the transport sees any reports. */
 static CtaphidResponseResult validate_response(
     uint8_t command, const uint8_t *payload, size_t payload_length,
     CtaphidSendReport send_report
@@ -69,7 +68,7 @@ CtaphidResponseResult ctaphid_send_response(
         return result;
     }
 
-    /* Step 2: emit the initial report, even when the payload is empty. */
+    /* Empty payloads still require an initial report. */
     uint8_t report[CTAPHID_REPORT_SIZE] = {0};
     encode_initial_header(report, channel_id, command, payload_length);
     size_t count = fragment_length(payload_length, CTAPHID_INITIAL_PAYLOAD_SIZE);
@@ -80,8 +79,7 @@ CtaphidResponseResult ctaphid_send_response(
         return CTAPHID_RESPONSE_SEND_FAILED;
     }
 
-    /* Step 3: emit remaining fragments with sequence numbers starting at zero.
-     * The validated wire limit guarantees that sequence never exceeds 127. */
+    /* The validated wire limit guarantees that sequence never exceeds 127. */
     size_t offset = count;
     uint8_t sequence = 0U;
     while (offset < payload_length) {
