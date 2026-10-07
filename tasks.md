@@ -1,8 +1,6 @@
 # Remaining tasks in execution order
 
-Continue the current P2 stack work with tasks 2–3, then complete the portable-core review and refactors. Tasks 8–12 depend on final providers and target integration; their implementation remains outside the portable-core refactoring. USB integration and hardware USB/WebAuthn tests remain out of scope. Keep only outstanding work here.
-
-- [ ] **2. Reduce assertion preparation stack usage.** Move temporary request and credential-selection records in `ctap_get_assertion_prepare_with_pin()` into caller-owned storage. Preserve allow-list validation, discovery privacy, credential ordering and authorization. Reuse assertion, resident-credential and conformance tests; verify failure cleanup and enforce a per-function stack limit.
+Continue the current P2 stack work with task 3, then complete the portable-core review and refactors. Tasks 8–12 depend on final providers and target integration; their implementation remains outside the portable-core refactoring. USB integration and hardware USB/WebAuthn tests remain out of scope. Keep only outstanding work here.
 
 - [ ] **3. Reduce assertion finish stack usage.** Move the temporary credential and response buffers in `ctap_get_assertion_finish_at()` into caller-owned storage. Preserve counter persistence before signing, extension handling and response publication only after success. Reuse assertion and hmac-secret failure tests; verify workspace cleanup and enforce a per-function stack limit. Update `docs/stack-budget.md` with measured frames and persistent RAM costs.
 

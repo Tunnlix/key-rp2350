@@ -20,6 +20,7 @@ add_library(ctap_core STATIC
     src/ctap/ctap_credential_management.c
     src/ctap/ctap_entities.c
     src/ctap/ctap_get_assertion.c
+    src/ctap/ctap_get_assertion_prepare.c
     src/ctap/ctap_get_info.c
     src/ctap/ctap_hmac_secret.c
     src/ctap/ctap_make_credential.c
@@ -50,6 +51,7 @@ set(CTAP_CM_STACK_BUDGET 1024 CACHE STRING "Credential-management stack bytes pe
 set(CTAP_CREDENTIALS_STACK_BUDGET 512 CACHE STRING "Credential lookup/mutation stack bytes per function (GCC)")
 set(CTAP_RESIDENT_STACK_BUDGET 512 CACHE STRING "Resident-creation stack bytes per function (GCC)")
 set(CTAP_NONRESIDENT_STACK_BUDGET 512 CACHE STRING "Non-resident creation stack bytes per function (GCC)")
+set(CTAP_GA_PREPARE_STACK_BUDGET 1024 CACHE STRING "Assertion preparation stack bytes per function (GCC)")
 set(CTAP_MC_PREPARE_STACK_BUDGET 1024 CACHE STRING "Registration preparation stack bytes per function (GCC)")
 set(CTAP_MC_FINISH_STACK_BUDGET 512 CACHE STRING "Registration finish stack bytes per function (GCC)")
 if(NOT CTAP_CM_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
@@ -57,6 +59,9 @@ if(NOT CTAP_CM_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
 endif()
 if(NOT CTAP_RESIDENT_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "CTAP_RESIDENT_STACK_BUDGET must be a positive integer")
+endif()
+if(NOT CTAP_GA_PREPARE_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "CTAP_GA_PREPARE_STACK_BUDGET must be a positive integer")
 endif()
 if(NOT CTAP_MC_PREPARE_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "CTAP_MC_PREPARE_STACK_BUDGET must be a positive integer")
@@ -80,6 +85,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_RESIDENT_STACK_BUDGET}")
     set_source_files_properties(src/authenticator/auth_nonresident.c PROPERTIES
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_NONRESIDENT_STACK_BUDGET}")
+    set_source_files_properties(src/ctap/ctap_get_assertion_prepare.c PROPERTIES
+        COMPILE_OPTIONS "-Wstack-usage=${CTAP_GA_PREPARE_STACK_BUDGET}")
     set_source_files_properties(src/ctap/ctap_make_credential.c PROPERTIES
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_MC_PREPARE_STACK_BUDGET}")
     set_source_files_properties(src/ctap/ctap_make_credential_finish.c PROPERTIES

@@ -45,6 +45,13 @@ rejected without touching the active operation. Response bytes are copied to
 the caller only after successful persistence and cleanup. Preparation copies
 its result to separate caller-owned output only on success.
 
+Assertion preparation takes a `CtapGetAssertionWorkspace *` as its second
+argument. Allocate and zero-initialize it in persistent RAM; the backend owns
+one automatically. Request state, the shared lookup record and discovery order
+array occupy 2,440 bytes including the guard on native x64 GCC. Every acquired
+exit wipes scratch; nested use preserves the active workspace. Prepared output
+is separate and published only on success. Finish/continuation APIs are unchanged.
+
 ## Regression check
 
 GCC builds emit `.su` stack-usage reports for every core source. CMake also sets
@@ -68,6 +75,10 @@ inside this checked module.
 `ctap_make_credential_finish.c` has a 512-byte per-function limit configured
 through `CTAP_MC_FINISH_STACK_BUDGET`. `ctap_make_credential.c` has a separate
 1,024-byte per-function limit through `CTAP_MC_PREPARE_STACK_BUDGET`.
+
+`ctap_get_assertion_prepare.c` has a 1,024-byte per-function limit through
+`CTAP_GA_PREPARE_STACK_BUDGET`. Assertion finish remains in a separate source
+file and is not covered by this limit.
 
 For example, with GCC and Ninja available:
 
@@ -114,6 +125,11 @@ At `-O0` exclusion lookup adds 224 bytes, down from 1,632 bytes; preparation
 previously used 2,640 bytes. These figures exclude the convenience entry point,
 CBOR and credential-service callees, and provider stack.
 
+Assertion preparation's helper uses 640 bytes at `-O2` and 768 bytes at
+`-O0`; its cleanup wrapper adds 80/96 bytes. The previous preparation frame
+used 3,008/3,168 bytes. These figures exclude the convenience entry point,
+CBOR, credential-service and provider callees.
+
 The migrated lookup/mutation functions use 64–96 bytes at `-O2`; the shared
 lookup helper uses 80 bytes. At `-O0` those functions use 64–80 bytes, lookup
 uses 64 bytes and cleanup uses 48 bytes. For example, the `get` and lookup
@@ -124,7 +140,8 @@ totals exclude their provider, validation and erasure callees.
 ## Establishing the firmware budget
 
 The checks are per function and cover credential management, credential service,
-both creation paths and registration preparation/finish. Assertion scratch migration remains in
+both creation paths, registration preparation/finish and assertion preparation.
+Assertion finish scratch migration remains in
 `tasks.md`. A complete stack bound is not established yet.
 
 With final firmware optimization/LTO settings, account for each simultaneously

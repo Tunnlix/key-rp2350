@@ -29,14 +29,35 @@ static void seed(Store *store, AuthCredentialService *service)
     AuthCredential record;
     assert(auth_credentials_create(service, rp, NULL, 0U, false, &record, pub) == AUTH_OK);
 }
+static void assert_workspace_cleared(const CtapGetAssertionWorkspace *workspace)
+{
+    const unsigned char *bytes = (const unsigned char *)&workspace->scratch;
+    for (size_t i = 0U; i < sizeof workspace->scratch; ++i) assert(bytes[i] == 0U);
+    assert(!workspace->busy);
+}
 static void test_signature_layout_and_durable_counter(void)
 {
     Store store = {0}; AuthCredentialService service; seed(&store, &service);
     uint8_t input[512], output[192]; size_t length = 999U;
     size_t input_length = request(input, true);
-    CtapGetAssertion prepared;
-    assert(ctap_get_assertion_prepare(&service, input, input_length, &prepared) == 0U);
+    CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0U);
     assert(prepared.user_presence_required && store.signatures == 0U && store.record.signature_count == 0U);
+    assert_workspace_cleared(&ga_workspace);
+    CtapGetAssertion saved = prepared;
+    memset(&ga_workspace.scratch, 0xA5, sizeof ga_workspace.scratch);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, 0U, &prepared) == CTAP_STATUS_INVALID_CBOR);
+    assert(memcmp(&prepared, &saved, sizeof saved) == 0);
+    assert_workspace_cleared(&ga_workspace);
+    ga_workspace.busy = true;
+    memset(&ga_workspace.scratch, 0xA5, sizeof ga_workspace.scratch);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == CTAP_STATUS_OTHER);
+    const unsigned char *scratch = (const unsigned char *)&ga_workspace.scratch;
+    for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(scratch[i] == 0xA5U);
+    assert(ga_workspace.busy && memcmp(&prepared, &saved, sizeof saved) == 0);
+    ga_workspace.busy = false;
+    assert(ctap_get_assertion_prepare(NULL, &ga_workspace, input, input_length, &prepared) == CTAP_STATUS_OTHER);
+    assert_workspace_cleared(&ga_workspace);
     assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0U);
     assert(store.record.signature_count == 1U && store.counter_at_sign == 1U && store.signatures == 1U);
     assert(store.hashed_length == 69U && store.hashed_data[32] == 1U && store.hashed_data[36] == 1U);
@@ -49,7 +70,7 @@ static void test_signature_layout_and_durable_counter(void)
     assert(cbor_map_uint(&response, 3U, &signature) && signature.major == 2U && signature.value == 8U);
     /* A silent check uses the same signing/counter path with UP=0. */
     input_length = request(input, false);
-    assert(ctap_get_assertion_prepare(&service, input, input_length, &prepared) == 0U && !prepared.user_presence_required);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0U && !prepared.user_presence_required);
     store.record.signature_count = 0x00FFFFFFU;
     assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0U);
     assert(store.counter_at_sign == 0x01000000U);
@@ -59,9 +80,9 @@ static void test_fail_closed_and_counter_never_rolls_back(void)
 {
     Store store = {0}; AuthCredentialService service; seed(&store, &service);
     uint8_t input[512], output[192]; memset(output, 0xEE, sizeof output);
-    size_t length = 999U; CtapGetAssertion prepared;
+    size_t length = 999U; CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
     size_t input_length = request(input, true);
-    assert(ctap_get_assertion_prepare(&service, input, input_length, &prepared) == 0U);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0U);
     assert(ctap_get_assertion_finish(&service, &prepared, output, 191U, &length) == 0x7FU);
     assert(store.record.signature_count == 0U && store.signatures == 0U);
     store.counter_fails = true;
@@ -82,7 +103,10 @@ static void test_fail_closed_and_counter_never_rolls_back(void)
     assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x7FU);
     assert(store.record.signature_count == UINT32_MAX && store.signatures == signed_before);
     store.read_fails = true;
-    assert(ctap_get_assertion_prepare(&service, input, input_length, &prepared) == 0x7FU);
+    CtapGetAssertion saved = prepared;
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0x7FU);
+    assert(memcmp(&prepared, &saved, sizeof saved) == 0);
+    assert_workspace_cleared(&ga_workspace);
     store.read_fails = false; prepared.rp_id_hash[0] ^= 1U;
     assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x2EU);
     assert(store.signatures == signed_before);

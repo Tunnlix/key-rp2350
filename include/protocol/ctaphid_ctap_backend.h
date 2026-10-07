@@ -30,6 +30,7 @@ typedef struct {
     bool awaiting_make_credential;
     CtapMakeCredential make_credential;
     CtapMakeCredentialWorkspace make_credential_workspace;
+    CtapGetAssertionWorkspace get_assertion_workspace;
     bool awaiting_get_assertion;
     CtapGetAssertion get_assertion;
     CtapClientPin *pin;

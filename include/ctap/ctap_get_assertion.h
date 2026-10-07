@@ -24,6 +24,18 @@ typedef struct {
     uint64_t metadata_revision;
 } CtapGetAssertion;
 
+/* Zero-initialize in persistent caller-owned RAM. Preparation wipes acquired
+ * scratch on every exit; nested use is rejected without clearing active scratch.
+ * Inputs/output must not alias this workspace; callbacks may not retain pointers. */
+typedef struct {
+    struct {
+        CtapGetAssertion request;
+        AuthCredential credential;
+        uint64_t order[AUTH_RESIDENT_MAX_COUNT];
+    } scratch;
+    bool busy;
+} CtapGetAssertionWorkspace;
+
 typedef struct {
     CtapGetAssertion request;
     size_t next;
@@ -38,12 +50,13 @@ uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapAssertionSeq
 
 /* Validate CBOR, options, descriptors and RP binding. No counter updates/signing.
  * OK means a credential was selected. Omitted allowList discovers resident
- * records only; non-resident credentials always require explicit IDs. */
-uint8_t ctap_get_assertion_prepare(AuthCredentialService *service,
+ * records only; non-resident credentials always require explicit IDs.
+ * Prepared output remains unchanged on failure. */
+uint8_t ctap_get_assertion_prepare(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace,
     const uint8_t *parameters, size_t length, CtapGetAssertion *prepared);
 /* Adds protocol 2 GA authorization and snapshots the token generation only
  * after validating the whole allowList. No counter/signing effects. */
-uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, CtapClientPin *pin,
+uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace, CtapClientPin *pin,
     uint32_t now_ms, const uint8_t *parameters, size_t length, CtapGetAssertion *prepared);
 
 /* Caller MUST collect fresh UP when prepared.user_presence_required is true.

@@ -152,8 +152,8 @@ static void test_assertion_extension_is_signed_and_bad_mac_does_not_increment(vo
     Store store = {0}; SecretMock mock = {0}; AuthCredentialService service;
     configure(&service, &store, &mock); (void)seed(&service);
     uint8_t request[512], response[288]; size_t length;
-    size_t request_length = assertion_request(request, true); CtapGetAssertion prepared;
-    assert(ctap_get_assertion_prepare(&service, request, request_length, &prepared) == 0U);
+    size_t request_length = assertion_request(request, true); CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0U);
     assert(mock.agreements == 0U && mock.evaluations == 0U && store.signatures == 0U);
     assert(ctap_get_assertion_finish(&service, &prepared, response, sizeof response, &length) == 0U);
     assert(store.counter_at_sign == 1U && store.hashed_data[32] == 0x81U && store.hashed_length == 164U);
@@ -165,7 +165,7 @@ static void test_assertion_extension_is_signed_and_bad_mac_does_not_increment(vo
     assert(ctap_get_assertion_finish(&service, &prepared, response, sizeof response, &length) == 0x33U);
     assert(store.record.signature_count == 1U && store.signatures == 1U);
     request_length = assertion_request(request, false);
-    assert(ctap_get_assertion_prepare(&service, request, request_length, &prepared) == 0x2BU);
+    assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0x2BU);
 }
 static void test_registration_extension_output_and_availability(void)
 {

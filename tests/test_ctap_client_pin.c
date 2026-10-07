@@ -368,22 +368,22 @@ static void test_tokens_policy_and_provider_failures(void)
         cbor_map_text(&extension, "credProtect", &policy) && policy.value == 3U);
     assert(f.store.record.cred_protect == 3U && f.store.signatures == 1U && !f.pin.token_active);
     assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 2U, input, n, &mc) == 0x33U);
-    CtapGetAssertion ga;
+    CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion ga;
     n = assertion_request(input, f.store.record.credential_id, false, true, false);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x2EU);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0x2EU);
     issue(&f, 1U, 0U); n = assertion_request(input, f.store.record.credential_id, true, true, false);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x33U);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0x33U);
     issue(&f, 2U, 0U);
     n = assertion_request(input, f.store.record.credential_id, true, false, true);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x11U && !f.pin.token_used);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0x11U && !f.pin.token_used);
     n = assertion_request(input, f.store.record.credential_id, true, false, false);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0U && ga.user_verified);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0U && ga.user_verified);
     assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 1U) == 0U && f.pin.token_active);
     assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 4U);
     issue(&f, 2U, 2U); /* A previously prepared request cannot switch to a new generation. */
     assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 2U) == 0x33U);
     n = assertion_request(input, f.store.record.credential_id, true, true, false);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 2U, input, n, &ga) == 0U);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 2U, input, n, &ga) == 0U);
     f.store.counter_fails = true;
     assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 3U) == 0x7FU && !f.pin.token_active);
     f.store.counter_fails = false; assert(f.store.record.signature_count == 1U && f.store.signatures == 2U);

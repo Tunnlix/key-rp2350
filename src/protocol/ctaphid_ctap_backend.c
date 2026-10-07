@@ -123,7 +123,7 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
         backend->pending = true; return;
     }
     if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_GET_ASSERTION && backend->credentials != NULL) {
-        uint8_t status = ctap_get_assertion_prepare(backend->credentials, request + 1U,
+        uint8_t status = ctap_get_assertion_prepare(backend->credentials, &backend->get_assertion_workspace, request + 1U,
             request_length - 1U, &backend->get_assertion);
         backend->awaiting_get_assertion = status == CTAP_STATUS_OK;
         backend->awaiting_presence = backend->awaiting_get_assertion && backend->get_assertion.user_presence_required;
@@ -209,7 +209,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->awaiting_make_credential = status == CTAP_STATUS_OK;
             backend->awaiting_presence = backend->awaiting_make_credential;
         } else {
-            status = ctap_get_assertion_prepare_with_pin(backend->credentials, backend->pin, now_ms,
+            status = ctap_get_assertion_prepare_with_pin(backend->credentials, &backend->get_assertion_workspace, backend->pin, now_ms,
                 backend->credential_request, backend->credential_request_length, &backend->get_assertion);
             backend->awaiting_get_assertion = status == CTAP_STATUS_OK;
             backend->awaiting_presence = backend->awaiting_get_assertion && backend->get_assertion.user_presence_required;

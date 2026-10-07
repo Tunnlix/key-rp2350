@@ -200,15 +200,18 @@ static void test_registration_failure_preserves_replaced_credential(void)
 static void test_discovery_privacy_and_sequence_failures(void)
 {
     Fixture f;setup(&f);AuthCredential first=create(&f,"example.com",1U,1U);AuthCredential second=create(&f,"example.com",2U,3U);
-    uint8_t input[256],out[1024];size_t n=discovery(input,false),length;CtapGetAssertion prepared;
-    assert(ctap_get_assertion_prepare_with_pin(&f.service,&f.pin,0U,input,n,&prepared)==0U&&prepared.credential_count==1U);
+    uint8_t input[256],out[1024];size_t n=discovery(input,false),length;CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace,&f.pin,0U,input,n,&prepared)==0U&&prepared.credential_count==1U);
     assert(memcmp(prepared.credential_id,first.credential_id,32U)==0);
     assert(ctap_get_assertion_finish_at(&f.service,&prepared,out,sizeof out,&length,1U)==0U);
     CborValue map,user,name;assert(cbor_read_document(out,length,&map)&&cbor_map_uint(&map,4U,&user));
     assert(!cbor_map_text(&user,"name",&name)&&!cbor_map_uint(&map,5U,&name));
     token(&f,2U,"example.com");n=discovery(input,true);
-    assert(ctap_get_assertion_prepare_with_pin(&f.service,&f.pin,0U,input,n,&prepared)==0U&&prepared.credential_count==2U);
+    assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace,&f.pin,0U,input,n,&prepared)==0U&&prepared.credential_count==2U);
     assert(memcmp(prepared.credential_id,second.credential_id,32U)==0);
+    assert(!ga_workspace.busy);
+    const unsigned char *scratch = (const unsigned char *)&ga_workspace.scratch;
+    for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(scratch[i] == 0U);
     assert(ctap_get_assertion_finish_at(&f.service,&prepared,out,sizeof out,&length,1U)==0U&&!f.pin.token_active);
     CtapAssertionSequence sequence;ctap_assertion_sequence_begin(&sequence,&prepared,UINT32_MAX-99U);
     assert(ctap_get_next_assertion(&f.service,&sequence,out,sizeof out,&length,(UINT32_MAX-99U)+30000U)==0U);
