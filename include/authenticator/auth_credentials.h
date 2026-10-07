@@ -19,7 +19,10 @@ bool auth_credentials_init(AuthCredentialService *service,
 bool auth_credentials_configure_secrets(AuthCredentialService *service,
     const AuthSecretCrypto *secrets);
 
-/* Store a new credential with a random ID and provider-owned P-256 key. Output
+/* Store a new non-discoverable credential with a random ID and P-256 key.
+ * discoverable must be false; resident creation requires the metadata-aware
+ * create_resident APIs below, including atomic overwrite/store-state handling.
+ * Output
  * is published only after metadata persistence succeeds. On insert failure the
  * new key is destroyed; cleanup failure returns IO_ERROR and requires provider
  * recovery/garbage collection. No automatic credential overwrites or retries.

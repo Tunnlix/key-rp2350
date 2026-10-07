@@ -2,24 +2,33 @@
 
 - Do not create README files.
 - When asked for the next task, give the next implementation step directly. Keep tasks small; prioritize portable implementation and reuse existing targeted checks.
-- Keep Python clients, dependencies and test helpers in `tools/python-client/`; PC transport and actions in `examples/host/`.
-- Keep `src/` and `include/` independent of Python, console I/O and host APIs. Inject platform actions through callbacks.
+- This repository now contains the portable C17 core and native C tests only. Do not reintroduce Windows implementations, Python clients/helpers, host examples or platform-specific runtime dependencies.
+- Keep `src/` and `include/` independent of console I/O, heap allocation and host APIs. Inject platform actions through callbacks; providers own private keys and credential randoms.
 - CTAP2 only: no CTAP1/U2F or legacy compatibility paths. Keep CTAPHID_MSG unsupported and advertise CAPABILITY_NMSG.
 - Follow the [CTAP 2.3 Proposed Standard (2026-02-26)](https://fidoalliance.org/specs/fido-v2.3-ps-20260226/fido-client-to-authenticator-protocol-v2.3-ps-20260226.html). Claim full compliance only after applicable requirements have been verified.
-- Platform stages: PC development → RP2350 onboard resources → custom board/external chips. Separate credential metadata from crypto providers; use opaque key handles without private-key exports or PC-format dependencies.
-- Windows is temporary. Keep simulations minimal; defer disproportionate Windows work and hardware-dependent decisions to RP2350, explain the tradeoff, and continue useful portable work.
+- Target RP2350 onboard resources, then a possible custom board/external security chip. Separate credential metadata from crypto providers; use opaque key handles without private-key exports or persistent-format dependencies.
+- USB integration, descriptors, endpoints and USB/WebAuthn hardware testing are explicitly out of scope for this refactoring. Preserve the portable CTAPHID codec/coordinator; do not add a USB driver.
 - Maintain only outstanding work below. Remove completed items; do not restore implementation-history tables or treat optional features as mandatory.
 
 ## Remaining CTAP 2.3 work
 
 Reviewed against current code on 2026-10-07. Section numbers refer to the standard above.
 
-### Portable review
+### Build and review boundaries
 
-- [ ] Finish the clause-by-clause review of supported commands: validation/error precedence, PIN/token lifecycle, continuation state, CBOR bounds and extension processing (§§6, 8, 12). Record only concrete remaining fixes.
+Use `cmake --preset native-tests`, `cmake --build --preset native-tests`, then
+`ctest --preset native-tests`. The `core-only` configure/build presets produce
+the library without tests. Firmware can use `add_subdirectory()` and link
+`ctap_core` with `BUILD_TESTING=OFF`; it supplies providers and its main loop.
 
-### RP2350 integration and final validation
+Retain native protocol, state-machine, failure and bounds tests. Their mock
+primitives verify orchestration, not crypto algorithms, flash durability or
+physical touch. Do not advertise optional capabilities until their complete
+provider/handler requirements are bound. Full claims require the applicable
+checks on the actual providers, independent of this core-only refactoring.
 
-- [ ] Implement USB HID interface/report descriptors, IN/OUT endpoints and transport callbacks (§11.2).
-- [ ] Connect physical touch, monotonic timing, secure RNG, crypto and durable storage providers. Verify power-loss recovery, PIN retry persistence, counters and complete Reset erasure.
-- [ ] Run applicable CTAP 2.3 conformance checks and real USB/WebAuthn interoperability on the final firmware; fix failures before claiming compliance.
+### Remaining work outside the portable core
+
+- [ ] Bind RP2350 touch, monotonic timing, secure RNG, crypto and durable storage providers. Verify primitive known-answer vectors, power-loss recovery, PIN retry persistence, counters and complete Reset erasure.
+- [ ] Validate applicable CTAP behavior with the final providers before claiming device compliance; USB remains outside this task.
+- [ ] Remove ignored local tooling/binary remnants (`.venv`, old `main.exe`, Python bytecode and obsolete build outputs). Automatic shell safety review rejected their deletion with "blocked by policy" during this task. Tracked PC/Python sources were removed; do not bypass the safety check to erase the remaining artifacts.

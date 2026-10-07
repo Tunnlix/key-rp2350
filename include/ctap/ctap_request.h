@@ -6,7 +6,8 @@
 
 /* Common structural validation for CTAP request maps and credential descriptors.
  * Values borrow immutable request storage. No policy, lookup, UP or signing.
- * Parameter keys are unsigned integers; unknown keys are validated then ignored.
+ * Known parameter keys are unsigned integers; all unknown keys are validated
+ * then ignored. Text-member lookup likewise ignores keys outside its namespace.
  * Caller supplies zeroed fields/present arrays of field_count elements. */
 uint8_t ctap_request_map(const uint8_t *input, size_t length, size_t field_count,
     CborValue *fields, bool *present);

@@ -236,7 +236,10 @@ uint8_t ctap_make_credential_finish_at(AuthCredentialService *service,
     uint8_t authorized = ctap_client_pin_authorize(prepared->pin, &auth, prepared->rp_id_hash, prepared->client_data_hash,
         CTAP_PIN_PERMISSION_MC, now_ms, false);
     if (authorized != CTAP_STATUS_OK) return authorized;
-    if (prepared->credential_excluded) return CTAP_STATUS_CREDENTIAL_EXCLUDED;
+    if (prepared->credential_excluded) {
+        ctap_client_pin_invalidate(prepared->pin);
+        return CTAP_STATUS_CREDENTIAL_EXCLUDED;
+    }
     ctap_client_pin_invalidate(prepared->pin); /* Fresh UP consumes MC/GA and UV state. */
     if (prepared->hmac_secret_mc.requested) {
         uint8_t validated = ctap_hmac_secret_validate(service, &prepared->hmac_secret_mc);

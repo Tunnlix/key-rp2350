@@ -5,8 +5,8 @@
 #include "protocol/ctaphid_response.h"
 #include "ctap/ctap_entities.h"
 
-/* Bounded mock providers test ownership, atomic failures, privacy and channels;
- * genuine crypto/signatures are independently checked by python-fido2 tests. */
+/* Bounded mock providers test ownership, atomic failures, privacy and channels.
+ * Cryptographic primitive correctness belongs to the injected provider. */
 typedef struct {
     AuthCredential records[2]; bool used[2], keys[3];
     unsigned random_counter, generated, destroyed, signed_count;
@@ -59,6 +59,9 @@ static AuthStatus erase_resident(void *ctx,const uint8_t id[32],const uint8_t st
 { Pool *p=ctx;AuthStatus status=erase(ctx,id);if(status==AUTH_OK){memcpy(p->store_state,state,16U);}return status; }
 static AuthStatus update(void *ctx,const AuthCredential *in,const uint8_t state[16])
 { Pool *p=ctx;if(p->update_fails)return AUTH_IO_ERROR;int i=slot(p,in->credential_id);if(i<0)return AUTH_NOT_FOUND;
+  assert(memcmp(in->key.bytes,p->records[i].key.bytes,32U)==0 &&
+    in->cred_protect==p->records[i].cred_protect && in->signature_count==p->records[i].signature_count &&
+    in->creation_order==p->records[i].creation_order);
   memcpy(p->records[i].user_name,in->user_name,64U);p->records[i].user_name_length=in->user_name_length;
   memcpy(p->records[i].user_display_name,in->user_display_name,64U);p->records[i].user_display_name_length=in->user_display_name_length;
   memcpy(p->store_state,state,16U);return AUTH_OK; }
@@ -125,11 +128,15 @@ static void test_atomic_lifecycle_failures(void)
     f.pool.put_fails=false;AuthCredential replaced;assert(auth_credentials_create_resident(&f.service,&m,&replaced,pub)==AUTH_OK);
     assert(memcmp(replaced.credential_id,first.credential_id,32U)!=0&&f.pool.destroyed==2U&&replaced.creation_order==3U);
     m=metadata("example.com",3U,1U);unsigned generated=f.pool.generated;
+    m.user_name[0]=0xC0U;m.user_name_length=1U;
+    assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_INVALID_ARGUMENT&&f.pool.generated==generated);
+    m=metadata("example.com",3U,1U);
     assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_CAPACITY&&f.pool.generated==generated);
     f.pool.erase_fails=true;assert(auth_credentials_delete(&f.service,replaced.credential_id,replaced.rp_id_hash)==AUTH_IO_ERROR);
     assert(f.pool.destroyed==2U&&f.pool.used[0]);f.pool.erase_fails=false;
     f.pool.update_fails=true;replaced.user_name[0]='B';assert(auth_credentials_update_user(&f.service,&replaced)==AUTH_IO_ERROR);
     assert(f.pool.records[0].user_name[0]=='A');f.pool.update_fails=false;
+    replaced.cred_protect=1U;replaced.signature_count=77U;replaced.creation_order=99U;replaced.key.bytes[0]=0x99U;
     assert(auth_credentials_update_user(&f.service,&replaced)==AUTH_OK&&f.pool.records[0].user_name[0]=='B');
     f.pool.enumerate_fails=true;m=metadata("example.com",1U,1U);
     assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_IO_ERROR&&f.pool.generated==generated);

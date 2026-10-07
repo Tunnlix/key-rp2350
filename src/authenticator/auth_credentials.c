@@ -39,7 +39,7 @@ AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
     bool discoverable, uint8_t cred_protect, AuthCredential *credential, uint8_t public_key[65])
 {
     if (service == NULL || rp_id_hash == NULL || (user_id == NULL && user_id_length != 0U) || credential == NULL ||
-        public_key == NULL || user_id_length > AUTH_USER_ID_MAX_SIZE || cred_protect < 1U || cred_protect > 3U)
+        public_key == NULL || discoverable || user_id_length > AUTH_USER_ID_MAX_SIZE || cred_protect < 1U || cred_protect > 3U)
         return AUTH_INVALID_ARGUMENT;
     if (service->metadata_revision == UINT64_MAX) return AUTH_CAPACITY;
     size_t count;
@@ -172,6 +172,9 @@ AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *serv
         metadata->user_id_length > AUTH_USER_ID_MAX_SIZE || metadata->rp_id_length == 0U ||
         metadata->rp_id_length > AUTH_RP_ID_MAX_SIZE || metadata->rp_name_length > AUTH_ENTITY_NAME_MAX_SIZE ||
         metadata->user_name_length > AUTH_ENTITY_NAME_MAX_SIZE || metadata->user_display_name_length > AUTH_ENTITY_NAME_MAX_SIZE ||
+        !auth_text_valid(metadata->rp_id, metadata->rp_id_length) || !auth_text_valid(metadata->rp_name, metadata->rp_name_length) ||
+        !auth_text_valid(metadata->user_name, metadata->user_name_length) ||
+        !auth_text_valid(metadata->user_display_name, metadata->user_display_name_length) ||
         metadata->cred_protect < 1U || metadata->cred_protect > 3U || service->metadata_revision == UINT64_MAX)
         return AUTH_INVALID_ARGUMENT;
     AuthCredential old = {0}, found;
@@ -234,8 +237,14 @@ AuthStatus auth_credentials_update_user(AuthCredentialService *service, const Au
     if (status != AUTH_OK) return status;
     if (!old.discoverable || old.user_id_length != credential->user_id_length ||
         memcmp(old.user_id, credential->user_id, old.user_id_length) != 0) return AUTH_INVALID_ARGUMENT;
+    /* Only editable user names cross the mutation boundary. Preserve binding,
+     * key, policy, counter and creation order from the current stored record. */
+    memcpy(old.user_name, credential->user_name, sizeof old.user_name);
+    old.user_name_length = credential->user_name_length;
+    memcpy(old.user_display_name, credential->user_display_name, sizeof old.user_display_name);
+    old.user_display_name_length = credential->user_display_name_length;
     uint8_t state[16]; status = service->crypto.random(service->crypto.context, state, sizeof state);
-    if (status == AUTH_OK) status = service->storage.update_user(service->storage.context, credential, state);
+    if (status == AUTH_OK) status = service->storage.update_user(service->storage.context, &old, state);
     auth_secure_zero(state, sizeof state);
     if (status == AUTH_OK) ++service->metadata_revision;
     return status;

@@ -265,10 +265,11 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             uint8_t status = CTAP_STATUS_OPERATION_DENIED;
             size_t encoded_length = 0U;
             if (backend->make_credential.credential_excluded) {
-                CtapPinAuth auth = backend->make_credential.auth;
-                status = ctap_client_pin_authorize(backend->pin, &auth, backend->make_credential.rp_id_hash,
-                    backend->make_credential.client_data_hash, CTAP_PIN_PERMISSION_MC, now_ms, false);
-                if (status == CTAP_STATUS_OK) status = CTAP_STATUS_CREDENTIAL_EXCLUDED;
+                /* Authorization/exclusion was established before waiting.
+                 * §6.1.2 step 12 returns EXCLUDED even if that wait times out;
+                 * token expiry during the wait must not replace it with 0x33. */
+                status = CTAP_STATUS_CREDENTIAL_EXCLUDED;
+                ctap_client_pin_invalidate(backend->pin);
             }
             else if (presence == CTAP_PRESENCE_CONFIRMED) {
                 status = ctap_make_credential_finish_at(backend->credentials, &backend->make_credential,

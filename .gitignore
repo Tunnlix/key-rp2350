@@ -1,7 +1,7 @@
 # Executable and build directories
-/main
 /build/
 /out/
+# Ignored local tooling remnants are not dependencies of the portable build.
 /.venv/
 __pycache__/
 *.pyc

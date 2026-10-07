@@ -7,6 +7,11 @@ uint8_t ctap_pin_public_key_parse(const CborValue *map, uint8_t output[65])
 {
     if (map->major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     CborValue type, alg, curve, x, y;
+    CborValue optional;
+    /* Public key agreement allows alg but not the known optional COSE key
+     * parameters or a private scalar. Unknown future map keys are ignored. */
+    if (cbor_map_int(map, 2, &optional) || cbor_map_int(map, 4, &optional) ||
+        cbor_map_int(map, 5, &optional) || cbor_map_int(map, -4, &optional)) return CTAP_STATUS_INVALID_PARAMETER;
     if (!cbor_map_int(map, 1, &type) || !cbor_map_int(map, 3, &alg) || !cbor_map_int(map, -1, &curve) ||
         !cbor_map_int(map, -2, &x) || !cbor_map_int(map, -3, &y)) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (type.major != 0U || alg.major > 1U || curve.major != 0U || x.major != 2U || y.major != 2U)

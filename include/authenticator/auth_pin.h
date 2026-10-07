@@ -14,7 +14,7 @@ typedef struct {
     uint8_t code_points, retries;
 } AuthPinRecord;
 
-/* Serial, bounded callbacks. read returns a valid empty record for a new vault.
+/* Serial, bounded callbacks. read returns a valid empty record for new storage.
  * write atomically persists before returning OK; errors must never authorize
  * work. No native struct serialization. Application factory reset must erase
  * this record together with credentials/keys in its combined reset callback. */

@@ -6,7 +6,7 @@
 #include "authenticator/auth_credentials.h"
 
 /* These mocks test policy/ownership and rollback, not elliptic-curve math.
- * Python integration independently verifies real Windows-provider signatures. */
+ * Target providers require separate known-answer primitive validation. */
 typedef struct {
     AuthCredential record;
     bool exists, sign_fails, generate_fails, insert_fails, hash_fails, erase_fails;

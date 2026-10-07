@@ -8,8 +8,8 @@
 #define CTAP_GET_INFO_MAX_CBOR_SIZE 256U
 
 /* Device metadata supplied by the application. AAGUID is stable per model;
- * the host development harness uses all zeroes until a production identity is
- * assigned. max_message_size includes the CTAP command byte and its CBOR data. */
+ * the application supplies its model identity. max_message_size includes the
+ * CTAP command byte and its CBOR data. */
 typedef struct {
     uint8_t aaguid[16];
     uint32_t max_message_size;

@@ -52,6 +52,12 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
     if (status != CTAP_STATUS_OK) return status;
     if (!present[2]) return CTAP_STATUS_MISSING_PARAMETER;
     if (fields[2].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    /* Known optional members retain their declared types even on subcommands
+     * that do not use their values. Unknown members remain ignored (§8). */
+    if ((present[3] && fields[3].major != 5U) ||
+        (present[4] && fields[4].major != 2U) || (present[5] && fields[5].major != 2U) ||
+        (present[6] && fields[6].major != 2U) || (present[9] && fields[9].major != 0U) ||
+        (present[10] && fields[10].major != 3U)) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     uint64_t command = fields[2].value;
     if ((command < 1U || command > 4U) && command != 9U) return CTAP_STATUS_INVALID_SUBCOMMAND;
     if (present[1] && fields[1].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
@@ -75,7 +81,6 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
             memcpy(prepared.rp_id, fields[10].data, prepared.rp_length);
         }
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (fields[3].value != 5U) return CTAP_STATUS_INVALID_PARAMETER;
         status = ctap_pin_public_key_parse(&fields[3], prepared.peer);
         if (status != CTAP_STATUS_OK) return status;
         memcpy(prepared.pin_hash_enc, fields[6].data, 32U);
@@ -90,7 +95,6 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
         /* ClientPIN COSE keys cannot include optional parameters other than alg. */
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (fields[3].value != 5U) return CTAP_STATUS_INVALID_PARAMETER;
         status = ctap_pin_public_key_parse(&fields[3], prepared.peer);
         if (status != CTAP_STATUS_OK) return status;
         memcpy(prepared.new_pin_enc, fields[5].data, 80U);

@@ -5,7 +5,7 @@
 #include "authenticator/auth_es256.h"
 
 /* Fake primitive callbacks test orchestration only; real ECDSA is verified by
- * Python against the Windows provider in the separate PC integration suite. */
+ * Known-answer primitive validation belongs to the injected crypto provider. */
 typedef struct {
     AuthCredential record;
     bool exists, erase_fails, zero_random;
@@ -60,9 +60,10 @@ static void test_creation_failure_and_collision(void)
     assert(mock.generated == 1U && mock.destroyed == 1U && !mock.exists);
     assert(memcmp(&output, &saved, sizeof output) == 0);
     mock.insert_status = AUTH_OK;
-    assert(auth_credentials_create(&service, rp, user, sizeof user, true, &output, public_key) == AUTH_OK);
+    assert(auth_credentials_create(&service, rp, user, sizeof user, true, &output, public_key) == AUTH_INVALID_ARGUMENT);
+    assert(auth_credentials_create(&service, rp, user, sizeof user, false, &output, public_key) == AUTH_OK);
     assert(auth_credential_valid(&output));
-    assert(output.user_id_length == 3U && output.signature_count == 0U && output.discoverable);
+    assert(output.user_id_length == 3U && output.signature_count == 0U && !output.discoverable);
     size_t generated = mock.generated;
     assert(auth_credentials_create(&service, rp, user, sizeof user, false, &saved, public_key) == AUTH_CRYPTO_ERROR);
     assert(mock.generated == generated); /* Eight ID collisions never create a key. */

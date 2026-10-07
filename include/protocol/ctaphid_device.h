@@ -48,7 +48,7 @@ typedef void (*CtaphidStartCbor)(void *context, uint64_t operation_id,
     const uint8_t *request, size_t request_length);
 typedef void (*CtaphidAbortCbor)(void *context, uint64_t operation_id);
 
-/* Platform action: PC logging or embedded LED indication. Return promptly;
+/* Platform action: device identification indication. Return promptly;
  * schedule any animation separately. WINK is advertised only when this is set. */
 typedef void (*CtaphidWinkAction)(void *context, uint32_t channel_id);
 

@@ -11,7 +11,7 @@
 #include "auth_test_provider.h"
 
 /* Deterministic primitive mocks verify orchestration, not cryptographic math.
- * Real ECDH/HKDF/HMAC/AES are exercised by python-fido2 integration tests. */
+ * Validate the injected provider's real ECDH/HMAC/AES separately on the target. */
 typedef struct {
     bool bad_peer, agreement_fails, hmac_fails, decrypt_fails, encrypt_fails, credential_fails, legacy;
     size_t agreements, macs, decrypts, encrypts, evaluations;

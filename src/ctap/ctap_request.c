@@ -10,8 +10,9 @@ uint8_t ctap_request_map(const uint8_t *input, size_t length, size_t field_count
     const uint8_t *cursor = map.data, *end = map.encoded + map.encoded_length;
     for (uint64_t i = 0; i < map.value; ++i) {
         if (!cbor_read_next(&cursor, end, &key) || !cbor_read_next(&cursor, end, &value)) return CTAP_STATUS_INVALID_CBOR;
-        if (key.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (key.value < field_count) { fields[key.value] = value; present[key.value] = true; }
+        /* Section 8 requires unknown map keys to be ignored, including keys
+         * outside this command's unsigned-integer parameter namespace. */
+        if (key.major == 0U && key.value < field_count) { fields[key.value] = value; present[key.value] = true; }
     }
     return CTAP_STATUS_OK;
 }
@@ -23,7 +24,8 @@ uint8_t ctap_request_text_map(const CborValue *map)
     CborValue key, value;
     for (uint64_t i = 0; i < map->value; ++i) {
         if (!cbor_read_next(&cursor, end, &key) || !cbor_read_next(&cursor, end, &value)) return CTAP_STATUS_INVALID_CBOR;
-        if (key.major != 3U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        /* Known entity/option names are matched by cbor_map_text. Other key
+         * types cannot alias them and must not prevent forward compatibility. */
     }
     return CTAP_STATUS_OK;
 }
