@@ -18,6 +18,10 @@ typedef struct {
  * Crypto authentication/decryption/evaluation is deferred until fresh UP. */
 uint8_t ctap_hmac_secret_parse(const CborValue *input, CtapHmacSecret *request);
 
+/* After UP, validate encrypted salts before creating/replacing a credential.
+ * Transient shared keys and decrypted salts are erased before returning. */
+uint8_t ctap_hmac_secret_validate(AuthCredentialService *service, const CtapHmacSecret *request);
+
 /* Caller establishes fresh UP and passes an RP-bound credential. Return the
  * encrypted one/two HMAC outputs, or length=0 for a legacy key without secrets.
  * Failure leaves output/length untouched. Transient Z, shared keys, salts and

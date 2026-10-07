@@ -21,6 +21,7 @@ bool cbor_write_uint(CborWriter *writer, uint64_t value);
 bool cbor_write_int(CborWriter *writer, int64_t value);
 bool cbor_write_bytes(CborWriter *writer, const uint8_t *data, size_t length);
 bool cbor_write_text(CborWriter *writer, const char *text);
+bool cbor_write_text_bytes(CborWriter *writer, const uint8_t *text, size_t length);
 bool cbor_write_bool(CborWriter *writer, bool value);
 bool cbor_write_array(CborWriter *writer, size_t count);
 bool cbor_write_map(CborWriter *writer, size_t count);

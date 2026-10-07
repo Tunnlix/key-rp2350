@@ -62,6 +62,9 @@ typedef struct {
     void *cbor_context;
     CtaphidWinkAction wink_action;
     void *wink_context;
+    /* Valid allocated-CID INIT, including while idle. Clear channel-bound
+     * continuation state; uses cbor_context and must not reenter the device. */
+    void (*resync_channel)(void *context, uint32_t cid);
 } CtaphidDeviceConfig;
 
 typedef struct {

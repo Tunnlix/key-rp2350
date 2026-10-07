@@ -82,7 +82,7 @@ static AuthStatus counter(void *ctx, const uint8_t id[32], uint32_t old, uint32_
 static void service_init(AuthCredentialService *service, Store *store)
 {
     AuthCrypto crypto = {store, random_bytes, hash, generate, public_key, sign, destroy};
-    AuthStorage storage = {store, 1U, read_record, insert, erase, find, count, counter};
+    AuthStorage storage = {store, 1U, read_record, insert, erase, find, count, counter, NULL, NULL, NULL, NULL};
     assert(auth_credentials_init(service, &crypto, &storage));
 }
 

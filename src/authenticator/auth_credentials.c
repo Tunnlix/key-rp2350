@@ -13,6 +13,7 @@ bool auth_credentials_init(AuthCredentialService *service,
     service->crypto = *crypto;
     service->storage = *storage;
     memset(&service->secrets, 0, sizeof service->secrets);
+    service->metadata_revision = 0U;
     return true;
 }
 
@@ -40,6 +41,7 @@ AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
     if (service == NULL || rp_id_hash == NULL || (user_id == NULL && user_id_length != 0U) || credential == NULL ||
         public_key == NULL || user_id_length > AUTH_USER_ID_MAX_SIZE || cred_protect < 1U || cred_protect > 3U)
         return AUTH_INVALID_ARGUMENT;
+    if (service->metadata_revision == UINT64_MAX) return AUTH_CAPACITY;
     size_t count;
     AuthStatus status = service->storage.count(service->storage.context, &count);
     if (status != AUTH_OK) return status;
@@ -77,6 +79,7 @@ AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
         return cleanup == AUTH_OK ? status : AUTH_IO_ERROR;
     }
     *credential = created;
+    ++service->metadata_revision;
     memcpy(public_key, generated_public, 65U);
     return AUTH_OK;
 }
@@ -126,7 +129,114 @@ AuthStatus auth_credentials_delete(AuthCredentialService *service,
     AuthCredential credential;
     AuthStatus status = auth_credentials_get(service, id, rp_hash, &credential);
     if (status != AUTH_OK) return status;
-    status = service->storage.erase(service->storage.context, id);
+    if (service->metadata_revision == UINT64_MAX) return AUTH_CAPACITY;
+    if (credential.discoverable && service->storage.erase_resident != NULL) {
+        uint8_t state[16];
+        status = service->crypto.random(service->crypto.context, state, sizeof state);
+        if (status == AUTH_OK) status = service->storage.erase_resident(service->storage.context, id, state);
+        auth_secure_zero(state, sizeof state);
+    } else status = service->storage.erase(service->storage.context, id);
     if (status != AUTH_OK) return status;
+    ++service->metadata_revision;
     return service->crypto.destroy_key(service->crypto.context, &credential.key);
+}
+
+bool auth_credentials_resident_supported(const AuthCredentialService *service)
+{
+    return service != NULL && service->storage.capacity > 0U && service->storage.capacity <= AUTH_RESIDENT_MAX_COUNT &&
+        service->storage.enumerate != NULL && service->storage.put_resident != NULL &&
+        service->storage.erase_resident != NULL && service->storage.update_user != NULL;
+}
+
+AuthStatus auth_credentials_enumerate(AuthCredentialService *service, size_t index, AuthCredential *credential)
+{
+    if (service == NULL || credential == NULL || service->storage.enumerate == NULL) return AUTH_INVALID_ARGUMENT;
+    AuthCredential found;
+    AuthStatus status = service->storage.enumerate(service->storage.context, index, &found);
+    if (status != AUTH_OK) return status;
+    if (!auth_credential_valid(&found)) return AUTH_BAD_DATA;
+    *credential = found; return AUTH_OK;
+}
+
+AuthStatus auth_credentials_create_resident(AuthCredentialService *service,
+    const AuthCredential *metadata, AuthCredential *credential, uint8_t public_key[65])
+{
+    return auth_credentials_create_resident_prepared(service, metadata, NULL, NULL, credential, public_key);
+}
+
+AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *service,
+    const AuthCredential *metadata, AuthCredentialPrepare prepare, void *context,
+    AuthCredential *credential, uint8_t public_key[65])
+{
+    if (!auth_credentials_resident_supported(service) || metadata == NULL || credential == NULL || public_key == NULL ||
+        metadata->user_id_length > AUTH_USER_ID_MAX_SIZE || metadata->rp_id_length == 0U ||
+        metadata->rp_id_length > AUTH_RP_ID_MAX_SIZE || metadata->rp_name_length > AUTH_ENTITY_NAME_MAX_SIZE ||
+        metadata->user_name_length > AUTH_ENTITY_NAME_MAX_SIZE || metadata->user_display_name_length > AUTH_ENTITY_NAME_MAX_SIZE ||
+        metadata->cred_protect < 1U || metadata->cred_protect > 3U || service->metadata_revision == UINT64_MAX)
+        return AUTH_INVALID_ARGUMENT;
+    AuthCredential old = {0}, found;
+    bool replacing = false; uint64_t newest = 0U;
+    size_t total = 0U;
+    for (; total < service->storage.capacity; ++total) {
+        AuthStatus status = auth_credentials_enumerate(service, total, &found);
+        if (status == AUTH_NOT_FOUND) break;
+        if (status != AUTH_OK) return status;
+        if (found.creation_order > newest) newest = found.creation_order;
+        if (found.discoverable && memcmp(found.rp_id_hash, metadata->rp_id_hash, 32U) == 0 &&
+            found.user_id_length == metadata->user_id_length && memcmp(found.user_id, metadata->user_id, found.user_id_length) == 0) {
+            if (replacing) return AUTH_BAD_DATA;
+            old = found; replacing = true;
+        }
+    }
+    if (total == service->storage.capacity && !replacing) return AUTH_CAPACITY;
+    if (newest == UINT64_MAX) return AUTH_CAPACITY;
+    AuthCredential created = *metadata;
+    created.key = (AuthKeyHandle){0}; memset(created.credential_id, 0, 32U);
+    created.algorithm = AUTH_COSE_ALG_ES256; created.signature_count = 0U;
+    created.discoverable = true; created.creation_order = newest + 1U;
+    bool unique = false;
+    for (unsigned i = 0U; i < 8U; ++i) {
+        AuthStatus status = service->crypto.random(service->crypto.context, created.credential_id, 32U);
+        if (status != AUTH_OK) return status;
+        uint8_t nonzero = 0U; for (size_t j = 0U; j < 32U; ++j) nonzero |= created.credential_id[j];
+        status = service->storage.read(service->storage.context, created.credential_id, &found);
+        if (status == AUTH_NOT_FOUND && nonzero != 0U) { unique = true; break; }
+        if (status != AUTH_OK && status != AUTH_NOT_FOUND) return status;
+    }
+    if (!unique) return AUTH_CRYPTO_ERROR;
+    uint8_t state[16], generated[65];
+    AuthStatus status = service->crypto.random(service->crypto.context, state, sizeof state);
+    if (status != AUTH_OK) return status;
+    status = service->crypto.generate_p256(service->crypto.context, &created.key, generated);
+    if (status != AUTH_OK) return status;
+    if (!auth_key_handle_valid(&created.key) || generated[0] != 4U) {
+        (void)service->crypto.destroy_key(service->crypto.context, &created.key); return AUTH_BAD_DATA;
+    }
+    if (prepare != NULL) status = prepare(context, &created, generated);
+    if (status == AUTH_OK)
+        status = service->storage.put_resident(service->storage.context, replacing ? old.credential_id : NULL, &created, state);
+    auth_secure_zero(state, sizeof state);
+    if (status != AUTH_OK) {
+        AuthStatus cleanup = service->crypto.destroy_key(service->crypto.context, &created.key);
+        return cleanup == AUTH_OK ? status : AUTH_IO_ERROR;
+    }
+    ++service->metadata_revision;
+    if (replacing && service->crypto.destroy_key(service->crypto.context, &old.key) != AUTH_OK) return AUTH_IO_ERROR;
+    *credential = created; memcpy(public_key, generated, 65U); return AUTH_OK;
+}
+
+AuthStatus auth_credentials_update_user(AuthCredentialService *service, const AuthCredential *credential)
+{
+    if (!auth_credentials_resident_supported(service) || !auth_credential_valid(credential) || !credential->discoverable ||
+        service->metadata_revision == UINT64_MAX) return AUTH_INVALID_ARGUMENT;
+    AuthCredential old;
+    AuthStatus status = auth_credentials_get(service, credential->credential_id, credential->rp_id_hash, &old);
+    if (status != AUTH_OK) return status;
+    if (!old.discoverable || old.user_id_length != credential->user_id_length ||
+        memcmp(old.user_id, credential->user_id, old.user_id_length) != 0) return AUTH_INVALID_ARGUMENT;
+    uint8_t state[16]; status = service->crypto.random(service->crypto.context, state, sizeof state);
+    if (status == AUTH_OK) status = service->storage.update_user(service->storage.context, credential, state);
+    auth_secure_zero(state, sizeof state);
+    if (status == AUTH_OK) ++service->metadata_revision;
+    return status;
 }

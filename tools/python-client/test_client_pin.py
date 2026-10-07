@@ -101,7 +101,7 @@ class PortablePinPeer:
     def call(self, command, data, event=None, on_keepalive=None):
         if command != CTAPHID.CBOR:
             raise ValueError("Portable peer accepts CBOR only")
-        output = (ctypes.c_ubyte * 513)()
+        output = (ctypes.c_ubyte * 1025)()
         length = self.lib.pin_test_call(data, len(data), output)
         if self.errors:
             raise RuntimeError(f"Test crypto callback failed: {self.errors}")
@@ -248,7 +248,7 @@ class PinCases:
 
     def test_token_permission_validation_before_pin_retries(self):
         self.set_pin("1234")
-        self.assert_error(0x40, lambda: self.token(4))
+        self.assert_error(0x40, lambda: self.token(8))
         self.assert_error(0x14, lambda: self.token(1, None))
         self.assert_error(2, lambda: self.token(0))
         self.assertEqual(self.retries(), (8, False))
@@ -429,14 +429,14 @@ class WindowsClientPinTests(PinCases, unittest.TestCase):
         self.power_on()
         self.change_pin("portable-pin-1234", "5678")
         encrypted = (self.directory / "credentials.vault").read_bytes()
-        self.assertEqual(encrypted[:8], b"APCV\0\0\0\4")
+        self.assertEqual(encrypted[:8], b"APCV\0\0\0\5")
         self.assertNotIn(b"5678", encrypted)
         self.assertNotIn(hashlib.sha256(b"5678").digest()[:16], encrypted)
 
-    def test_v1_v2_v3_vaults_upgrade_without_changing_pin_state(self):
+    def test_v1_to_v4_vaults_upgrade_without_changing_pin_state(self):
         from test_hmac_secret import rewrite_as_legacy_vault
 
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             self.factory_reset()
             self.peer.close()
             self.peer = None
@@ -445,7 +445,7 @@ class WindowsClientPinTests(PinCases, unittest.TestCase):
             self.power_on()
             self.assertEqual(self.retries(), (8, False))
             self.set_pin("1234")
-            self.assertEqual(path.read_bytes()[:8], b"APCV\0\0\0\4")
+            self.assertEqual(path.read_bytes()[:8], b"APCV\0\0\0\5")
             self.power_on()
             self.change_pin("1234", "5678")
 

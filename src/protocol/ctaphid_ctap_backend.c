@@ -13,6 +13,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.make_credential = false; /* Only binding enables this claim. */
     backend->profile.hmac_secret = false;
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
+    backend->profile.resident_credentials = false;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
     return true;
 }
@@ -45,6 +46,7 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
     backend->pin = pin;
     backend->profile.pin_uv_auth = true;
     backend->profile.pin_set = pin->pin_set;
+    backend->profile.resident_credentials = auth_credentials_resident_supported(backend->credentials);
     return true;
 }
 
@@ -52,6 +54,11 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     const uint8_t *request, size_t request_length)
 {
     CtaphidCtapBackend *backend = context;
+    bool next = request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_GET_NEXT_ASSERTION;
+    bool management = request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_CREDENTIAL_MANAGEMENT;
+    if (!next) ctap_assertion_sequence_clear(&backend->assertion_sequence);
+    if (!management) ctap_credential_management_clear(&backend->management);
+    backend->awaiting_next_assertion = backend->awaiting_management = false;
     backend->operation_id = operation_id;
     backend->presence_started = false;
     backend->awaiting_pin = false;
@@ -64,6 +71,18 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     memset(&backend->make_credential, 0, sizeof backend->make_credential);
     backend->awaiting_get_assertion = false;
     memset(&backend->get_assertion, 0, sizeof backend->get_assertion);
+    if ((next || management) && backend->profile.resident_credentials) {
+        backend->awaiting_presence = backend->awaiting_reset = backend->reset_authorized = false;
+        if ((next && request_length != 1U) || request_length - 1U > sizeof backend->credential_request) {
+            backend->response[0] = CTAP_STATUS_INVALID_LENGTH; backend->response_length = 1U;
+            ctap_assertion_sequence_clear(&backend->assertion_sequence); ctap_credential_management_clear(&backend->management);
+        } else {
+            backend->awaiting_next_assertion = next; backend->awaiting_management = management;
+            memcpy(backend->credential_request, request + 1U, request_length - 1U);
+            backend->credential_request_length = request_length - 1U; backend->response_length = 0U;
+        }
+        backend->pending = true; return;
+    }
     if (request != NULL && request_length == 1U && request[0] == CTAP_COMMAND_GET_INFO && backend->pin != NULL) {
         backend->awaiting_get_info = true;
         backend->awaiting_presence = backend->awaiting_reset = backend->reset_authorized = false;
@@ -143,6 +162,8 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id)
     CtaphidCtapBackend *backend = context;
     if (backend->pending && backend->operation_id == operation_id) {
         backend->pending = false;
+        backend->awaiting_next_assertion = backend->awaiting_management = false;
+        ctap_assertion_sequence_clear(&backend->assertion_sequence); ctap_credential_management_clear(&backend->management);
         backend->awaiting_pin = false;
         backend->awaiting_get_info = false;
         backend->awaiting_credential_prepare = false;
@@ -167,6 +188,10 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
 {
     if (backend == NULL || device == NULL) return CTAPHID_DEVICE_INVALID_ARGUMENT;
     ctap_client_pin_poll(backend->pin, now_ms);
+    if (backend->assertion_sequence.active && (uint32_t)(now_ms - backend->assertion_sequence.last_call_ms) > 30000U)
+        ctap_assertion_sequence_clear(&backend->assertion_sequence);
+    if (backend->management.kind != 0U && (uint32_t)(now_ms - backend->management.last_call_ms) > 30000U)
+        ctap_credential_management_clear(&backend->management);
     if (!backend->pending) {
         ctap_reset_poll(&backend->reset, now_ms);
         return CTAPHID_DEVICE_OK;
@@ -268,6 +293,28 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             backend->response + 1U, sizeof backend->response - 1U, &encoded_length, now_ms);
         backend->response[0] = status;
         backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+        if (status == CTAP_STATUS_OK) {
+            ctap_assertion_sequence_begin(&backend->assertion_sequence, &backend->get_assertion, now_ms);
+            backend->assertion_cid = device->active_channel_id;
+        }
+    }
+    if (backend->awaiting_next_assertion || backend->awaiting_management) {
+        size_t encoded_length = 0U; uint8_t status;
+        if (backend->awaiting_next_assertion) {
+            if (backend->assertion_cid != device->active_channel_id) {
+                ctap_assertion_sequence_clear(&backend->assertion_sequence); status = CTAP_STATUS_NOT_ALLOWED;
+            } else status = ctap_get_next_assertion(backend->credentials, &backend->assertion_sequence,
+                backend->response + 1U, sizeof backend->response - 1U, &encoded_length, now_ms);
+        } else {
+            if (backend->management.kind != 0U && backend->management_cid != device->active_channel_id)
+                ctap_credential_management_clear(&backend->management);
+            status = ctap_credential_management_execute(backend->credentials, backend->pin, &backend->management,
+                backend->credential_request, backend->credential_request_length, backend->response + 1U,
+                sizeof backend->response - 1U, &encoded_length, now_ms);
+            backend->management_cid = device->active_channel_id;
+        }
+        backend->response[0] = status; backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
+        auth_secure_zero(backend->credential_request, sizeof backend->credential_request); backend->credential_request_length = 0U;
     }
     if (backend->awaiting_get_info) {
         uint8_t status = ctap_client_pin_status(backend->pin, &backend->profile.pin_set);
@@ -280,6 +327,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     CtaphidDeviceResult result = ctaphid_device_complete_cbor(device, backend->operation_id,
         backend->response, backend->response_length);
     backend->pending = false;
+    backend->awaiting_next_assertion = backend->awaiting_management = false;
     backend->awaiting_pin = false;
     backend->awaiting_get_info = false;
     auth_secure_zero(&backend->pin_request, sizeof backend->pin_request);
@@ -301,4 +349,12 @@ bool ctaphid_ctap_backend_signal_presence(CtaphidCtapBackend *backend,
 {
     return backend != NULL && backend->pending && backend->awaiting_presence &&
         ctap_user_presence_signal(&backend->presence, operation_id, confirmed, now_ms);
+}
+
+void ctaphid_ctap_backend_resync(void *context, uint32_t cid)
+{
+    CtaphidCtapBackend *backend = context;
+    if (backend == NULL) return;
+    if (backend->assertion_cid == cid) ctap_assertion_sequence_clear(&backend->assertion_sequence);
+    if (backend->management_cid == cid) ctap_credential_management_clear(&backend->management);
 }

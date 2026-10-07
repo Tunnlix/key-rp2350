@@ -6,6 +6,7 @@
 #include "ctap/ctap_pin_protocol.h"
 #include "ctap/ctap_make_credential.h"
 #include "ctap/ctap_get_assertion.h"
+#include "ctap/ctap_credential_management.h"
 #include <string.h>
 #ifdef _WIN32
 #define PIN_TEST_API __declspec(dllexport)
@@ -21,6 +22,8 @@ static AuthPinRecord record;
 static uint32_t now_ms;
 static AuthCredential records[8];
 static bool used[8];
+static CtapAssertionSequence sequence;
+static CtapCredentialManagement management;
 
 static AuthStatus random_bytes(void *ctx, uint8_t *out, size_t n)
 { (void)ctx; return (AuthStatus)primitive(0U, NULL, 0U, NULL, 0U, out, n); }
@@ -110,12 +113,39 @@ static AuthStatus counter(void *ctx, const uint8_t id[32], uint32_t expected, ui
     }
     return AUTH_NOT_FOUND;
 }
+static AuthStatus enumerate(void *ctx, size_t index, AuthCredential *out)
+{
+    (void)ctx;
+    for (size_t i = 0U; i < 8U; ++i) if (used[i] && index-- == 0U) { *out = records[i]; return AUTH_OK; }
+    return AUTH_NOT_FOUND;
+}
+static AuthStatus put_resident(void *ctx, const uint8_t *old_id, const AuthCredential *in, const uint8_t state[16])
+{
+    (void)state;
+    if (old_id != NULL) for (size_t i = 0U; i < 8U; ++i)
+        if (used[i] && memcmp(records[i].credential_id, old_id, 32U) == 0) { records[i] = *in; return AUTH_OK; }
+    if (old_id != NULL) return AUTH_NOT_FOUND;
+    return insert(ctx, in);
+}
+static AuthStatus erase_resident(void *ctx, const uint8_t id[32], const uint8_t state[16])
+{ (void)state; return erase(ctx, id); }
+static AuthStatus update_user(void *ctx, const AuthCredential *in, const uint8_t state[16])
+{
+    (void)ctx; (void)state;
+    for (size_t i = 0U; i < 8U; ++i) if (used[i] && memcmp(records[i].credential_id, in->credential_id, 32U) == 0) {
+        memcpy(records[i].user_name, in->user_name, 64U); records[i].user_name_length = in->user_name_length;
+        memcpy(records[i].user_display_name, in->user_display_name, 64U);
+        records[i].user_display_name_length = in->user_display_name_length; return AUTH_OK;
+    }
+    return AUTH_NOT_FOUND;
+}
 static AuthStatus read_pin(void *ctx, AuthPinRecord *out)
 { (void)ctx; *out = record; return AUTH_OK; }
 static AuthStatus write_pin(void *ctx, const AuthPinRecord *in)
 { (void)ctx; record = *in; return AUTH_OK; }
 PIN_TEST_API int pin_test_power_on(void)
 {
+    ctap_assertion_sequence_clear(&sequence); ctap_credential_management_clear(&management);
     AuthPinStorage storage = {NULL, read_pin, write_pin};
     return regenerate(NULL) == AUTH_OK && ctap_client_pin_init(&pin, &service, &storage);
 }
@@ -123,7 +153,8 @@ PIN_TEST_API int pin_test_init(Primitive callback)
 {
     primitive = callback; memset(&service, 0, sizeof service);
     service.crypto = (AuthCrypto){NULL, random_bytes, hash, generate_key, credential_public, sign, destroy};
-    service.storage = (AuthStorage){NULL, 8U, read_credential, insert, erase, find_rp, count, counter};
+    service.storage = (AuthStorage){NULL, 8U, read_credential, insert, erase, find_rp, count, counter,
+        enumerate, put_resident, erase_resident, update_user};
     service.secrets = (AuthSecretCrypto){NULL, public_key, ecdh, hmac, aes, supported, credential_hmac, regenerate};
     record = (AuthPinRecord){0}; record.retries = 8U;
     memset(used, 0, sizeof used); auth_secure_zero(records, sizeof records); now_ms = 0U;
@@ -134,13 +165,26 @@ PIN_TEST_API int pin_test_reset(void)
     if (regenerate(NULL) != AUTH_OK) return 0;
     if (primitive(13U, NULL, 0U, NULL, 0U, NULL, 0U) != AUTH_OK) return 0;
     memset(used, 0, sizeof used); auth_secure_zero(records, sizeof records);
+    ctap_assertion_sequence_clear(&sequence); ctap_credential_management_clear(&management); ++service.metadata_revision;
     auth_secure_zero(&record, sizeof record); record.retries = 8U;
     ctap_client_pin_reset_state(&pin); return !pin.faulted;
 }
-PIN_TEST_API size_t pin_test_call(const uint8_t *input, size_t n, uint8_t output[513])
+PIN_TEST_API size_t pin_test_call(const uint8_t *input, size_t n, uint8_t output[1025])
 {
     if (n == 0U) { output[0] = CTAP_STATUS_INVALID_LENGTH; return 1U; }
     size_t length = 0U;
+    if (input[0] != CTAP_COMMAND_GET_NEXT_ASSERTION) ctap_assertion_sequence_clear(&sequence);
+    if (input[0] != CTAP_COMMAND_CREDENTIAL_MANAGEMENT) ctap_credential_management_clear(&management);
+    if (input[0] == CTAP_COMMAND_GET_NEXT_ASSERTION || input[0] == CTAP_COMMAND_CREDENTIAL_MANAGEMENT) {
+        uint8_t status;
+        if (input[0] == CTAP_COMMAND_GET_NEXT_ASSERTION) {
+            if (n != 1U) { ctap_assertion_sequence_clear(&sequence); status = CTAP_STATUS_INVALID_LENGTH; }
+            else status = ctap_get_next_assertion(&service, &sequence, output + 1U, 1024U, &length, now_ms);
+        }
+        else status = ctap_credential_management_execute(&service, &pin, &management, input + 1U, n - 1U,
+            output + 1U, 1024U, &length, now_ms);
+        output[0] = status; return status == CTAP_STATUS_OK ? 1U + length : 1U;
+    }
     if (input[0] == CTAP_COMMAND_CLIENT_PIN) {
         CtapClientPinRequest request;
         uint8_t status = ctap_client_pin_prepare(input + 1U, n - 1U, &request);
@@ -153,18 +197,20 @@ PIN_TEST_API size_t pin_test_call(const uint8_t *input, size_t n, uint8_t output
         if (input[0] == CTAP_COMMAND_MAKE_CREDENTIAL) {
             CtapMakeCredential prepared; uint8_t aaguid[16] = {0};
             status = ctap_make_credential_prepare_with_pin(&service, &pin, now_ms, input + 1U, n - 1U, &prepared);
-            if (status == CTAP_STATUS_OK) status = ctap_make_credential_finish_at(&service, &prepared, aaguid, output + 1U, 512U, &length, now_ms);
+            if (status == CTAP_STATUS_OK) status = ctap_make_credential_finish_at(&service, &prepared, aaguid, output + 1U, 1024U, &length, now_ms);
         } else {
             CtapGetAssertion prepared;
             status = ctap_get_assertion_prepare_with_pin(&service, &pin, now_ms, input + 1U, n - 1U, &prepared);
-            if (status == CTAP_STATUS_OK) status = ctap_get_assertion_finish_at(&service, &prepared, output + 1U, 512U, &length, now_ms);
+            if (status == CTAP_STATUS_OK) status = ctap_get_assertion_finish_at(&service, &prepared, output + 1U, 1024U, &length, now_ms);
+            if (status == CTAP_STATUS_OK) ctap_assertion_sequence_begin(&sequence, &prepared, now_ms);
         }
         output[0] = status; return status == CTAP_STATUS_OK ? 1U + length : 1U;
     }
     CtapGetInfoProfile profile = {0}; profile.max_message_size = 1024U; profile.user_presence = true;
     profile.hmac_secret = profile.make_credential = profile.pin_uv_auth = true;
+    profile.resident_credentials = true;
     if (ctap_client_pin_status(&pin, &profile.pin_set) != CTAP_STATUS_OK) { output[0] = CTAP_STATUS_OTHER; return 1U; }
-    if (ctap_execute(&profile, input, n, output, 513U, &length) != CTAP_EXECUTION_RESPONSE_READY) {
+    if (ctap_execute(&profile, input, n, output, 1025U, &length) != CTAP_EXECUTION_RESPONSE_READY) {
         output[0] = CTAP_STATUS_OTHER; return 1U;
     }
     return length;

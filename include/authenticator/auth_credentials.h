@@ -5,7 +5,10 @@
 #include "authenticator/auth_secret_crypto.h"
 
 /* Pure core composition; no files, OS, heap, or private-key access. */
-typedef struct { AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets; } AuthCredentialService;
+typedef struct {
+    AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets;
+    uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
+} AuthCredentialService;
 
 bool auth_credentials_init(AuthCredentialService *service,
     const AuthCrypto *crypto, const AuthStorage *storage);
@@ -29,6 +32,25 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
 AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, uint8_t cred_protect, AuthCredential *credential, uint8_t public_key[65]);
+bool auth_credentials_resident_supported(const AuthCredentialService *service);
+/* Metadata template contains only RP/user fields and policy. Replaces a
+ * discoverable credential for the same RP hash and user ID atomically, retaining
+ * the old credential on any pre-commit failure. Cleanup failure returns IO_ERROR.
+ * Never publishes a successful CTAP reply on cleanup failure. */
+AuthStatus auth_credentials_create_resident(AuthCredentialService *service,
+    const AuthCredential *metadata, AuthCredential *credential, uint8_t public_key[65]);
+/* Run preparation against the new, provider-owned key BEFORE committing metadata
+ * or deleting the old key. The callback must not mutate credential storage and
+ * must not publish its response until this function succeeds. A callback failure
+ * destroys only the staged key. No private-key export is involved. */
+typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential *credential,
+    const uint8_t public_key[65]);
+AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *service,
+    const AuthCredential *metadata, AuthCredentialPrepare prepare, void *context,
+    AuthCredential *credential, uint8_t public_key[65]);
+AuthStatus auth_credentials_enumerate(AuthCredentialService *service, size_t index, AuthCredential *credential);
+AuthStatus auth_credentials_update_user(AuthCredentialService *service,
+    const AuthCredential *credential);
 
 /* RP binding is checked before returning metadata or signing. This does not
  * establish UP/UV itself: the future CTAP handler must authorize the operation. */

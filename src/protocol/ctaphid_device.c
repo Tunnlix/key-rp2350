@@ -263,6 +263,9 @@ static uint8_t dispatch_error(CtaphidDispatchResult result)
 
 static CtaphidDeviceResult process_request(CtaphidDevice *device, uint32_t now_ms)
 {
+    if (device->reassembler.command == CTAPHID_COMMAND_INIT && device->reassembler.received_length == 8U &&
+        device->active_channel_id != CTAPHID_BROADCAST_CHANNEL_ID && device->config.resync_channel != NULL)
+        device->config.resync_channel(device->config.cbor_context, device->active_channel_id);
     if (device->reassembler.command == CTAPHID_COMMAND_CBOR &&
         device->reassembler.received_length != 0U && device->config.start_cbor != NULL) {
         device->cbor_running = true;

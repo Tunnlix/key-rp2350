@@ -91,6 +91,7 @@ int main(int argc, char **argv)
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;
+    config.resync_channel = ctaphid_ctap_backend_resync;
     CtaphidDevice device;
     if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) return 1;
 

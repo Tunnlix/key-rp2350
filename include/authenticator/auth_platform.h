@@ -8,6 +8,9 @@
 #define AUTH_CREDENTIAL_ID_SIZE 32U
 #define AUTH_RP_HASH_SIZE 32U
 #define AUTH_USER_ID_MAX_SIZE 64U
+#define AUTH_ENTITY_NAME_MAX_SIZE 64U
+#define AUTH_RP_ID_MAX_SIZE 1024U
+#define AUTH_RESIDENT_MAX_COUNT 16U
 #define AUTH_KEY_HANDLE_SIZE 32U
 #define AUTH_P256_PUBLIC_KEY_SIZE 65U /* SEC1 uncompressed: 04 || X[32] || Y[32]. */
 #define AUTH_ES256_DER_MAX_SIZE 72U
@@ -56,6 +59,11 @@ typedef struct {
     uint32_t signature_count;
     bool discoverable;
     uint8_t cred_protect; /* CTAP policy 1..3, persisted with metadata. */
+    uint8_t rp_id[AUTH_RP_ID_MAX_SIZE], rp_name[AUTH_ENTITY_NAME_MAX_SIZE];
+    uint8_t user_name[AUTH_ENTITY_NAME_MAX_SIZE], user_display_name[AUTH_ENTITY_NAME_MAX_SIZE];
+    uint16_t rp_id_length;
+    uint8_t rp_name_length, user_name_length, user_display_name_length;
+    uint64_t creation_order; /* Relative creation order for newest-first discovery. */
 } AuthCredential;
 
 /* Metadata backend: do not serialize native C struct layout to persistent media.
@@ -73,9 +81,21 @@ typedef struct {
         size_t index, AuthCredential *);
     AuthStatus (*count)(void *, size_t *);
     AuthStatus (*update_counter)(void *, const uint8_t id[32], uint32_t expected, uint32_t next);
+    /* Optional discoverable support, required as a complete group. enumerate
+     * visits all metadata in stable order, NOT_FOUND at end. Mutations atomically
+     * commit metadata AND the supplied fresh credential-store state. put_resident
+     * replaces old_id when non-NULL, including at capacity; old keys are deleted
+     * by the service only after commit. Crypto providers need one staging key
+     * slot beyond metadata capacity. update_user changes names only, never ID,
+     * RP binding, key, policy, counter or creation order. All errors fail closed. */
+    AuthStatus (*enumerate)(void *, size_t index, AuthCredential *);
+    AuthStatus (*put_resident)(void *, const uint8_t *old_id, const AuthCredential *, const uint8_t state[16]);
+    AuthStatus (*erase_resident)(void *, const uint8_t id[32], const uint8_t state[16]);
+    AuthStatus (*update_user)(void *, const AuthCredential *, const uint8_t state[16]);
 } AuthStorage;
 
 bool auth_credential_valid(const AuthCredential *credential);
 bool auth_key_handle_valid(const AuthKeyHandle *key);
+bool auth_text_valid(const uint8_t *data, size_t length);
 
 #endif

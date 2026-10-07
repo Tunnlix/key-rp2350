@@ -4,15 +4,20 @@
 
 #include "ctap/ctap.h"
 #include "ctap/cbor_writer.h"
+#include "ctap/cbor_reader.h"
 #include "protocol/ctaphid_ctap_backend.h"
 
-/* Independent wire vector: canonical map {1:[FIDO_2_3],3:bstr16,
- * 4:{rk:false,up:false,plat:false},5:1024}. Status is added by CTAP routing. */
+/* Independent wire vector for the minimal configured CTAP 2.3 profile. */
 static const uint8_t expected_info[] = {
-    0xA4, 0x01, 0x81, 0x68, 'F', 'I', 'D', 'O', '_', '2', '_', '3',
-    0x03, 0x50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0x04, 0xA3, 0x62, 'r', 'k', 0xF4, 0x62, 'u', 'p', 0xF4,
-    0x64, 'p', 'l', 'a', 't', 0xF4, 0x05, 0x19, 0x04, 0x00
+    0xA8, 0x01, 0x81, 0x68, 0x46, 0x49, 0x44, 0x4F, 0x5F, 0x32, 0x5F, 0x33, 0x02, 0x82, 0x6B, 0x68,
+    0x6D, 0x61, 0x63, 0x2D, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x6E, 0x68, 0x6D, 0x61, 0x63, 0x2D,
+    0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x2D, 0x6D, 0x63, 0x03, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0xA4, 0x62, 0x72, 0x6B,
+    0xF4, 0x62, 0x75, 0x70, 0xF5, 0x64, 0x70, 0x6C, 0x61, 0x74, 0xF4, 0x70, 0x6D, 0x61, 0x6B, 0x65,
+    0x43, 0x72, 0x65, 0x64, 0x55, 0x76, 0x4E, 0x6F, 0x74, 0x52, 0x71, 0x64, 0xF5, 0x05, 0x19, 0x04,
+    0x00, 0x06, 0x81, 0x02, 0x0A, 0x81, 0xA2, 0x63, 0x61, 0x6C, 0x67, 0x26, 0x64, 0x74, 0x79, 0x70,
+    0x65, 0x6A, 0x70, 0x75, 0x62, 0x6C, 0x69, 0x63, 0x2D, 0x6B, 0x65, 0x79, 0x16, 0x81, 0x66, 0x70,
+    0x61, 0x63, 0x6B, 0x65, 0x64,
 };
 
 static void test_cbor_primitive_vectors(void)
@@ -56,6 +61,7 @@ static void test_get_info_encoding_and_bounds(void)
 {
     CtapGetInfoProfile profile = {0};
     profile.max_message_size = 1024U;
+    profile.make_credential = profile.hmac_secret = profile.user_presence = true;
     uint8_t output[CTAP_MAX_RESPONSE_SIZE], saved[CTAP_MAX_RESPONSE_SIZE];
     size_t length = 0U;
     assert(ctap_get_info_encode(&profile, output, sizeof output, &length));
@@ -71,7 +77,18 @@ static void test_get_info_encoding_and_bounds(void)
     /* A production application supplies its stable AAGUID; no hardcoded identity. */
     for (size_t i = 0; i < 16U; ++i) profile.aaguid[i] = (uint8_t)(i + 1U);
     assert(ctap_get_info_encode(&profile, output, sizeof output, &length));
-    assert(memcmp(output + 14U, profile.aaguid, 16U) == 0);
+    CborValue map, value;
+    assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 3U, &value));
+    assert(value.value == 16U && memcmp(value.data, profile.aaguid, 16U) == 0);
+    profile.pin_uv_auth = true;
+    assert(ctap_get_info_encode(&profile, output, sizeof output, &length));
+    assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 13U, &value) && value.value == 4U);
+    profile.hmac_secret = false;
+    assert(!ctap_get_info_encode(&profile, output, sizeof output, &length));
+    profile.hmac_secret = true;
+    profile.make_credential = false;
+    assert(!ctap_get_info_encode(&profile, output, sizeof output, &length));
+    profile.make_credential = true;
     assert(!ctap_get_info_encode(NULL, output, sizeof output, &length));
     profile.max_message_size = 0U;
     assert(!ctap_get_info_encode(&profile, output, sizeof output, &length));
@@ -81,6 +98,7 @@ static void test_ctap_command_statuses(void)
 {
     CtapGetInfoProfile profile = {0};
     profile.max_message_size = 1024U;
+    profile.make_credential = profile.hmac_secret = profile.user_presence = true;
     uint8_t output[CTAP_MAX_RESPONSE_SIZE];
     const uint8_t request[] = {0x04};
     size_t length;
@@ -147,9 +165,9 @@ static void test_backend_coordinator_bridge(void)
     assert(!backend.pending && device.phase == CTAPHID_DEVICE_SENDING);
     assert(ctaphid_device_poll(&device, 1U) == CTAPHID_DEVICE_OK);
     assert(transport.count == 1U && device.phase == CTAPHID_DEVICE_IDLE);
-    assert(transport.report[4] == 0x90U && transport.report[6] == 1U + sizeof expected_info);
-    assert(transport.report[7] == 0U);
-    assert(memcmp(transport.report + 8U, expected_info, sizeof expected_info) == 0);
+    /* An unbound backend cannot advertise an authenticator version. */
+    assert(transport.report[4] == 0x90U && transport.report[6] == 1U);
+    assert(transport.report[7] == CTAP_STATUS_OTHER);
 
     /* Prepared work can be cancelled without reentering coordinator callbacks. */
     receive(&device, 0x10U, 0x04U, 2U);

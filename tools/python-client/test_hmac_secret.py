@@ -37,24 +37,32 @@ def rewrite_as_legacy_vault(path, version=1):
     kernel.LocalFree.argtypes = [ctypes.c_void_p]
     kernel.LocalFree.restype = ctypes.c_void_p
     vault = path.read_bytes()
-    assert vault[:8] == b"APCV\x00\x00\x00\x04"
+    assert vault[:8] == b"APCV\x00\x00\x00\x05"
     sealed = (ctypes.c_ubyte * (len(vault) - 12)).from_buffer_copy(vault[12:])
     incoming, plain = Blob(len(sealed), sealed), Blob()
     assert crypt.CryptUnprotectData(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(plain))
     try:
         data = bytearray(ctypes.string_at(plain.data, plain.length))
-        assert data[:4] == b"ACP4"
-        if version == 3:
-            legacy = bytearray(b"ACP3") + data[4:-16]  # Drop v4 credential policies.
+        assert data[:4] == b"ACP5"
+        # These fixtures have no live seventeenth staging key.
+        assert data[40 + 16 * 202] == 0
+        old = bytearray(b"ACP4") + data[4:40 + 16 * 202]
+        record_offset = 40 + 17 * 202
+        old.extend(data[record_offset:record_offset + 16 * 168 + 35])
+        if version == 4:
+            legacy = bytearray(old)
+        elif version == 3:
+            legacy = bytearray(b"ACP3") + old[4:-16]  # Drop v4 credential policies.
         elif version == 2:
-            legacy = bytearray(b"ACP2") + data[4:-35]  # Drop PIN/policy records.
+            legacy = bytearray(b"ACP2") + old[4:-35]  # Drop PIN/policy records.
         else:
             assert version == 1
-            legacy = bytearray(b"ACP1") + data[4:40]
+            legacy = bytearray(b"ACP1") + old[4:40]
             for index in range(16):
                 offset = 40 + index * 202
-                legacy.extend(data[offset:offset + 137])  # Drop secret flag/randoms.
-            legacy.extend(data[40 + 16 * 202:40 + 16 * 202 + 16 * 168])
+                legacy.extend(old[offset:offset + 137])  # Drop secret flag/randoms.
+            legacy.extend(old[40 + 16 * 202:40 + 16 * 202 + 16 * 168])
+        old[:] = bytes(len(old))
         data[:] = bytes(len(data))
     finally:
         ctypes.memset(plain.data, 0, plain.length)
@@ -123,7 +131,7 @@ class HmacSecretTests(unittest.TestCase):
 
     def test_get_info_and_development_client_pin(self):
         info = self.client.get_info()
-        self.assertEqual(info.extensions, ["hmac-secret", "credProtect"])
+        self.assertEqual(info.extensions, ["hmac-secret", "credProtect", "hmac-secret-mc"])
         self.assertEqual(info.pin_uv_protocols, [2])
         self.assertFalse(info.options["clientPin"])
         self.assertNotIn("uv", info.options)
@@ -290,7 +298,7 @@ class HmacSecretTests(unittest.TestCase):
                 self.assertEqual(int(response.auth_data.flags), 1)
                 self.assertEqual(response.auth_data.counter, 1)
                 # A successful counter update upgrades the file while preserving old keys.
-                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x04")
+                self.assertEqual(path.read_bytes()[:8], b"APCV\x00\x00\x00\x05")
                 new_created = self.register(client, peer)
                 request, shared = self.request(client=client)
                 self.assertEqual(len(self.output(self.assertion(request, client, peer, new_created), shared)), 32)

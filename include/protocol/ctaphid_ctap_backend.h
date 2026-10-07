@@ -7,6 +7,7 @@
 #include "ctap/ctap_make_credential.h"
 #include "ctap/ctap_get_assertion.h"
 #include "ctap/ctap_client_pin.h"
+#include "ctap/ctap_credential_management.h"
 #include "protocol/ctaphid_device.h"
 
 /* Bridge between CTAP command execution and the HID coordinator. CTAP code does
@@ -37,6 +38,10 @@ typedef struct {
     bool awaiting_credential_prepare, prepare_make;
     uint8_t credential_request[CTAPHID_MAX_MESSAGE_SIZE];
     size_t credential_request_length;
+    CtapAssertionSequence assertion_sequence;
+    CtapCredentialManagement management;
+    uint32_t assertion_cid, management_cid;
+    bool awaiting_next_assertion, awaiting_management;
 } CtaphidCtapBackend;
 
 /* Profile's advertised size must match the coordinator's receive capacity.
@@ -60,7 +65,8 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
 
 /* Complete protocol 2 PIN/token binding, after credentials/reset. Enables
  * clientPin, pinUvAuthToken and credProtect; built-in uv remains absent. The
- * combined application
+ * Complete resident storage also enables rk/credMgmt; configure resync_channel
+ * to ctaphid_ctap_backend_resync before accepting requests. The application
  * Reset callback must erase persistent PIN state as well as credentials/keys. */
 bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin);
 
@@ -69,6 +75,8 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
 void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     const uint8_t *request, size_t request_length);
 void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id);
+/* Configure device.resync_channel to clear channel-bound state even for idle INIT. */
+void ctaphid_ctap_backend_resync(void *context, uint32_t cid);
 
 /* Call outside coordinator callbacks, after device_poll. Delivers the prepared
  * reply through complete_cbor; another device_poll then transmits it. Selection,

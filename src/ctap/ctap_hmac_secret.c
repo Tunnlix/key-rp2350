@@ -28,6 +28,31 @@ uint8_t ctap_hmac_secret_parse(const CborValue *input, CtapHmacSecret *request)
     return CTAP_STATUS_OK;
 }
 
+static uint8_t decrypt_salts(const AuthSecretCrypto *crypto, const CtapHmacSecret *request,
+    uint8_t keys[64], uint8_t salts[64])
+{
+    if (request->salt_enc_length != 48U && request->salt_enc_length != 80U) return CTAP_STATUS_INVALID_PARAMETER;
+    if (request->salt_auth_length != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
+    uint8_t status = ctap_pin_protocol_shared(crypto, request->peer_public, keys);
+    if (status != CTAP_STATUS_OK) return status;
+    status = ctap_pin_protocol_verify(crypto, keys, request->salt_enc, request->salt_enc_length,
+        request->salt_auth, request->salt_auth_length);
+    if (status != CTAP_STATUS_OK) return status;
+    return crypto->aes256_cbc(crypto->context, false, keys + 32U, request->salt_enc,
+        request->salt_enc + 16U, request->salt_enc_length - 16U, salts) == AUTH_OK ?
+        CTAP_STATUS_OK : CTAP_STATUS_INVALID_PARAMETER;
+}
+
+uint8_t ctap_hmac_secret_validate(AuthCredentialService *service, const CtapHmacSecret *request)
+{
+    if (service == NULL || !auth_secret_crypto_valid(&service->secrets) || request == NULL || !request->requested)
+        return CTAP_STATUS_OTHER;
+    uint8_t keys[64] = {0}, salts[64] = {0};
+    uint8_t status = decrypt_salts(&service->secrets, request, keys, salts);
+    auth_secure_zero(keys, sizeof keys); auth_secure_zero(salts, sizeof salts);
+    return status;
+}
+
 uint8_t ctap_hmac_secret_evaluate(AuthCredentialService *service,
     const AuthCredential *credential, const CtapHmacSecret *request, bool user_verified,
     uint8_t output[80], size_t *length)
@@ -40,14 +65,9 @@ uint8_t ctap_hmac_secret_evaluate(AuthCredentialService *service,
     uint8_t keys[64] = {0}, salts[64] = {0}, results[64] = {0}, encrypted[80] = {0};
     uint8_t status = CTAP_STATUS_OTHER;
     size_t plain_length = request->salt_enc_length - 16U;
-    status = ctap_pin_protocol_shared(crypto, request->peer_public, keys);
-    if (status != CTAP_STATUS_OK) goto done;
-    status = ctap_pin_protocol_verify(crypto, keys, request->salt_enc, request->salt_enc_length,
-        request->salt_auth, request->salt_auth_length);
+    status = decrypt_salts(crypto, request, keys, salts);
     if (status != CTAP_STATUS_OK) goto done;
     status = CTAP_STATUS_OTHER;
-    if (crypto->aes256_cbc(crypto->context, false, keys + 32U, request->salt_enc,
-        request->salt_enc + 16U, plain_length, salts) != AUTH_OK) { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
     for (size_t i = 0U; i < plain_length; i += 32U) {
         AuthStatus evaluated = crypto->credential_hmac(crypto->context, &credential->key, user_verified, salts + i, results + i);
         if (evaluated == AUTH_NOT_FOUND) { *length = 0U; status = CTAP_STATUS_OK; goto done; }

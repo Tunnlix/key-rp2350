@@ -7,7 +7,8 @@
 
 /* Current PC platform: Windows CNG + user-scoped DPAPI. Credentials and provider
  * private keys and credential randoms persist in a versioned encrypted file.
- * v4 adds credential protection; v3 PIN verifier/retries remain readable.
+ * v5 adds RP/user metadata, ordering and a staging key for atomic replacement.
+ * v4 protection and v3 PIN verifier/retries remain readable.
  * v1/v2 start with an unset PIN; pre-v4 credentials use default policy 1.
  * v1 credentials remain readable without assigning new hmac secrets to them.
  * Ephemeral key agreement is kept only in memory and regenerated on Reset. Private

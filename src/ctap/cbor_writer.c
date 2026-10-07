@@ -81,6 +81,11 @@ bool cbor_write_text(CborWriter *writer, const char *text)
     return write_string(writer, 3U, (const uint8_t *)text, strlen(text));
 }
 
+bool cbor_write_text_bytes(CborWriter *writer, const uint8_t *text, size_t length)
+{
+    return write_string(writer, 3U, text, length);
+}
+
 bool cbor_write_bool(CborWriter *writer, bool value)
 {
     const uint8_t encoded = value ? 0xF5U : 0xF4U;

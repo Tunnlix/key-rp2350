@@ -18,18 +18,22 @@ typedef struct {
     bool hmac_secret; /* Complete secret provider bound; protocol 2 key agreement. */
     bool pin_uv_auth; /* Complete PIN/token + credential protection configured. */
     bool pin_set; /* Current persistent PIN state, refreshed before GetInfo. */
+    bool resident_credentials; /* Complete discovery + credential management binding. */
 } CtapGetInfoProfile;
 
 /* Encode the GetInfo map only (without status byte or HID framing). Returns
- * false for invalid profile/output or insufficient capacity; failure leaves
+ * false for incomplete profiles (credentials, hmac-secret and UP are required),
+ * invalid output or insufficient capacity; failure leaves
  * output and output_length unchanged. Storage must not overlap the profile.
  *
  * CTAP 2.3 section 6.4: versions, aaguid, options, maxMsgSize. Options currently
- * report rk=false, up=profile.user_presence, plat=false. With MakeCredential
+ * report up=profile.user_presence and plat=false. Complete resident_credentials
+ * enables rk=true and credMgmt=true; other bindings keep rk=false. With MakeCredential
  * configured, advertise ES256 and packed self-attestation (none is implicit),
  * and makeCredUvNotRqd=true. hmac-secret adds extensions and pinUvAuthProtocols=[2]
- * for key agreement. pin_uv_auth adds credProtect and pinUvAuthToken=true;
- * clientPin reflects pin_set. Built-in uv remains omitted.
+ * for key agreement, plus hmac-secret-mc when MakeCredential is configured.
+ * pin_uv_auth adds credProtect and pinUvAuthToken=true;
+ * clientPin reflects pin_set and includes minPINLength=4. Built-in uv remains omitted.
  * FIDO_2_3 is the
  * development target; full authenticator conformance has not been established.
  */

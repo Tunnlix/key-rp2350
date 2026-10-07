@@ -16,6 +16,14 @@ bool auth_credential_valid(const AuthCredential *credential)
 {
     return credential != NULL && credential->algorithm == AUTH_COSE_ALG_ES256 &&
         credential->user_id_length <= AUTH_USER_ID_MAX_SIZE &&
+        credential->rp_id_length <= AUTH_RP_ID_MAX_SIZE &&
+        credential->rp_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&
+        credential->user_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&
+        credential->user_display_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&
+        auth_text_valid(credential->rp_id, credential->rp_id_length) &&
+        auth_text_valid(credential->rp_name, credential->rp_name_length) &&
+        auth_text_valid(credential->user_name, credential->user_name_length) &&
+        auth_text_valid(credential->user_display_name, credential->user_display_name_length) &&
         credential->cred_protect >= 1U && credential->cred_protect <= 3U &&
         auth_key_handle_valid(&credential->key) &&
         nonzero(credential->credential_id, sizeof credential->credential_id);

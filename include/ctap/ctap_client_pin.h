@@ -8,6 +8,7 @@
 
 #define CTAP_PIN_PERMISSION_MC 0x01U
 #define CTAP_PIN_PERMISSION_GA 0x02U
+#define CTAP_PIN_PERMISSION_CM 0x04U
 #define CTAP_PIN_INITIAL_TIMEOUT_MS 30000U
 #define CTAP_PIN_MAX_TIMEOUT_MS 600000U
 
@@ -25,6 +26,7 @@ typedef struct {
     uint32_t issued_at_ms;
     bool token_active, token_used;
     uint64_t token_generation;
+    bool token_rp_bound, credential_management;
 } CtapClientPin;
 
 /* Only public/ciphertext data, safe to discard on CANCEL/resynchronization. */
@@ -67,5 +69,10 @@ uint8_t ctap_pin_auth_parse(CtapClientPin *pin, const CborValue *param,
 uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
     const uint8_t rp_hash[32], const uint8_t client_data_hash[32], uint8_t permission,
     uint32_t now_ms, bool mark_used);
+/* CM MACs cover subcommand || exact canonical parameters. NULL rp_hash means
+ * an unscoped token is required. Scope is checked again against delete/update
+ * targets. Does not consume permissions: CM never collects cached/fresh UP. */
+uint8_t ctap_client_pin_authorize_management(CtapClientPin *pin, const uint8_t *rp_hash,
+    const uint8_t *message, size_t message_length, const uint8_t mac[32], uint32_t now_ms);
 
 #endif

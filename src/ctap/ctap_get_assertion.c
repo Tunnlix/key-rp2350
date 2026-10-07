@@ -1,6 +1,7 @@
 #include "ctap/ctap_get_assertion.h"
 #include "ctap/ctap_request.h"
 #include "ctap/cbor_writer.h"
+#include "ctap/ctap_entities.h"
 
 #include <string.h>
 
@@ -62,7 +63,32 @@ uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, Ctap
         CTAP_PIN_PERMISSION_GA, now_ms, false);
     if (status != CTAP_STATUS_OK) return status;
     result.user_verified = result.auth.present;
-    if (!present[3]) return CTAP_STATUS_NO_CREDENTIALS;
+    if (!present[3]) {
+        if (pin == NULL || !auth_credentials_resident_supported(service)) return CTAP_STATUS_NO_CREDENTIALS;
+        uint64_t order[AUTH_RESIDENT_MAX_COUNT] = {0};
+        for (size_t i = 0U; i < service->storage.capacity; ++i) {
+            AuthCredential found; AuthStatus lookup = auth_credentials_enumerate(service, i, &found);
+            if (lookup == AUTH_NOT_FOUND) break;
+            if (lookup != AUTH_OK) return CTAP_STATUS_OTHER;
+            if (!found.discoverable || memcmp(found.rp_id_hash, result.rp_id_hash, 32U) != 0 ||
+                (found.cred_protect != 1U && !result.user_verified)) continue;
+            for (size_t j = 0U; j < result.credential_count; ++j)
+                if (memcmp(result.credential_ids[j], found.credential_id, 32U) == 0) return CTAP_STATUS_OTHER;
+            size_t slot = result.credential_count++;
+            while (slot != 0U && order[slot - 1U] < found.creation_order) {
+                memcpy(result.credential_ids[slot], result.credential_ids[slot - 1U], 32U);
+                order[slot] = order[slot - 1U]; --slot;
+            }
+            memcpy(result.credential_ids[slot], found.credential_id, 32U); order[slot] = found.creation_order;
+        }
+        if (result.credential_count == 0U) return CTAP_STATUS_NO_CREDENTIALS;
+        result.discovery = true; result.metadata_revision = service->metadata_revision;
+        memcpy(result.credential_id, result.credential_ids[0], 32U);
+        status = ctap_client_pin_authorize(pin, &result.auth, result.rp_id_hash, result.client_data_hash,
+            CTAP_PIN_PERMISSION_GA, now_ms, true);
+        if (status != CTAP_STATUS_OK) return status;
+        *prepared = result; return CTAP_STATUS_OK;
+    }
     const uint8_t *cursor = fields[3].data, *end = fields[3].encoded + fields[3].encoded_length;
     CborValue entry, id, type;
     bool selected = false;
@@ -93,8 +119,8 @@ uint8_t ctap_get_assertion_finish(AuthCredentialService *service,
     return ctap_get_assertion_finish_at(service, prepared, output, capacity, length, 0U);
 }
 
-uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service,
-    const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+static uint8_t finish(AuthCredentialService *service, const CtapGetAssertion *prepared,
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms, bool continuation)
 {
     if (service == NULL || prepared == NULL || output == NULL || length == NULL ||
         capacity < (prepared->hmac_secret.requested ? 288U : 192U))
@@ -102,16 +128,22 @@ uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service,
     if (prepared->auth.probe) return ctap_client_pin_probe(prepared->pin);
     if (prepared->user_verified != prepared->auth.present || (prepared->pin != NULL && prepared->pin->service != service))
         return CTAP_STATUS_OTHER;
-    CtapPinAuth auth = prepared->auth;
-    if (auth.present && auth.token_generation == 0U) return CTAP_STATUS_PIN_AUTH_INVALID;
-    uint8_t authorized = ctap_client_pin_authorize(prepared->pin, &auth, prepared->rp_id_hash, prepared->client_data_hash,
-        CTAP_PIN_PERMISSION_GA, now_ms, false);
-    if (authorized != CTAP_STATUS_OK) return authorized;
+    if (prepared->discovery && (prepared->metadata_revision != service->metadata_revision || capacity < 768U)) return CTAP_STATUS_OTHER;
+    if (!continuation) {
+        CtapPinAuth auth = prepared->auth;
+        if (auth.present && auth.token_generation == 0U) return CTAP_STATUS_PIN_AUTH_INVALID;
+        uint8_t authorized = ctap_client_pin_authorize(prepared->pin, &auth, prepared->rp_id_hash, prepared->client_data_hash,
+            CTAP_PIN_PERMISSION_GA, now_ms, false);
+        if (authorized != CTAP_STATUS_OK) return authorized;
+    }
     AuthCredential credential;
     AuthStatus status = auth_credentials_get(service, prepared->credential_id, prepared->rp_id_hash, &credential);
     if (status != AUTH_OK) return status == AUTH_NOT_FOUND ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_OTHER;
     if (credential.cred_protect == 3U && !prepared->user_verified) return CTAP_STATUS_NO_CREDENTIALS;
-    if (prepared->user_presence_required) ctap_client_pin_invalidate(prepared->pin);
+    if (credential.discoverable && capacity < 768U) return CTAP_STATUS_OTHER;
+    if (prepared->discovery && (!credential.discoverable || (credential.cred_protect != 1U && !prepared->user_verified)))
+        return CTAP_STATUS_NO_CREDENTIALS;
+    if (!continuation && prepared->user_presence_required) ctap_client_pin_invalidate(prepared->pin);
     uint8_t extension_output[80]; size_t extension_length = 0U;
     if (prepared->hmac_secret.requested) {
         if (!prepared->user_presence_required) return CTAP_STATUS_UNSUPPORTED_OPTION;
@@ -143,18 +175,61 @@ uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service,
         auth_credentials_sign_digest(service, prepared->credential_id, prepared->rp_id_hash,
             digest, signature, &signature_length) != AUTH_OK || signature_length == 0U || signature_length > sizeof signature)
         return CTAP_STATUS_OTHER;
-    uint8_t encoded[288];
+    uint8_t encoded[768];
     CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
-    /* Only allowList credentials are returned: no user information, enumeration
-     * count, userSelected or next-assertion state. Keys are canonical. */
-    bool ok = cbor_write_map(&writer, 3U) &&
+    /* Canonical response. Resident user handles are included; identifying
+     * names require UV and multi-account discovery. Only the first discovery
+     * reply includes account count. */
+    bool include_user = credential.discoverable;
+    bool include_count = prepared->discovery && prepared->credential_count > 1U && !continuation;
+    bool ok = cbor_write_map(&writer, 3U + (include_user ? 1U : 0U) + (include_count ? 1U : 0U)) &&
         cbor_write_uint(&writer, 1U) && cbor_write_map(&writer, 2U) &&
         cbor_write_text(&writer, "id") && cbor_write_bytes(&writer, prepared->credential_id, 32U) &&
         cbor_write_text(&writer, "type") && cbor_write_text(&writer, "public-key") &&
         cbor_write_uint(&writer, 2U) && cbor_write_bytes(&writer, signed_data, data_length) &&
         cbor_write_uint(&writer, 3U) && cbor_write_bytes(&writer, signature, signature_length);
-    if (!ok) return CTAP_STATUS_OTHER;
+    if (include_user) ok = ok && cbor_write_uint(&writer, 4U) && ctap_user_entity_write(&writer, &credential,
+        prepared->user_verified && prepared->discovery && prepared->credential_count > 1U);
+    if (include_count) ok = ok && cbor_write_uint(&writer, 5U) && cbor_write_uint(&writer, prepared->credential_count);
+    if (!ok || writer.length > capacity) return CTAP_STATUS_OTHER;
     memcpy(output, encoded, writer.length);
     *length = writer.length;
     return CTAP_STATUS_OK;
+}
+
+uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service, const CtapGetAssertion *prepared,
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
+    return finish(service, prepared, output, capacity, length, now_ms, false);
+}
+
+void ctap_assertion_sequence_clear(CtapAssertionSequence *sequence)
+{ if (sequence != NULL) auth_secure_zero(sequence, sizeof *sequence); }
+
+void ctap_assertion_sequence_begin(CtapAssertionSequence *sequence, const CtapGetAssertion *request, uint32_t now_ms)
+{
+    ctap_assertion_sequence_clear(sequence);
+    if (sequence == NULL || request == NULL || !request->discovery || request->credential_count <= 1U ||
+        request->credential_count > AUTH_RESIDENT_MAX_COUNT) return;
+    sequence->request = *request; sequence->next = 1U; sequence->last_call_ms = now_ms; sequence->active = true;
+}
+
+uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapAssertionSequence *sequence,
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
+    if (service == NULL || sequence == NULL || !sequence->active || sequence->next >= sequence->request.credential_count ||
+        sequence->request.credential_count > AUTH_RESIDENT_MAX_COUNT ||
+        (uint32_t)(now_ms - sequence->last_call_ms) > 30000U || sequence->request.metadata_revision != service->metadata_revision ||
+        (sequence->request.user_verified && (sequence->request.pin == NULL || sequence->request.pin->faulted ||
+            !sequence->request.pin->pin_set || sequence->request.pin->token_generation != sequence->request.auth.token_generation))) {
+        ctap_assertion_sequence_clear(sequence); return CTAP_STATUS_NOT_ALLOWED;
+    }
+    CtapGetAssertion request = sequence->request;
+    memcpy(request.credential_id, request.credential_ids[sequence->next], 32U);
+    uint8_t status = finish(service, &request, output, capacity, length, now_ms, true);
+    if (status == CTAP_STATUS_OK) {
+        ++sequence->next; sequence->last_call_ms = now_ms;
+        if (sequence->next == sequence->request.credential_count) ctap_assertion_sequence_clear(sequence);
+    } else ctap_assertion_sequence_clear(sequence);
+    return status;
 }

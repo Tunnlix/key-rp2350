@@ -4,6 +4,7 @@
 #include "ctap/ctap.h"
 #include "authenticator/auth_credentials.h"
 #include "ctap/ctap_client_pin.h"
+#include "ctap/ctap_hmac_secret.h"
 
 /* Validated request state owns only the data needed after touch. No borrowed
  * receive-buffer pointers, credential keys or platform details are retained. */
@@ -12,18 +13,23 @@ typedef struct {
     size_t user_id_length;
     bool credential_excluded, omit_attestation;
     bool hmac_secret_requested;
+    CtapHmacSecret hmac_secret_mc;
     CtapClientPin *pin;
     CtapPinAuth auth;
     bool user_verified, cred_protect_requested;
     uint8_t cred_protect;
+    bool discoverable;
+    AuthCredential metadata;
 } CtapMakeCredential;
 
 /* Validate the parameter map and check RP-bound exclusion before asking for UP.
  * Success means ready to wait for a fresh touch, not a created credential.
  * Invalid/unsupported requests produce a CTAP status and never create keys.
- * Supports non-discoverable ES256 only; ignores unsupported extensions/options.
+ * Supports ES256; resident creation requires the complete storage/PIN binding.
+ * Unsupported extensions/options are ignored.
  * This entry point has no PIN binding; the with_pin variant adds protocol 2
- * authorization and credProtect. Enterprise attestation/rk remain unsupported. */
+ * authorization, credProtect and discoverable credentials. Enterprise attestation
+ * remains unsupported. */
 uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 /* Authorize against the injected clock after validating all descriptors. The
@@ -32,11 +38,13 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
     uint32_t now_ms, const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 
 /* Caller MUST establish fresh user presence for this operation first.
- * Creates/persists the credential, then encodes the response CBOR (no status).
+ * Prepares resident extension output/attestation before committing metadata;
+ * publishes response CBOR (no status) only after successful persistence.
  * Signing/encoding failure attempts to erase the new credential and key;
  * provider cleanup failures surface as OTHER and may require provider recovery.
  * Excluded credentials never create
- * keys. Output must not overlap any inputs; caller supplies at least 384 bytes.
+ * keys. Output must not overlap any inputs; caller supplies at least 384 bytes
+ * (512 bytes when hmac-secret-mc is requested).
  * CANCEL/INIT before this call must discard prepared state without invoking it. */
 uint8_t ctap_make_credential_finish(AuthCredentialService *service,
     const CtapMakeCredential *prepared, const uint8_t aaguid[16],

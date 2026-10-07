@@ -41,7 +41,7 @@ static AuthStatus update(void *context, const uint8_t id[32], uint32_t expected,
 static AuthCredentialService setup(Mock *mock)
 {
     AuthCrypto crypto = {mock, random_data, hash, generate, public_key, sign, destroy};
-    AuthStorage storage = {mock, 2U, read_record, insert, erase, find, count, update};
+    AuthStorage storage = {mock, 2U, read_record, insert, erase, find, count, update, NULL, NULL, NULL, NULL};
     AuthCredentialService service;
     assert(auth_credentials_init(&service, &crypto, &storage));
     return service;

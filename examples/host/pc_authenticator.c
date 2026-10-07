@@ -17,11 +17,14 @@
 #endif
 
 #define PC_CAPACITY 16U
+#define PC_KEY_CAPACITY (PC_CAPACITY + 1U)
+#define PC_METADATA_SIZE 1229U
 #define PC_PRIVATE_BLOB_SIZE 104U
 #define PC_PLAIN_SIZE_V1 (40U + PC_CAPACITY * 137U + PC_CAPACITY * 168U)
 #define PC_PLAIN_SIZE_V2 (PC_PLAIN_SIZE_V1 + PC_CAPACITY * 65U)
 #define PC_PLAIN_SIZE_V3 (PC_PLAIN_SIZE_V2 + 19U)
-#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V3 + PC_CAPACITY)
+#define PC_PLAIN_SIZE_V4 (PC_PLAIN_SIZE_V3 + PC_CAPACITY)
+#define PC_PLAIN_SIZE (PC_PLAIN_SIZE_V4 + 202U + PC_CAPACITY * PC_METADATA_SIZE)
 #define PC_SEALED_MAX 65536U
 
 typedef struct {
@@ -33,7 +36,7 @@ typedef struct { bool used; AuthCredential credential; } PcRecord;
 typedef struct {
     uint32_t generation;
     uint8_t device_identifier[16], credential_store_state[16];
-    PcKey keys[PC_CAPACITY];
+    PcKey keys[PC_KEY_CAPACITY];
     PcRecord records[PC_CAPACITY];
     AuthPinRecord pin;
 } PcState;
@@ -90,11 +93,11 @@ static uint32_t read_u32(const uint8_t *input)
 static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
 {
     uint8_t *cursor = plain;
-    memcpy(cursor, "ACP4", 4U); cursor += 4U;
+    memcpy(cursor, "ACP5", 4U); cursor += 4U;
     write_u32(cursor, state->generation); cursor += 4U;
     memcpy(cursor, state->device_identifier, 16U); cursor += 16U;
     memcpy(cursor, state->credential_store_state, 16U); cursor += 16U;
-    for (size_t i = 0; i < PC_CAPACITY; ++i) {
+    for (size_t i = 0; i < PC_KEY_CAPACITY; ++i) {
         const PcKey *key = &state->keys[i];
         *cursor++ = key->used ? 1U : 0U;
         memcpy(cursor, key->handle.bytes, 32U); cursor += 32U;
@@ -122,11 +125,20 @@ static void encode_state(const PcState *state, uint8_t plain[PC_PLAIN_SIZE])
     cursor += 16U;
     for (size_t i = 0U; i < PC_CAPACITY; ++i)
         *cursor++ = state->records[i].used ? state->records[i].credential.cred_protect : 0U;
+    for (size_t i = 0U; i < PC_CAPACITY; ++i) {
+        const AuthCredential *c = &state->records[i].credential;
+        *cursor++ = (uint8_t)(c->rp_id_length >> 8); *cursor++ = (uint8_t)c->rp_id_length;
+        memcpy(cursor, c->rp_id, 1024U); cursor += 1024U;
+        *cursor++ = c->rp_name_length; memcpy(cursor, c->rp_name, 64U); cursor += 64U;
+        *cursor++ = c->user_name_length; memcpy(cursor, c->user_name, 64U); cursor += 64U;
+        *cursor++ = c->user_display_name_length; memcpy(cursor, c->user_display_name, 64U); cursor += 64U;
+        for (size_t j = 0U; j < 8U; ++j) *cursor++ = (uint8_t)(c->creation_order >> (56U - 8U * j));
+    }
 }
 
 static int key_index(const PcState *state, const AuthKeyHandle *handle)
 {
-    for (size_t i = 0; i < PC_CAPACITY; ++i) {
+    for (size_t i = 0; i < PC_KEY_CAPACITY; ++i) {
         if (state->keys[i].used && memcmp(state->keys[i].handle.bytes, handle->bytes, 32U) == 0) return (int)i;
     }
     return -1;
@@ -145,15 +157,16 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
     if ((version == 1U && (length != PC_PLAIN_SIZE_V1 || memcmp(plain, "ACP1", 4U) != 0)) ||
         (version == 2U && (length != PC_PLAIN_SIZE_V2 || memcmp(plain, "ACP2", 4U) != 0)) ||
         (version == 3U && (length != PC_PLAIN_SIZE_V3 || memcmp(plain, "ACP3", 4U) != 0)) ||
-        (version == 4U && (length != PC_PLAIN_SIZE || memcmp(plain, "ACP4", 4U) != 0)) ||
-        version < 1U || version > 4U) return false;
+        (version == 4U && (length != PC_PLAIN_SIZE_V4 || memcmp(plain, "ACP4", 4U) != 0)) ||
+        (version == 5U && (length != PC_PLAIN_SIZE || memcmp(plain, "ACP5", 4U) != 0)) ||
+        version < 1U || version > 5U) return false;
     memset(state, 0, sizeof *state);
     state->pin.retries = AUTH_PIN_MAX_RETRIES;
     const uint8_t *cursor = plain + 4U;
     state->generation = read_u32(cursor); cursor += 4U;
     memcpy(state->device_identifier, cursor, 16U); cursor += 16U;
     memcpy(state->credential_store_state, cursor, 16U); cursor += 16U;
-    for (size_t i = 0; i < PC_CAPACITY; ++i) {
+    for (size_t i = 0; i < (version == 5U ? PC_KEY_CAPACITY : PC_CAPACITY); ++i) {
         PcKey *key = &state->keys[i];
         uint8_t used = *cursor++;
         if (used > 1U) return false;
@@ -211,11 +224,23 @@ static bool decode_state(const uint8_t *plain, size_t length, uint32_t version, 
         cursor += 16U;
         if (!auth_pin_record_valid(&state->pin)) return false;
     }
-    if (version == 4U) {
+    if (version >= 4U) {
         for (size_t i = 0U; i < PC_CAPACITY; ++i) {
             uint8_t policy = *cursor++;
             if (state->records[i].used ? (policy < 1U || policy > 3U) : policy != 0U) return false;
             state->records[i].credential.cred_protect = policy;
+        }
+    }
+    if (version == 5U) {
+        for (size_t i = 0U; i < PC_CAPACITY; ++i) {
+            AuthCredential *c = &state->records[i].credential;
+            c->rp_id_length = (uint16_t)((uint16_t)cursor[0] << 8 | cursor[1]); cursor += 2U;
+            memcpy(c->rp_id, cursor, 1024U); cursor += 1024U;
+            c->rp_name_length = *cursor++; memcpy(c->rp_name, cursor, 64U); cursor += 64U;
+            c->user_name_length = *cursor++; memcpy(c->user_name, cursor, 64U); cursor += 64U;
+            c->user_display_name_length = *cursor++; memcpy(c->user_display_name, cursor, 64U); cursor += 64U;
+            for (size_t j = 0U; j < 8U; ++j) c->creation_order = (c->creation_order << 8) | *cursor++;
+            if (state->records[i].used && !auth_credential_valid(c)) return false;
         }
     }
     return true;
@@ -238,7 +263,7 @@ static AuthStatus commit(PcAuthenticator *pc, const PcState *next)
     AuthStatus result = AUTH_IO_ERROR;
     if (file != INVALID_HANDLE_VALUE) {
         uint8_t header[12];
-        memcpy(header, "APCV", 4U); write_u32(header + 4U, 4U); write_u32(header + 8U, output.cbData);
+        memcpy(header, "APCV", 4U); write_u32(header + 4U, 5U); write_u32(header + 8U, output.cbData);
         DWORD written = 0U;
         bool ok = WriteFile(file, header, sizeof header, &written, NULL) && written == sizeof header;
         if (ok) ok = WriteFile(file, output.pbData, output.cbData, &written, NULL) && written == output.cbData;
@@ -264,7 +289,7 @@ static AuthStatus load(PcAuthenticator *pc)
     AuthStatus result = AUTH_BAD_DATA;
     if (!GetFileSizeEx(file, &size) || size.QuadPart < 12 || size.QuadPart > 12 + PC_SEALED_MAX ||
         !ReadFile(file, header, sizeof header, &received, NULL) || received != sizeof header ||
-        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) < 1U || read_u32(header + 4U) > 4U) { CloseHandle(file); return result; }
+        memcmp(header, "APCV", 4U) != 0 || read_u32(header + 4U) < 1U || read_u32(header + 4U) > 5U) { CloseHandle(file); return result; }
     uint32_t bytes = read_u32(header + 8U);
     if (bytes == 0U || bytes > PC_SEALED_MAX || (uint64_t)size.QuadPart != 12U + bytes) { CloseHandle(file); return result; }
     uint8_t *sealed = malloc(bytes);
@@ -384,8 +409,8 @@ static AuthStatus crypto_generate(void *context, AuthKeyHandle *handle, uint8_t 
     PcAuthenticator *pc = context;
     if (pc == NULL || handle == NULL || output == NULL) return AUTH_INVALID_ARGUMENT;
     size_t slot = 0U;
-    while (slot < PC_CAPACITY && pc->state.keys[slot].used) ++slot;
-    if (slot == PC_CAPACITY) return AUTH_CAPACITY;
+    while (slot < PC_KEY_CAPACITY && pc->state.keys[slot].used) ++slot;
+    if (slot == PC_KEY_CAPACITY) return AUTH_CAPACITY;
     PcState next = pc->state;
     PcKey *created = &next.keys[slot];
     bool unique = false;
@@ -655,10 +680,76 @@ static AuthStatus storage_update_counter(void *context, const uint8_t id[32], ui
     return result;
 }
 
+static AuthStatus storage_enumerate(void *context, size_t index, AuthCredential *output)
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || output == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    for (size_t i = 0U; i < PC_CAPACITY; ++i) if (pc->state.records[i].used && index-- == 0U) {
+        *output = pc->state.records[i].credential; return AUTH_OK;
+    }
+    return AUTH_NOT_FOUND;
+}
+
+static AuthStatus storage_put_resident(void *context, const uint8_t *old_id,
+    const AuthCredential *credential, const uint8_t state[16])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || !auth_credential_valid(credential) || !credential->discoverable || state == NULL) return AUTH_INVALID_ARGUMENT;
+    if (pc->faulted) return AUTH_IO_ERROR;
+    if (record_index(&pc->state, credential->credential_id) >= 0) return AUTH_ALREADY_EXISTS;
+    if (key_index(&pc->state, &credential->key) < 0) return AUTH_NOT_FOUND;
+    int slot = old_id == NULL ? -1 : record_index(&pc->state, old_id);
+    if (old_id != NULL) {
+        if (slot < 0) return AUTH_NOT_FOUND;
+        const AuthCredential *old = &pc->state.records[slot].credential;
+        if (!old->discoverable || memcmp(old->rp_id_hash, credential->rp_id_hash, 32U) != 0 ||
+            old->user_id_length != credential->user_id_length || memcmp(old->user_id, credential->user_id, old->user_id_length) != 0)
+            return AUTH_INVALID_ARGUMENT;
+    } else {
+        for (size_t i = 0U; i < PC_CAPACITY; ++i) if (!pc->state.records[i].used) { slot = (int)i; break; }
+        if (slot < 0) return AUTH_CAPACITY;
+    }
+    for (size_t i = 0U; i < PC_CAPACITY; ++i) if (pc->state.records[i].used &&
+        memcmp(pc->state.records[i].credential.key.bytes, credential->key.bytes, 32U) == 0) return AUTH_ALREADY_EXISTS;
+    PcState next = pc->state; next.records[slot].used = true; next.records[slot].credential = *credential;
+    memcpy(next.credential_store_state, state, 16U);
+    AuthStatus status = commit(pc, &next); SecureZeroMemory(&next, sizeof next); return status;
+}
+
+static AuthStatus storage_erase_resident(void *context, const uint8_t id[32], const uint8_t state[16])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || id == NULL || state == NULL) return AUTH_INVALID_ARGUMENT;
+    int slot = record_index(&pc->state, id);
+    if (slot < 0 || !pc->state.records[slot].credential.discoverable) return AUTH_NOT_FOUND;
+    PcState next = pc->state; SecureZeroMemory(&next.records[slot], sizeof next.records[slot]);
+    memcpy(next.credential_store_state, state, 16U);
+    AuthStatus status = commit(pc, &next); SecureZeroMemory(&next, sizeof next); return status;
+}
+
+static AuthStatus storage_update_user(void *context, const AuthCredential *credential, const uint8_t state[16])
+{
+    PcAuthenticator *pc = context;
+    if (pc == NULL || !auth_credential_valid(credential) || state == NULL) return AUTH_INVALID_ARGUMENT;
+    int slot = record_index(&pc->state, credential->credential_id);
+    if (slot < 0 || !pc->state.records[slot].credential.discoverable) return AUTH_NOT_FOUND;
+    const AuthCredential *old = &pc->state.records[slot].credential;
+    if (old->user_id_length != credential->user_id_length || memcmp(old->user_id, credential->user_id, old->user_id_length) != 0)
+        return AUTH_INVALID_ARGUMENT;
+    PcState next = pc->state; AuthCredential *updated = &next.records[slot].credential;
+    memcpy(updated->user_name, credential->user_name, 64U); updated->user_name_length = credential->user_name_length;
+    memcpy(updated->user_display_name, credential->user_display_name, 64U);
+    updated->user_display_name_length = credential->user_display_name_length;
+    memcpy(next.credential_store_state, state, 16U);
+    AuthStatus status = commit(pc, &next); SecureZeroMemory(&next, sizeof next); return status;
+}
+
 AuthStorage pc_authenticator_storage(PcAuthenticator *pc)
 {
     AuthStorage storage = {pc, PC_CAPACITY, storage_read, storage_insert, storage_erase,
-        storage_find_rp, storage_count, storage_update_counter};
+        storage_find_rp, storage_count, storage_update_counter,
+        storage_enumerate, storage_put_resident, storage_erase_resident, storage_update_user};
     return storage;
 }
 
@@ -695,10 +786,8 @@ PcAuthenticatorState pc_authenticator_state(const PcAuthenticator *pc)
     result.generation = pc->state.generation;
     memcpy(result.device_identifier, pc->state.device_identifier, 16U);
     memcpy(result.credential_store_state, pc->state.credential_store_state, 16U);
-    for (size_t i = 0; i < PC_CAPACITY; ++i) {
-        if (pc->state.keys[i].used) ++result.key_count;
-        if (pc->state.records[i].used) ++result.credential_count;
-    }
+    for (size_t i = 0; i < PC_KEY_CAPACITY; ++i) if (pc->state.keys[i].used) ++result.key_count;
+    for (size_t i = 0; i < PC_CAPACITY; ++i) if (pc->state.records[i].used) ++result.credential_count;
     return result;
 }
 

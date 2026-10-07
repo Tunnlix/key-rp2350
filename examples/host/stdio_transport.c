@@ -160,6 +160,7 @@ int ctaphid_host_run_stdio(const char *presence_control_directory, const char *s
     config.start_cbor = ctaphid_ctap_backend_start;
     config.abort_cbor = ctaphid_ctap_backend_abort;
     config.cbor_context = &backend;
+    config.resync_channel = ctaphid_ctap_backend_resync;
     CtaphidDevice device;
     if (ctaphid_device_init(&device, &config) != CTAPHID_DEVICE_OK) {
         ctaphid_host_storage_close(&storage);
