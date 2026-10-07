@@ -12,6 +12,8 @@
  * non-discoverable key handles), erasing stored credentials/PIN/PUAT state,
  * resetting supported blob/configuration state, and rotating device identifier
  * and credential-store state with fresh 128-bit cryptographic randomness.
+ * Erase provider-owned credential secrets and regenerate the hmac-secret key
+ * agreement key when that provider is bound (also for profiles without PIN).
  * Preserve model identity/AAGUID and factory attestation identity as applicable.
  * Callback must be bounded and must not reenter protocol APIs. It is the commit
  * point: cancellation cannot undo a successfully committed factory reset. */

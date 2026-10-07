@@ -20,8 +20,7 @@ static bool clear_storage(void *context)
     memset(storage->records, 0, sizeof storage->records);
     storage->pin_set = false;
     ++storage->generation;
-    /* Deterministic test identifiers; production callback requires CSPRNG.
-     * The host fixture separately uses the OS cryptographic RNG. */
+    /* Deterministic test identifiers; production callback requires CSPRNG. */
     memset(storage->device_identifier, (int)storage->generation, 16U);
     memset(storage->store_state, (int)(storage->generation + 1U), 16U);
     return true;

@@ -364,6 +364,63 @@ static void assert_management_scratch_cleared(const CtapCredentialManagement *st
     for (size_t i = 0U; i < sizeof state->scratch; ++i) assert(bytes[i] == 0U);
 }
 
+static void test_management_responses_and_user_updates(void)
+{
+    Fixture f; setup(&f); AuthCredential a = create(&f, "example.com", 1U, 1U);
+    AuthCredential b = create(&f, "example.com", 2U, 3U);
+    CtapCredentialManagement state = {0}; uint8_t request[512], output[1024]; size_t length;
+    /* Resident support requires PIN, management, credProtect and protocol 2 (§9). */
+    assert(ctap_get_info_encode(&f.backend.profile, output, sizeof output, &length));
+    CborValue info, options, value;
+    assert(cbor_read_document(output, length, &info) && cbor_map_uint(&info, 4U, &options));
+    const char *enabled[] = {"rk", "credMgmt", "clientPin", "pinUvAuthToken"};
+    for (size_t i = 0U; i < sizeof enabled / sizeof enabled[0]; ++i)
+        assert(cbor_map_text(&options, enabled[i], &value) && value.encoded[0] == 0xF5U);
+    assert(!cbor_map_text(&options, "uv", &value) && !cbor_map_text(&options, "ep", &value));
+    assert(cbor_map_uint(&info, 6U, &value) && value.value == 1U && value.data[0] == 2U);
+    token(&f, CTAP_PIN_PERMISSION_CM, NULL);
+    for (unsigned index = 0U; index < 2U; ++index) {
+        size_t n = management_request(request, index == 0U ? 4U : 5U, index == 0U ? a.rp_id_hash : NULL);
+        assert(ctap_credential_management_execute(&f.service, &f.pin, &state, request, n,
+            output, sizeof output, &length, index) == CTAP_STATUS_OK);
+        CborValue map, value, id; const AuthCredential *expected = index == 0U ? &a : &b;
+        assert(cbor_read_document(output, length, &map) && map.value == (index == 0U ? 5U : 4U));
+        assert(cbor_map_uint(&map, 6U, &value) && cbor_map_text(&value, "id", &id) &&
+            id.value == 1U && id.data[0] == expected->user_id[0]);
+        assert(cbor_map_uint(&map, 7U, &value) && cbor_map_text(&value, "id", &id) &&
+            id.value == 32U && memcmp(id.data, expected->credential_id, 32U) == 0);
+        assert(cbor_map_uint(&map, 8U, &value) && cbor_map_uint(&value, 3U, &id) && id.major == 1U && id.value == 6U);
+        assert(cbor_map_uint(&map, 10U, &value) && value.value == expected->cred_protect);
+        assert(cbor_map_uint(&map, 9U, &value) == (index == 0U));
+        if (index == 0U) assert(value.value == 2U);
+    }
+    /* Empty and omitted names remove stored fields; a different user ID fails. */
+    for (unsigned mode = 0U; mode < 3U; ++mode) {
+        token(&f, CTAP_PIN_PERMISSION_CM, "example.com");
+        CborWriter w; cbor_writer_init(&w, request, sizeof request); uint8_t mac[32]; memset(mac, 0x3C, sizeof mac);
+        uint8_t user = mode == 2U ? 9U : 1U;
+        assert(cbor_write_map(&w, 4U) && cbor_write_uint(&w, 1U) && cbor_write_uint(&w, 7U) &&
+            cbor_write_uint(&w, 2U) && cbor_write_map(&w, 2U) && cbor_write_uint(&w, 2U) &&
+            ctap_credential_descriptor_write(&w, a.credential_id) && cbor_write_uint(&w, 3U) &&
+            cbor_write_map(&w, mode == 0U ? 3U : 1U) && cbor_write_text(&w, "id") && cbor_write_bytes(&w, &user, 1U));
+        if (mode == 0U) assert(cbor_write_text(&w, "name") && cbor_write_text(&w, "Bob") &&
+            cbor_write_text(&w, "displayName") && cbor_write_text(&w, ""));
+        assert(cbor_write_uint(&w, 3U) && cbor_write_uint(&w, 2U) &&
+            cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, mac, sizeof mac));
+        uint64_t revision = f.service.metadata_revision; uint8_t previous_state[16]; memcpy(previous_state, f.pool.store_state, 16U);
+        assert(ctap_credential_management_execute(&f.service, &f.pin, &state, request, w.length,
+            output, sizeof output, &length, 0U) == (mode == 2U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_OK));
+        assert(f.service.metadata_revision == revision + (mode == 2U ? 0U : 1U));
+        assert((memcmp(previous_state, f.pool.store_state, 16U) == 0) == (mode == 2U));
+        AuthCredential expected = a;
+        memset(expected.user_name, 0, sizeof expected.user_name); expected.user_name_length = mode == 0U ? 3U : 0U;
+        if (mode == 0U) memcpy(expected.user_name, "Bob", 3U);
+        assert(memcmp(&f.pool.records[0], &expected, sizeof expected) == 0);
+        assert(memcmp(&f.pool.records[1], &b, sizeof b) == 0);
+        assert_management_scratch_cleared(&state);
+    }
+}
+
 static void test_management_missing_parameters_precede_protocol_errors(void)
 {
     Fixture f; setup(&f); AuthCredential original = create(&f, "example.com", 1U, 1U);
@@ -444,6 +501,12 @@ static void test_management_workspace_lifetime(void)
     assert(ctap_credential_management_execute(&f.service, &f.pin, &first, request, n,
         output, sizeof output, &length, 0U) == CTAP_STATUS_OK);
     assert(first.kind == 2U && first.next == 1U && first.count == 2U);
+    CborValue map, rp, value;
+    assert(cbor_read_document(output, length, &map) && map.value == 3U &&
+        cbor_map_uint(&map, 3U, &rp) && cbor_map_text(&rp, "id", &value) && cbor_text_equal(&value, "example.com"));
+    assert(cbor_map_uint(&map, 4U, &value) && value.value == 32U &&
+        memcmp(value.data, f.pool.records[0].rp_id_hash, 32U) == 0);
+    assert(cbor_map_uint(&map, 5U, &value) && value.value == 2U);
     assert_management_scratch_cleared(&first);
 
     /* A separate instance can fail without destroying the first snapshot. */
@@ -458,6 +521,10 @@ static void test_management_workspace_lifetime(void)
     n = management_request(request, 3U, NULL);
     assert(ctap_credential_management_execute(&f.service, &f.pin, &first, request, n,
         output, sizeof output, &length, 1U) == CTAP_STATUS_OK);
+    assert(cbor_read_document(output, length, &map) && map.value == 2U &&
+        cbor_map_uint(&map, 3U, &rp) && cbor_map_text(&rp, "id", &value) && cbor_text_equal(&value, "other.example"));
+    assert(cbor_map_uint(&map, 4U, &value) && value.value == 32U &&
+        memcmp(value.data, f.pool.records[1].rp_id_hash, 32U) == 0 && !cbor_map_uint(&map, 5U, &value));
     assert(first.kind == 0U);
     assert_management_scratch_cleared(&first);
 
@@ -546,6 +613,7 @@ int main(void)
   test_management_authentication_precedes_unknown_credential();
   test_management_missing_parameters_precede_protocol_errors();
   test_management_expiry_discards_snapshot();
+  test_management_responses_and_user_updates();
   test_management_workspace_lifetime();
   test_resident_workspace_lifetime();
   puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }

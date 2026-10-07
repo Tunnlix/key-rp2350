@@ -13,7 +13,7 @@
 
 ## Remaining CTAP 2.3 work
 
-Reviewed against current code on 2026-10-07. Section numbers refer to the standard above.
+Reviewed against current code on 2026-10-08. Section numbers refer to the standard above.
 
 ### Build and review boundaries
 
