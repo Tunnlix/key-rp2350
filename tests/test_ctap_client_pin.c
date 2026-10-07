@@ -8,8 +8,8 @@
 #include "protocol/ctaphid_response.h"
 #include "auth_test_provider.h"
 
-/* Transparent primitives test policy and persistence ordering. Genuine
- * protocol 2 cryptography is verified separately by the Python client tests. */
+/* Transparent primitives test policy and persistence ordering; final providers
+ * require independent cryptographic validation. */
 typedef struct {
     AuthPinRecord record;
     size_t reads, writes, decrypts, agreements, regenerated;
@@ -19,7 +19,7 @@ typedef struct {
     uint8_t expected_retries, mac_message[112];
     size_t mac_length;
     Store *credential_store;
-    bool random_fails, encrypt_fails;
+    bool random_fails, encrypt_fails, verify_fails;
 } PinMock;
 static AuthStatus pin_random(void *ctx, uint8_t *out, size_t length)
 { PinMock *m = ctx; if (m->random_fails) return AUTH_CRYPTO_ERROR; memset(out, 0xA5, length); return AUTH_OK; }
@@ -66,7 +66,7 @@ static AuthStatus mac(void *ctx, const uint8_t *key, size_t key_length,
     const uint8_t *data, size_t length, uint8_t out[32])
 {
     PinMock *m = ctx; (void)key; assert(key_length == 32U);
-    if (m->mac_fails) return AUTH_CRYPTO_ERROR;
+    if (m->mac_fails || (m->verify_fails && length >= 80U)) return AUTH_CRYPTO_ERROR;
     if (length >= 80U) { assert(length <= sizeof m->mac_message); memcpy(m->mac_message, data, length); m->mac_length = length; }
     memset(out, 0x3C, 32U); return AUTH_OK;
 }
@@ -123,12 +123,18 @@ static void seed(CtapClientPin *pin)
 static size_t encode(const CtapClientPinRequest *r, uint8_t *output)
 {
     CborWriter w; cbor_writer_init(&w, output, 512U);
-    assert(cbor_write_map(&w, r->subcommand == 4U ? 6U : 5U) && cbor_write_uint(&w, 1U) && cbor_write_uint(&w, 2U) &&
+    assert(cbor_write_map(&w, r->subcommand == 9U ? 5U + (r->rp_present ? 1U : 0U) : (r->subcommand == 4U ? 6U : 5U)) && cbor_write_uint(&w, 1U) && cbor_write_uint(&w, 2U) &&
         cbor_write_uint(&w, 2U) && cbor_write_uint(&w, r->subcommand) && cbor_write_uint(&w, 3U) && cbor_write_map(&w, 5U) &&
         cbor_write_int(&w, 1) && cbor_write_int(&w, 2) && cbor_write_int(&w, 3) && cbor_write_int(&w, -25) &&
         cbor_write_int(&w, -1) && cbor_write_int(&w, 1) && cbor_write_int(&w, -2) && cbor_write_bytes(&w, r->peer + 1U, 32U) &&
-        cbor_write_int(&w, -3) && cbor_write_bytes(&w, r->peer + 33U, 32U) &&
-        cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, r->auth, r->auth_length) &&
+        cbor_write_int(&w, -3) && cbor_write_bytes(&w, r->peer + 33U, 32U));
+    if (r->subcommand == 9U) {
+        assert(cbor_write_uint(&w, 6U) && cbor_write_bytes(&w, r->pin_hash_enc, 32U) &&
+            cbor_write_uint(&w, 9U) && cbor_write_uint(&w, r->permissions));
+        if (r->rp_present) assert(cbor_write_uint(&w, 10U) && cbor_write_text(&w, "example.com"));
+        return w.length;
+    }
+    assert(cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, r->auth, r->auth_length) &&
         cbor_write_uint(&w, 5U) && cbor_write_bytes(&w, r->new_pin_enc, 80U));
     if (r->subcommand == 4U) assert(cbor_write_uint(&w, 6U) && cbor_write_bytes(&w, r->pin_hash_enc, 32U));
     return w.length;
@@ -197,6 +203,30 @@ static void test_retries_and_power_cycle(void)
     m.record = (AuthPinRecord){0}; m.record.retries = 8U; ctap_client_pin_reset_state(&pin);
     seed(&pin); assert(m.record.set);
 }
+/* CTAP 2.3 §§6.5.5.5–6 and 6.5.5.7.2 define the wire errors for
+ * decapsulation and verification, including provider failures. */
+static void test_client_pin_crypto_error_mapping(void)
+{
+    const uint8_t commands[] = {3U, 4U, 9U};
+    for (size_t c = 0U; c < sizeof commands; ++c) {
+        for (unsigned failure = 0U; failure < (commands[c] == 9U ? 3U : 4U); ++failure) {
+            Store store = {0}; PinMock m; AuthCredentialService service; CtapClientPin pin;
+            setup(&pin, &service, &store, &m);
+            if (commands[c] != 3U) seed(&pin);
+            CtapClientPinRequest r = request(commands[c], (const uint8_t *)"5678", 4U, &m.record);
+            r.permissions = CTAP_PIN_PERMISSION_MC; r.rp_present = true;
+            memcpy(r.rp_id, "example.com", 11U); r.rp_length = 11U;
+            AuthPinRecord saved = m.record; size_t writes = m.writes, decrypts = m.decrypts;
+            uint64_t generation = pin.token_generation;
+            m.bad_peer = failure == 0U; m.agreement_fails = failure == 1U;
+            m.mac_fails = failure == 2U; m.verify_fails = failure == 3U;
+            assert(execute(&pin, &r) == (failure == 3U ? CTAP_STATUS_PIN_AUTH_INVALID : CTAP_STATUS_INVALID_PARAMETER));
+            assert(memcmp(&saved, &m.record, sizeof saved) == 0 && m.writes == writes && m.decrypts == decrypts);
+            assert(pin.token_generation == generation && !pin.token_active && pin.consecutive_failures == 0U);
+        }
+    }
+}
+
 static void test_change_and_failure_ordering(void)
 {
     Store store = {0}; PinMock m; AuthCredentialService service; CtapClientPin pin;
@@ -233,7 +263,7 @@ static void test_change_and_failure_ordering(void)
     setup(&pin, &service, &store, &m); m.bad_peer = true;
     assert(execute(&pin, &r) == 2U && m.writes == 0U);
     setup(&pin, &service, &store, &m); m.mac_fails = true;
-    assert(execute(&pin, &r) == 0x7FU && m.writes == 0U);
+    assert(execute(&pin, &r) == CTAP_STATUS_INVALID_PARAMETER && m.writes == 0U);
     setup(&pin, &service, &store, &m); m.hash_fails = true;
     assert(execute(&pin, &r) == 0x7FU && m.writes == 0U);
 }
@@ -326,6 +356,41 @@ static void issue(Fixture *f, uint8_t permissions, uint32_t now)
     assert(cbor_read_document(out, length, &map) && cbor_map_uint(&map, 2U, &encrypted) && encrypted.value == 48U);
     assert(f->pin.token_active && f->pin.permissions == permissions && f->mock.record.retries == 8U);
 }
+/* §6.5.5.7.2: unavailable permissions fail before PIN attempts; undefined
+ * bits are ignored. Exercise the CBOR path, not just prepared C requests. */
+static void test_token_permission_combinations(void)
+{
+    for (unsigned cm = 0U; cm < 2U; ++cm) {
+        for (unsigned rp = 0U; rp < 2U; ++rp) {
+            for (unsigned bits = 0U; bits < 256U; ++bits) {
+                Fixture f; fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
+                f.pin.credential_management = cm != 0U;
+                CtapClientPinRequest r = token_request(&f.mock.record, (uint8_t)bits), parsed;
+                r.rp_present = rp != 0U;
+                uint8_t input[512], output[80]; memset(output, 0xEE, sizeof output);
+                size_t n = encode(&r, input), length = 777U, writes = f.mock.writes;
+                uint64_t generation = f.pin.token_generation;
+                uint8_t expected = bits == 0U ? CTAP_STATUS_INVALID_PARAMETER :
+                    ((bits & 3U) && !rp) ? CTAP_STATUS_MISSING_PARAMETER :
+                    (bits & 0x78U) ? CTAP_STATUS_UNAUTHORIZED_PERMISSION :
+                    ((bits & 4U) && !cm) ? CTAP_STATUS_UNAUTHORIZED_PERMISSION : CTAP_STATUS_OK;
+                uint8_t status = ctap_client_pin_prepare(input, n, &parsed);
+                if (status == CTAP_STATUS_OK)
+                    status = ctap_client_pin_execute(&f.pin, &parsed, output, sizeof output, &length, 1U);
+                assert(status == expected);
+                if (status != CTAP_STATUS_OK) {
+                    assert(f.mock.writes == writes && generation == f.pin.token_generation);
+                    assert(f.pin.token_active && f.pin.permissions == 1U && output[0] == 0xEEU && length == 777U);
+                } else {
+                    assert(f.pin.permissions == (bits & 7U) && f.pin.token_rp_bound == (rp != 0U));
+                    assert(f.pin.token_generation == generation + 1U && !f.pin.token_used && f.pin.issued_at_ms == 1U);
+                    assert(f.mock.record.retries == 8U && length != 777U);
+                }
+            }
+        }
+    }
+}
+
 static size_t make_request(uint8_t out[512], bool auth, uint8_t policy, const uint8_t *excluded)
 {
     CborWriter w; cbor_writer_init(&w, out, 512U); uint8_t hash_bytes[32] = {0x42}, mac_bytes[32]; memset(mac_bytes, 0x3C, 32U);
@@ -378,14 +443,14 @@ static void test_tokens_policy_and_provider_failures(void)
     assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0x11U && !f.pin.token_used);
     n = assertion_request(input, f.store.record.credential_id, true, false, false);
     assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 0U, input, n, &ga) == 0U && ga.user_verified);
-    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 1U) == 0U && f.pin.token_active);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace, &ga, output, sizeof output, &length, 1U) == 0U && f.pin.token_active);
     assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 4U);
     issue(&f, 2U, 2U); /* A previously prepared request cannot switch to a new generation. */
-    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 2U) == 0x33U);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace, &ga, output, sizeof output, &length, 2U) == 0x33U);
     n = assertion_request(input, f.store.record.credential_id, true, true, false);
     assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace, &f.pin, 2U, input, n, &ga) == 0U);
     f.store.counter_fails = true;
-    assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 3U) == 0x7FU && !f.pin.token_active);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace, &ga, output, sizeof output, &length, 3U) == 0x7FU && !f.pin.token_active);
     f.store.counter_fails = false; assert(f.store.record.signature_count == 1U && f.store.signatures == 2U);
     n = make_request(input, false, 1U, f.store.record.credential_id);
     assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc) == 0U && !mc.credential_excluded);
@@ -405,7 +470,15 @@ static void test_token_time_wrap_and_waiting_abort(void)
     uint32_t start = UINT32_MAX - 99U; issue(&f, 1U, start);
     ctap_client_pin_poll(&f.pin, start + 29999U); assert(f.pin.token_active);
     ctap_client_pin_poll(&f.pin, start + 30000U); assert(!f.pin.token_active);
-    issue(&f, 1U, start); f.pin.token_used = true;
+    issue(&f, 1U, start);
+    CtapPinAuth auth = {.present = true}; memset(auth.mac, 0x3C, sizeof auth.mac);
+    uint8_t rp_hash[32], client_hash[32] = {0};
+    assert(pin_hash(&f.mock, (const uint8_t *)"example.com", 11U, rp_hash) == AUTH_OK);
+    auth.mac[0] ^= 1U;
+    assert(ctap_client_pin_authorize(&f.pin, &auth, rp_hash, client_hash, 1U, start + 29999U, true) == CTAP_STATUS_PIN_AUTH_INVALID);
+    assert(!f.pin.token_used);
+    auth.mac[0] ^= 1U;
+    assert(ctap_client_pin_authorize(&f.pin, &auth, rp_hash, client_hash, 1U, start + 29999U, true) == CTAP_STATUS_OK);
     ctap_client_pin_poll(&f.pin, start + 599999U); assert(f.pin.token_active);
     ctap_client_pin_poll(&f.pin, start + 600000U); assert(!f.pin.token_active);
     for (unsigned mode = 0U; mode < 3U; ++mode) {
@@ -467,7 +540,9 @@ static void test_get_info_reads_pin_state_and_fails_closed(void)
 int main(void)
 {
     test_validation_and_pin_policy(); test_retries_and_power_cycle(); test_change_and_failure_ordering();
+    test_client_pin_crypto_error_mapping();
     test_backend_abort_reset_and_advertising();
+    test_token_permission_combinations();
     test_tokens_policy_and_provider_failures(); test_token_time_wrap_and_waiting_abort();
     test_get_info_reads_pin_state_and_fails_closed();
     puts("ClientPIN tests passed (tokens, permissions, credProtect, UV, expiry/wrap, failures, CANCEL/INIT and Reset).");

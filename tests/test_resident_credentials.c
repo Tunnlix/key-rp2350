@@ -203,7 +203,10 @@ static void test_discovery_privacy_and_sequence_failures(void)
     uint8_t input[256],out[1024];size_t n=discovery(input,false),length;CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
     assert(ctap_get_assertion_prepare_with_pin(&f.service, &ga_workspace,&f.pin,0U,input,n,&prepared)==0U&&prepared.credential_count==1U);
     assert(memcmp(prepared.credential_id,first.credential_id,32U)==0);
-    assert(ctap_get_assertion_finish_at(&f.service,&prepared,out,sizeof out,&length,1U)==0U);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace,&prepared,out,sizeof out,&length,1U)==0U);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     CborValue map,user,name;assert(cbor_read_document(out,length,&map)&&cbor_map_uint(&map,4U,&user));
     assert(!cbor_map_text(&user,"name",&name)&&!cbor_map_uint(&map,5U,&name));
     token(&f,2U,"example.com");n=discovery(input,true);
@@ -212,17 +215,32 @@ static void test_discovery_privacy_and_sequence_failures(void)
     assert(!ga_workspace.busy);
     const unsigned char *scratch = (const unsigned char *)&ga_workspace.scratch;
     for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(scratch[i] == 0U);
-    assert(ctap_get_assertion_finish_at(&f.service,&prepared,out,sizeof out,&length,1U)==0U&&!f.pin.token_active);
+    assert(ctap_get_assertion_finish_at(&f.service, &ga_workspace,&prepared,out,sizeof out,&length,1U)==0U&&!f.pin.token_active);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     CtapAssertionSequence sequence;ctap_assertion_sequence_begin(&sequence,&prepared,UINT32_MAX-99U);
-    assert(ctap_get_next_assertion(&f.service,&sequence,out,sizeof out,&length,(UINT32_MAX-99U)+30000U)==0U);
+    assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,(UINT32_MAX-99U)+30000U)==0U);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     assert(!sequence.active&&f.pool.signed_count==3U);
     ctap_assertion_sequence_begin(&sequence,&prepared,0U);unsigned signatures=f.pool.signed_count;
-    assert(ctap_get_next_assertion(&f.service,&sequence,out,sizeof out,&length,30001U)==0x30U&&f.pool.signed_count==signatures);
+    assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,30001U)==0x30U&&f.pool.signed_count==signatures);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     ctap_assertion_sequence_begin(&sequence,&prepared,0U);f.pool.sign_fails=true;
-    assert(ctap_get_next_assertion(&f.service,&sequence,out,sizeof out,&length,1U)==0x7FU&&!sequence.active);
+    assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,1U)==0x7FU&&!sequence.active);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     f.pool.sign_fails=false;ctap_assertion_sequence_begin(&sequence,&prepared,0U);
     assert(auth_credentials_delete(&f.service,first.credential_id,first.rp_id_hash)==AUTH_OK);
-    assert(ctap_get_next_assertion(&f.service,&sequence,out,sizeof out,&length,1U)==0x30U);
+    assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,1U)==0x30U);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
 }
 static void test_backend_channel_resync_and_cancel(void)
 {

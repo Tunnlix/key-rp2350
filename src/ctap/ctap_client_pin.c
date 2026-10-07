@@ -68,10 +68,11 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (!present[3] || !present[6] || !present[9]) return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[6].major != 2U || fields[9].major != 0U || (present[10] && fields[10].major != 3U))
             return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        /* RP ID is mandatory for MC/GA, before permission availability (§6.5.5.7.2). */
+        if ((fields[9].value & 3U) != 0U && !present[10]) return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[6].value != 32U || fields[9].value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
         /* Known unavailable permissions are rejected; undefined bits ignored. */
         if ((fields[9].value & 0x78U) != 0U) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
-        if ((fields[9].value & 3U) != 0U && !present[10]) return CTAP_STATUS_MISSING_PARAMETER;
         if (present[10] && (fields[10].value == 0U || fields[10].value > sizeof prepared.rp_id))
             return CTAP_STATUS_INVALID_PARAMETER;
         prepared.permissions = fields[9].value & 7U;
@@ -171,13 +172,15 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
         if (pin->consecutive_failures >= 3U) { status = CTAP_STATUS_PIN_AUTH_BLOCKED; goto done; }
     }
     status = ctap_pin_protocol_shared(crypto, request->peer, keys);
-    if (status != CTAP_STATUS_OK) goto done;
+    /* ClientPIN defines decapsulation/verification wire errors independently
+     * of the provider's failure category (§§6.5.5.5–6, 6.5.5.7.2). */
+    if (status != CTAP_STATUS_OK) { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
     if (request->subcommand != 9U) {
         memcpy(message, request->new_pin_enc, 80U);
         if (request->subcommand == 4U) memcpy(message + 80U, request->pin_hash_enc, 32U);
         status = ctap_pin_protocol_verify(crypto, keys, message, request->subcommand == 4U ? 112U : 80U,
             request->auth, request->auth_length);
-        if (status != CTAP_STATUS_OK) goto done;
+        if (status != CTAP_STATUS_OK) { status = CTAP_STATUS_PIN_AUTH_INVALID; goto done; }
     }
     if (request->subcommand == 4U || request->subcommand == 9U) {
         /* Persist before decrypting/trying the verifier, including crash recovery. */

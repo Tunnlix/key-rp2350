@@ -155,14 +155,20 @@ static void test_assertion_extension_is_signed_and_bad_mac_does_not_increment(vo
     size_t request_length = assertion_request(request, true); CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
     assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0U);
     assert(mock.agreements == 0U && mock.evaluations == 0U && store.signatures == 0U);
-    assert(ctap_get_assertion_finish(&service, &prepared, response, sizeof response, &length) == 0U);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, response, sizeof response, &length) == 0U);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     assert(store.counter_at_sign == 1U && store.hashed_data[32] == 0x81U && store.hashed_length == 164U);
     CborValue map, data, extensions, encrypted;
     assert(cbor_read_document(response, length, &map) && cbor_map_uint(&map, 2U, &data) && data.value == 132U);
     assert(cbor_read_document(data.data + 37U, (size_t)data.value - 37U, &extensions));
     assert(cbor_map_text(&extensions, "hmac-secret", &encrypted) && encrypted.value == 80U);
     mock = (SecretMock){0}; prepared.hmac_secret.salt_auth[0] ^= 1U;
-    assert(ctap_get_assertion_finish(&service, &prepared, response, sizeof response, &length) == 0x33U);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, response, sizeof response, &length) == 0x33U);
+    { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
+      assert(!ga_workspace.busy);
+      for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     assert(store.record.signature_count == 1U && store.signatures == 1U);
     request_length = assertion_request(request, false);
     assert(ctap_get_assertion_prepare(&service, &ga_workspace, request, request_length, &prepared) == 0x2BU);

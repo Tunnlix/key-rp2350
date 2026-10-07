@@ -65,7 +65,7 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
     result->user_verified = result->auth.present;
     if (!present[3]) {
         if (pin == NULL || !auth_credentials_resident_supported(service)) return CTAP_STATUS_NO_CREDENTIALS;
-        uint64_t *order = workspace->scratch.order;
+        uint64_t *order = workspace->scratch.phase.order;
         for (size_t i = 0U; i < service->storage.capacity; ++i) {
             AuthStatus lookup = auth_credentials_enumerate(service, i, found);
             if (lookup == AUTH_NOT_FOUND) break;

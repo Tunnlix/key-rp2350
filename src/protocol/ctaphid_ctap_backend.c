@@ -290,7 +290,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
         /* Only outside coordinator callbacks, after fresh UP or explicit up=false.
          * CANCEL/resync aborts before this point, including silent requests. */
         size_t encoded_length = 0U;
-        uint8_t status = ctap_get_assertion_finish_at(backend->credentials, &backend->get_assertion,
+        uint8_t status = ctap_get_assertion_finish_at(backend->credentials, &backend->get_assertion_workspace, &backend->get_assertion,
             backend->response + 1U, sizeof backend->response - 1U, &encoded_length, now_ms);
         backend->response[0] = status;
         backend->response_length = status == CTAP_STATUS_OK ? 1U + encoded_length : 1U;
@@ -304,7 +304,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
         if (backend->awaiting_next_assertion) {
             if (backend->assertion_cid != device->active_channel_id) {
                 ctap_assertion_sequence_clear(&backend->assertion_sequence); status = CTAP_STATUS_NOT_ALLOWED;
-            } else status = ctap_get_next_assertion(backend->credentials, &backend->assertion_sequence,
+            } else status = ctap_get_next_assertion(backend->credentials, &backend->get_assertion_workspace, &backend->assertion_sequence,
                 backend->response + 1U, sizeof backend->response - 1U, &encoded_length, now_ms);
         } else {
             if (backend->management.kind != 0U && backend->management_cid != device->active_channel_id)

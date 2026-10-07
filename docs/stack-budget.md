@@ -45,12 +45,17 @@ rejected without touching the active operation. Response bytes are copied to
 the caller only after successful persistence and cleanup. Preparation copies
 its result to separate caller-owned output only on success.
 
-Assertion preparation takes a `CtapGetAssertionWorkspace *` as its second
-argument. Allocate and zero-initialize it in persistent RAM; the backend owns
-one automatically. Request state, the shared lookup record and discovery order
-array occupy 2,440 bytes including the guard on native x64 GCC. Every acquired
-exit wipes scratch; nested use preserves the active workspace. Prepared output
-is separate and published only on success. Finish/continuation APIs are unchanged.
+Assertion preparation, finish and GetNextAssertion take a
+`CtapGetAssertionWorkspace *` as their second argument. Allocate and
+zero-initialize it in persistent RAM; the backend owns one automatically.
+Request state and the credential record are shared across these operations;
+discovery ordering and finish buffers occupy a union. The workspace uses
+3,432 bytes on native x64 GCC, an increase of 992 bytes over preparation alone.
+Every acquired exit wipes scratch; nested use preserves the active workspace.
+Prepared output is separate and published only on success. Finish encodes into
+scratch and copies the response only after counter persistence, signing and
+encoding succeed. Continuation copies its request into scratch before selecting
+the next ID; its authenticated sequence remains separate between calls.
 
 ## Regression check
 
@@ -77,8 +82,9 @@ through `CTAP_MC_FINISH_STACK_BUDGET`. `ctap_make_credential.c` has a separate
 1,024-byte per-function limit through `CTAP_MC_PREPARE_STACK_BUDGET`.
 
 `ctap_get_assertion_prepare.c` has a 1,024-byte per-function limit through
-`CTAP_GA_PREPARE_STACK_BUDGET`. Assertion finish remains in a separate source
-file and is not covered by this limit.
+`CTAP_GA_PREPARE_STACK_BUDGET`. `ctap_get_assertion.c` has a 512-byte
+per-function limit through `CTAP_GA_FINISH_STACK_BUDGET`, covering finish and
+continuation entry points.
 
 For example, with GCC and Ninja available:
 
@@ -130,6 +136,12 @@ Assertion preparation's helper uses 640 bytes at `-O2` and 768 bytes at
 used 3,008/3,168 bytes. These figures exclude the convenience entry point,
 CBOR, credential-service and provider callees.
 
+Assertion finish's helper uses 240 bytes at `-O2` and 304 bytes at `-O0`,
+down from 2,720/2,768 bytes. Its timed wrapper adds 80 bytes; the convenience
+wrapper adds 96 bytes. GetNextAssertion uses 96 bytes in both builds, down
+from 992, and calls the same finish helper. These totals exclude backend,
+credential-service, CBOR, extension and provider callees.
+
 The migrated lookup/mutation functions use 64–96 bytes at `-O2`; the shared
 lookup helper uses 80 bytes. At `-O0` those functions use 64–80 bytes, lookup
 uses 64 bytes and cleanup uses 48 bytes. For example, the `get` and lookup
@@ -140,9 +152,8 @@ totals exclude their provider, validation and erasure callees.
 ## Establishing the firmware budget
 
 The checks are per function and cover credential management, credential service,
-both creation paths, registration preparation/finish and assertion preparation.
-Assertion finish scratch migration remains in
-`tasks.md`. A complete stack bound is not established yet.
+both creation paths, registration and assertion preparation/finish, and assertion
+continuation. A complete firmware stack bound remains outstanding in `tasks.md`.
 
 With final firmware optimization/LTO settings, account for each simultaneously
 live call chain through the coordinator, command handler, credential service,

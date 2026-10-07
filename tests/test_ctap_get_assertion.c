@@ -55,10 +55,18 @@ static void test_signature_layout_and_durable_counter(void)
     const unsigned char *scratch = (const unsigned char *)&ga_workspace.scratch;
     for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(scratch[i] == 0xA5U);
     assert(ga_workspace.busy && memcmp(&prepared, &saved, sizeof saved) == 0);
+    uint8_t untouched[192]; memset(untouched, 0xEE, sizeof untouched);
+    size_t untouched_length = 999U;
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, untouched, sizeof untouched,
+        &untouched_length) == CTAP_STATUS_OTHER);
+    assert(ga_workspace.busy && untouched_length == 999U && untouched[0] == 0xEEU);
+    assert(store.record.signature_count == 0U && store.signatures == 0U);
+    for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(scratch[i] == 0xA5U);
     ga_workspace.busy = false;
     assert(ctap_get_assertion_prepare(NULL, &ga_workspace, input, input_length, &prepared) == CTAP_STATUS_OTHER);
     assert_workspace_cleared(&ga_workspace);
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0U);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0U);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 1U && store.counter_at_sign == 1U && store.signatures == 1U);
     assert(store.hashed_length == 69U && store.hashed_data[32] == 1U && store.hashed_data[36] == 1U);
     assert(memcmp(store.hashed_data + 37U, prepared.client_data_hash, 32U) == 0);
@@ -72,7 +80,8 @@ static void test_signature_layout_and_durable_counter(void)
     input_length = request(input, false);
     assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0U && !prepared.user_presence_required);
     store.record.signature_count = 0x00FFFFFFU;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0U);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0U);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.counter_at_sign == 0x01000000U);
     assert(memcmp(store.hashed_data + 32U, (uint8_t[]){0, 1, 0, 0, 0}, 5U) == 0); /* Big endian, no AT/ED/UV. */
 }
@@ -83,24 +92,30 @@ static void test_fail_closed_and_counter_never_rolls_back(void)
     size_t length = 999U; CtapGetAssertionWorkspace ga_workspace = {0}; CtapGetAssertion prepared;
     size_t input_length = request(input, true);
     assert(ctap_get_assertion_prepare(&service, &ga_workspace, input, input_length, &prepared) == 0U);
-    assert(ctap_get_assertion_finish(&service, &prepared, output, 191U, &length) == 0x7FU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, 191U, &length) == 0x7FU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 0U && store.signatures == 0U);
     store.counter_fails = true;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 0U && store.signatures == 0U);
     store.counter_fails = false; store.sign_fails = true;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 1U && store.counter_at_sign == 1U);
     assert(output[0] == 0xEEU && length == 999U);
     store.sign_fails = false; store.hash_fails = true;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 2U && store.signatures == 1U);
     store.hash_fails = false;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0U);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0U);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == 3U && store.counter_at_sign == 3U);
     store.record.signature_count = UINT32_MAX;
     size_t signed_before = store.signatures;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.record.signature_count == UINT32_MAX && store.signatures == signed_before);
     store.read_fails = true;
     CtapGetAssertion saved = prepared;
@@ -108,10 +123,12 @@ static void test_fail_closed_and_counter_never_rolls_back(void)
     assert(memcmp(&prepared, &saved, sizeof saved) == 0);
     assert_workspace_cleared(&ga_workspace);
     store.read_fails = false; prepared.rp_id_hash[0] ^= 1U;
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x2EU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x2EU);
+    assert_workspace_cleared(&ga_workspace);
     assert(store.signatures == signed_before);
     prepared.rp_id_hash[0] ^= 1U; store.exists = false; /* Reset/deletion after prepare. */
-    assert(ctap_get_assertion_finish(&service, &prepared, output, sizeof output, &length) == 0x2EU);
+    assert(ctap_get_assertion_finish(&service, &ga_workspace, &prepared, output, sizeof output, &length) == 0x2EU);
+    assert_workspace_cleared(&ga_workspace);
 }
 
 typedef struct {

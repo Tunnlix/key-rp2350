@@ -24,14 +24,20 @@ typedef struct {
     uint64_t metadata_revision;
 } CtapGetAssertion;
 
-/* Zero-initialize in persistent caller-owned RAM. Preparation wipes acquired
+/* Zero-initialize in persistent caller-owned RAM. Preparation and finishing wipe acquired
  * scratch on every exit; nested use is rejected without clearing active scratch.
  * Inputs/output must not alias this workspace; callbacks may not retain pointers. */
 typedef struct {
     struct {
         CtapGetAssertion request;
         AuthCredential credential;
-        uint64_t order[AUTH_RESIDENT_MAX_COUNT];
+        union {
+            uint64_t order[AUTH_RESIDENT_MAX_COUNT];
+            struct {
+                uint8_t extension_output[80], signed_data[164], digest[32];
+                uint8_t signature[72], encoded[768];
+            } finish;
+        } phase;
     } scratch;
     bool busy;
 } CtapGetAssertionWorkspace;
@@ -45,7 +51,7 @@ typedef struct {
 void ctap_assertion_sequence_clear(CtapAssertionSequence *sequence);
 /* Begin only after the first assertion was successfully signed/encoded. */
 void ctap_assertion_sequence_begin(CtapAssertionSequence *sequence, const CtapGetAssertion *request, uint32_t now_ms);
-uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapAssertionSequence *sequence,
+uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace, CtapAssertionSequence *sequence,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 
 /* Validate CBOR, options, descriptors and RP binding. No counter updates/signing.
@@ -70,13 +76,14 @@ uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, Ctap
  * information and extensions. The extension requires
  * UP and is evaluated before counter updates; its encrypted output is signed
  * inside authenticator data with ED set. Storage/signing errors fail with OTHER.
- * Output must not overlap inputs/service. */
-uint8_t ctap_get_assertion_finish(AuthCredentialService *service,
+ * Output must not overlap inputs/service/workspace. Finish and continuation
+ * share the preparation guard and wipe acquired scratch on every exit. */
+uint8_t ctap_get_assertion_finish(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace,
     const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length);
 /* Required for PIN-bound prepared state. Recheck token/credential policy at
  * current injected time after UP. UP consumes token permissions before signing;
  * an authorized up=false request preserves them for a later touch operation. */
-uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service,
+uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace,
     const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 
 #endif
