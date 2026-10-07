@@ -22,30 +22,38 @@ typedef struct {
     AuthCredential metadata;
 } CtapMakeCredential;
 
-/* Zero-initialize once in persistent caller-owned RAM. Each finish call wipes
+/* Zero-initialize once in persistent caller-owned RAM. Each prepare/finish call wipes
  * scratch before returning. Do not alias API buffers with this workspace or
  * reenter an active workspace; callbacks may not retain pointers into it. */
 typedef struct {
-    struct {
-        AuthCredential credential;
-        uint8_t public_key[65], encoded[512];
+    union {
+        struct {
+            AuthCredential credential;
+            uint8_t public_key[65], encoded[512];
+        } finish;
+        struct {
+            CtapMakeCredential request;
+            AuthCredential excluded;
+        } prepare;
     } scratch;
     bool busy;
 } CtapMakeCredentialWorkspace;
 
 /* Validate the parameter map and check RP-bound exclusion before asking for UP.
  * Success means ready to wait for a fresh touch, not a created credential.
+ * Preparation leaves output unchanged on failure and clears acquired scratch.
+ * Prepared output must not alias workspace; prepare and finish share its guard.
  * Invalid/unsupported requests produce a CTAP status and never create keys.
  * Supports ES256; resident creation requires the complete storage/PIN binding.
  * Unsupported extensions/options are ignored.
  * This entry point has no PIN binding; the with_pin variant adds protocol 2
  * authorization, credProtect and discoverable credentials. Enterprise attestation
  * remains unsupported. */
-uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
+uint8_t ctap_make_credential_prepare(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 /* Authorize against the injected clock after validating all descriptors. The
  * prepared state snapshots the token generation and may be discarded on abort. */
-uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, CtapClientPin *pin,
+uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace, CtapClientPin *pin,
     uint32_t now_ms, const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 
 /* Caller MUST establish fresh user presence for this operation first.

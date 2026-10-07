@@ -1,8 +1,6 @@
 # Remaining tasks in execution order
 
-Continue the current P2 stack work with tasks 1–3, then complete the portable-core review and refactors. Tasks 8–12 depend on final providers and target integration; their implementation remains outside the portable-core refactoring. USB integration and hardware USB/WebAuthn tests remain out of scope. Keep only outstanding work here.
-
-- [ ] **1. Reduce registration preparation stack usage.** Move the large temporary request and exclusion-lookup records in `ctap_make_credential_prepare_with_pin()` into caller-owned per-instance storage. Preserve parameter/error precedence, RP-bound exclusion checks, PIN authorization and output-on-success behavior. Reuse registration and conformance tests; add scratch cleanup checks and a per-function stack limit.
+Continue the current P2 stack work with tasks 2–3, then complete the portable-core review and refactors. Tasks 8–12 depend on final providers and target integration; their implementation remains outside the portable-core refactoring. USB integration and hardware USB/WebAuthn tests remain out of scope. Keep only outstanding work here.
 
 - [ ] **2. Reduce assertion preparation stack usage.** Move temporary request and credential-selection records in `ctap_get_assertion_prepare_with_pin()` into caller-owned storage. Preserve allow-list validation, discovery privacy, credential ordering and authorization. Reuse assertion, resident-credential and conformance tests; verify failure cleanup and enforce a per-function stack limit.
 

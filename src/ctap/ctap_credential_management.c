@@ -73,6 +73,7 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
     if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
     CborValue params[4] = {{0}}; bool supplied[4] = {false};
     uint8_t id[32] = {0}, rp_hash[32] = {0}; AuthCredential *updated = &state->scratch.updated_user;
+    bool supported_descriptor = true;
     if (present[2] && command >= 4U) {
         status = ctap_request_map(fields[2].encoded, fields[2].encoded_length, 4U, params, supplied);
         if (status != CTAP_STATUS_OK) return status;
@@ -88,8 +89,8 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
         CborValue credential_id, type;
         status = ctap_request_descriptor(&params[2], &credential_id, &type);
         if (status != CTAP_STATUS_OK) return status;
-        if (!cbor_text_equal(&type, "public-key") || credential_id.value != 32U) return CTAP_STATUS_NO_CREDENTIALS;
-        memcpy(id, credential_id.data, 32U);
+        supported_descriptor = cbor_text_equal(&type, "public-key") && credential_id.value == sizeof id;
+        if (supported_descriptor) memcpy(id, credential_id.data, sizeof id);
         if (command == 7U) {
             status = ctap_user_entity_parse(&params[3], updated);
             if (status != CTAP_STATUS_OK) return status;
@@ -105,6 +106,9 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
     status = ctap_client_pin_authorize_management(pin, scope, message, message_length, fields[4].data, now_ms);
     if (status != CTAP_STATUS_OK) return status;
     if (command == 6U || command == 7U) {
+        /* Authenticate before reporting credential availability (§6.8.5–6).
+         * Structurally valid foreign descriptors cannot match local records. */
+        if (!supported_descriptor) return CTAP_STATUS_NO_CREDENTIALS;
         AuthCredential *found = &state->scratch.record;
         AuthStatus lookup = service->storage.read(service->storage.context, id, found);
         if (lookup == AUTH_NOT_FOUND) return CTAP_STATUS_NO_CREDENTIALS;

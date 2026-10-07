@@ -35,13 +35,15 @@ during creation and creation during an active lookup are rejected. The service
 now occupies 4,616 bytes on native x64 GCC, a 1,416-byte increase with alignment
 and the lookup guard. Input/output must not alias either internal workspace.
 
-Registration finish takes a `CtapMakeCredentialWorkspace *` as its second
+Registration preparation and finish take a `CtapMakeCredentialWorkspace *` as their second
 argument. The backend owns and initializes one; direct callers must allocate
 and zero-initialize their own in persistent RAM. It holds the temporary
-credential, public key and response, using 2,000 bytes on native x64 GCC.
-Both finish entry points clear idle scratch on return; reuse while busy is
+credential, public key and response, sharing a union with preparation's request
+and exclusion-lookup record. It uses 3,232 bytes on native x64 GCC, an increase
+of 1,232 bytes. All prepare/finish entry points clear acquired scratch on return; reuse while busy is
 rejected without touching the active operation. Response bytes are copied to
-the caller only after successful persistence and cleanup.
+the caller only after successful persistence and cleanup. Preparation copies
+its result to separate caller-owned output only on success.
 
 ## Regression check
 
@@ -64,8 +66,8 @@ not validate the stack budget.
 inside this checked module.
 
 `ctap_make_credential_finish.c` has a 512-byte per-function limit configured
-through `CTAP_MC_FINISH_STACK_BUDGET`. Registration preparation remains in a
-separate source file and is not covered by that limit.
+through `CTAP_MC_FINISH_STACK_BUDGET`. `ctap_make_credential.c` has a separate
+1,024-byte per-function limit through `CTAP_MC_PREPARE_STACK_BUDGET`.
 
 For example, with GCC and Ninja available:
 
@@ -105,6 +107,13 @@ is 336/320 bytes, compared with the previous 2,240-byte finish frame at `-O2`.
 The response callback adds 272/304 bytes when active. These figures exclude
 credential-service calls, attestation/crypto helpers and provider stack.
 
+Registration preparation's helper uses 960 bytes at `-O2` and 832 bytes at
+`-O0`; its cleanup wrapper uses 80/96 bytes. At `-O2` the helper includes
+inlined exclusion lookup, replacing the previous 4,144-byte helper frame.
+At `-O0` exclusion lookup adds 224 bytes, down from 1,632 bytes; preparation
+previously used 2,640 bytes. These figures exclude the convenience entry point,
+CBOR and credential-service callees, and provider stack.
+
 The migrated lookup/mutation functions use 64–96 bytes at `-O2`; the shared
 lookup helper uses 80 bytes. At `-O0` those functions use 64–80 bytes, lookup
 uses 64 bytes and cleanup uses 48 bytes. For example, the `get` and lookup
@@ -115,7 +124,7 @@ totals exclude their provider, validation and erasure callees.
 ## Establishing the firmware budget
 
 The checks are per function and cover credential management, credential service,
-both creation paths and registration finish. Preparation and assertion scratch migration remain in
+both creation paths and registration preparation/finish. Assertion scratch migration remains in
 `tasks.md`. A complete stack bound is not established yet.
 
 With final firmware optimization/LTO settings, account for each simultaneously

@@ -2,6 +2,7 @@
 
 - Do not create README files.
 - When asked for the next task, give the next implementation step directly. Keep tasks small; prioritize portable implementation and reuse existing targeted checks.
+- Follow `tasks.md` in execution order unless the user changes priorities.
 - This repository now contains the portable C17 core and native C tests only. Do not reintroduce Windows implementations, Python clients/helpers, host examples or platform-specific runtime dependencies.
 - Keep `src/` and `include/` independent of console I/O, heap allocation and host APIs. Inject platform actions through callbacks; providers own private keys and credential randoms.
 - CTAP2 only: no CTAP1/U2F or legacy compatibility paths. Keep CTAPHID_MSG unsupported and advertise CAPABILITY_NMSG.

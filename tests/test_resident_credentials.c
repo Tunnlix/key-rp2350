@@ -315,6 +315,41 @@ static void assert_management_scratch_cleared(const CtapCredentialManagement *st
     for (size_t i = 0U; i < sizeof state->scratch; ++i) assert(bytes[i] == 0U);
 }
 
+static void test_management_authentication_precedes_unknown_credential(void)
+{
+    Fixture f; setup(&f);
+    AuthCredential original = create(&f, "example.com", 1U, 1U);
+    CtapCredentialManagement state = {0};
+    for (uint8_t command = 6U; command <= 7U; ++command) {
+        for (unsigned descriptor = 0U; descriptor < 3U; ++descriptor) {
+            for (unsigned authenticated = 0U; authenticated < 2U; ++authenticated) {
+                token(&f, CTAP_PIN_PERMISSION_CM, NULL);
+                uint8_t request[256], output[32], saved[32], id[32] = {0}, mac[32];
+                memset(mac, authenticated ? 0x3C : 0, sizeof mac);
+                CborWriter w; cbor_writer_init(&w, request, sizeof request);
+                assert(cbor_write_map(&w, 4U) && cbor_write_uint(&w, 1U) && cbor_write_uint(&w, command) &&
+                    cbor_write_uint(&w, 2U) && cbor_write_map(&w, command == 7U ? 2U : 1U) &&
+                    cbor_write_uint(&w, 2U) && cbor_write_map(&w, 2U) &&
+                    cbor_write_text(&w, "id") && cbor_write_bytes(&w, id, descriptor == 0U ? 31U : 32U) &&
+                    cbor_write_text(&w, "type") && cbor_write_text(&w, descriptor == 1U ? "foreign" : "public-key"));
+                if (command == 7U) assert(cbor_write_uint(&w, 3U) && cbor_write_map(&w, 1U) &&
+                    cbor_write_text(&w, "id") && cbor_write_bytes(&w, original.user_id, original.user_id_length));
+                assert(cbor_write_uint(&w, 3U) && cbor_write_uint(&w, 2U) &&
+                    cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, mac, sizeof mac));
+                memset(output, 0xEE, sizeof output); memcpy(saved, output, sizeof output);
+                size_t length = 999U; uint64_t revision = f.service.metadata_revision;
+                assert(ctap_credential_management_execute(&f.service, &f.pin, &state, request, w.length,
+                    output, sizeof output, &length, 0U) ==
+                    (authenticated ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_PIN_AUTH_INVALID));
+                assert(length == 999U && memcmp(output, saved, sizeof output) == 0);
+                assert(f.service.metadata_revision == revision && f.pool.destroyed == 0U);
+                assert(memcmp(&f.pool.records[0], &original, sizeof original) == 0);
+                assert_management_scratch_cleared(&state);
+            }
+        }
+    }
+}
+
 static void test_management_workspace_lifetime(void)
 {
     Fixture f; setup(&f);
@@ -426,6 +461,7 @@ static void test_resident_workspace_lifetime(void)
 
 int main(void)
 { test_atomic_lifecycle_failures();test_registration_failure_preserves_replaced_credential();test_discovery_privacy_and_sequence_failures();test_backend_channel_resync_and_cancel();test_management_failures_and_channel_binding();
+  test_management_authentication_precedes_unknown_credential();
   test_management_workspace_lifetime();
   test_resident_workspace_lifetime();
   puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }

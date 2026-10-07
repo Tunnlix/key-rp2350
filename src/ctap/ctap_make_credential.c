@@ -40,7 +40,7 @@ static uint8_t algorithms(const CborValue *array)
     return supported ? CTAP_STATUS_OK : CTAP_STATUS_UNSUPPORTED_ALGORITHM;
 }
 
-static uint8_t exclusions(AuthCredentialService *service, const CborValue *array, CtapMakeCredential *prepared)
+static uint8_t exclusions(AuthCredentialService *service, const CborValue *array, CtapMakeCredential *prepared, AuthCredential *found)
 {
     if (array->major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (array->value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
@@ -53,9 +53,8 @@ static uint8_t exclusions(AuthCredentialService *service, const CborValue *array
         /* Unknown credential types and other authenticators' ID sizes cannot
          * refer to our records. Still validate the entire list before touch. */
         if (cbor_text_equal(&type, "public-key") && id.value == 32U) {
-            AuthCredential found;
-            AuthStatus lookup = auth_credentials_get(service, id.data, prepared->rp_id_hash, &found);
-            if (lookup == AUTH_OK && (found.cred_protect != 3U || prepared->user_verified)) prepared->credential_excluded = true;
+            AuthStatus lookup = auth_credentials_get(service, id.data, prepared->rp_id_hash, found);
+            if (lookup == AUTH_OK && (found->cred_protect != 3U || prepared->user_verified)) prepared->credential_excluded = true;
             else if (lookup == AUTH_OK) continue;
             else if (lookup != AUTH_NOT_FOUND) return CTAP_STATUS_OTHER;
         }
@@ -63,13 +62,13 @@ static uint8_t exclusions(AuthCredentialService *service, const CborValue *array
     return CTAP_STATUS_OK;
 }
 
-uint8_t ctap_make_credential_prepare(AuthCredentialService *service,
+uint8_t ctap_make_credential_prepare(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared)
 {
-    return ctap_make_credential_prepare_with_pin(service, NULL, 0U, parameters, length, prepared);
+    return ctap_make_credential_prepare_with_pin(service, workspace, NULL, 0U, parameters, length, prepared);
 }
 
-uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, CtapClientPin *pin,
+static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace, CtapClientPin *pin,
     uint32_t now_ms, const uint8_t *parameters, size_t length, CtapMakeCredential *prepared)
 {
     if (service == NULL || prepared == NULL || (pin != NULL && pin->service != service)) return CTAP_STATUS_OTHER;
@@ -77,10 +76,11 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
     bool present[12] = {false};
     uint8_t status = ctap_request_map(parameters, length, 12U, fields, present);
     if (status != 0U) return status;
-    CtapMakeCredential result = {0}; result.pin = pin; result.cred_protect = 1U;
-    status = ctap_pin_auth_parse(pin, present[8] ? &fields[8] : NULL, present[9] ? &fields[9] : NULL, &result.auth);
+    CtapMakeCredential *result = &workspace->scratch.prepare.request;
+    result->pin = pin; result->cred_protect = 1U;
+    status = ctap_pin_auth_parse(pin, present[8] ? &fields[8] : NULL, present[9] ? &fields[9] : NULL, &result->auth);
     if (status != CTAP_STATUS_OK) return status;
-    if (result.auth.probe) { *prepared = result; return CTAP_STATUS_OK; }
+    if (result->auth.probe) { *prepared = *result; return CTAP_STATUS_OK; }
     for (size_t i = 1U; i <= 4U; ++i) if (!present[i]) return CTAP_STATUS_MISSING_PARAMETER;
     if (fields[1].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (fields[1].value != 32U) return CTAP_STATUS_INVALID_LENGTH;
@@ -115,9 +115,9 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
                 enabled[i] = value.encoded[0] == 0xF5U;
             }
         }
-        if ((enabled[0] && !result.auth.present) || !enabled[2]) return CTAP_STATUS_INVALID_OPTION;
+        if ((enabled[0] && !result->auth.present) || !enabled[2]) return CTAP_STATUS_INVALID_OPTION;
         if (enabled[1] && (pin == NULL || !auth_credentials_resident_supported(service))) return CTAP_STATUS_UNSUPPORTED_OPTION;
-        result.discoverable = enabled[1];
+        result->discoverable = enabled[1];
     }
     if (present[10]) return fields[10].major == 0U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (present[6]) {
@@ -126,17 +126,17 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
         if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[6], "hmac-secret", &value)) {
             if (value.major != 7U || (value.encoded[0] != 0xF4U && value.encoded[0] != 0xF5U))
                 return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            result.hmac_secret_requested = value.encoded[0] == 0xF5U;
+            result->hmac_secret_requested = value.encoded[0] == 0xF5U;
         }
         if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(&fields[6], "hmac-secret-mc", &value)) {
-            if (!result.hmac_secret_requested) return CTAP_STATUS_MISSING_PARAMETER;
-            status = ctap_hmac_secret_parse(&value, &result.hmac_secret_mc);
+            if (!result->hmac_secret_requested) return CTAP_STATUS_MISSING_PARAMETER;
+            status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
             if (status != CTAP_STATUS_OK) return status;
         }
         if (pin != NULL && cbor_map_text(&fields[6], "credProtect", &value)) {
             if (value.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
             if (value.value < 1U || value.value > 3U) return CTAP_STATUS_INVALID_PARAMETER;
-            result.cred_protect_requested = true; result.cred_protect = (uint8_t)value.value;
+            result->cred_protect_requested = true; result->cred_protect = (uint8_t)value.value;
         }
     }
     if (present[11]) {
@@ -144,36 +144,48 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
         const uint8_t *next = fields[11].data, *limit = fields[11].encoded + fields[11].encoded_length;
         for (uint64_t i = 0; i < fields[11].value; ++i) {
             if (!cbor_read_next(&next, limit, &value) || value.major != 3U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            if (fields[11].value == 1U && cbor_text_equal(&value, "none")) result.omit_attestation = true;
+            if (fields[11].value == 1U && cbor_text_equal(&value, "none")) result->omit_attestation = true;
         }
     }
-    memcpy(result.client_data_hash, fields[1].data, 32U);
-    result.user_id_length = (size_t)user.value;
-    memcpy(result.user_id, user.data, result.user_id_length); /* Empty user.id is valid. */
-    if (service->crypto.sha256(service->crypto.context, rp.data, (size_t)rp.value, result.rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
-    status = ctap_client_pin_authorize(pin, &result.auth, result.rp_id_hash, result.client_data_hash,
+    memcpy(result->client_data_hash, fields[1].data, 32U);
+    result->user_id_length = (size_t)user.value;
+    memcpy(result->user_id, user.data, result->user_id_length); /* Empty user.id is valid. */
+    if (service->crypto.sha256(service->crypto.context, rp.data, (size_t)rp.value, result->rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
+    status = ctap_client_pin_authorize(pin, &result->auth, result->rp_id_hash, result->client_data_hash,
         CTAP_PIN_PERMISSION_MC, now_ms, false);
     if (status != CTAP_STATUS_OK) return status;
-    result.user_verified = result.auth.present;
-    if (result.discoverable) {
+    result->user_verified = result->auth.present;
+    if (result->discoverable) {
         bool set;
         status = ctap_client_pin_status(pin, &set);
         if (status != CTAP_STATUS_OK) return status;
-        if (set && !result.user_verified) return CTAP_STATUS_PUAT_REQUIRED;
-        status = ctap_rp_entity_parse(&fields[2], &result.metadata);
+        if (set && !result->user_verified) return CTAP_STATUS_PUAT_REQUIRED;
+        status = ctap_rp_entity_parse(&fields[2], &result->metadata);
         if (status != CTAP_STATUS_OK) return status;
-        status = ctap_user_entity_parse(&fields[3], &result.metadata);
+        status = ctap_user_entity_parse(&fields[3], &result->metadata);
         if (status != CTAP_STATUS_OK) return status;
-        memcpy(result.metadata.rp_id_hash, result.rp_id_hash, 32U);
-        result.metadata.cred_protect = result.cred_protect;
+        memcpy(result->metadata.rp_id_hash, result->rp_id_hash, 32U);
+        result->metadata.cred_protect = result->cred_protect;
     }
     if (present[5]) {
-        status = exclusions(service, &fields[5], &result);
+        status = exclusions(service, &fields[5], result, &workspace->scratch.prepare.excluded);
         if (status != 0U) return status;
     }
-    status = ctap_client_pin_authorize(pin, &result.auth, result.rp_id_hash, result.client_data_hash,
+    status = ctap_client_pin_authorize(pin, &result->auth, result->rp_id_hash, result->client_data_hash,
         CTAP_PIN_PERMISSION_MC, now_ms, true);
     if (status != CTAP_STATUS_OK) return status;
-    *prepared = result;
+    *prepared = *result;
     return CTAP_STATUS_OK;
+}
+
+uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace,
+    CtapClientPin *pin, uint32_t now_ms, const uint8_t *parameters, size_t length, CtapMakeCredential *prepared)
+{
+    if (workspace == NULL || workspace->busy) return CTAP_STATUS_OTHER;
+    workspace->busy = true;
+    auth_secure_zero(&workspace->scratch, sizeof workspace->scratch);
+    uint8_t status = prepare_with_pin(service, workspace, pin, now_ms, parameters, length, prepared);
+    auth_secure_zero(&workspace->scratch, sizeof workspace->scratch);
+    workspace->busy = false;
+    return status;
 }

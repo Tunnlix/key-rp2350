@@ -134,7 +134,7 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
         return;
     }
     if (request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_MAKE_CREDENTIAL && backend->credentials != NULL) {
-        uint8_t status = ctap_make_credential_prepare(backend->credentials, request + 1U,
+        uint8_t status = ctap_make_credential_prepare(backend->credentials, &backend->make_credential_workspace, request + 1U,
             request_length - 1U, &backend->make_credential);
         backend->awaiting_make_credential = status == CTAP_STATUS_OK;
         backend->awaiting_presence = backend->awaiting_make_credential;
@@ -204,7 +204,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     if (backend->awaiting_credential_prepare) {
         uint8_t status;
         if (backend->prepare_make) {
-            status = ctap_make_credential_prepare_with_pin(backend->credentials, backend->pin, now_ms,
+            status = ctap_make_credential_prepare_with_pin(backend->credentials, &backend->make_credential_workspace, backend->pin, now_ms,
                 backend->credential_request, backend->credential_request_length, &backend->make_credential);
             backend->awaiting_make_credential = status == CTAP_STATUS_OK;
             backend->awaiting_presence = backend->awaiting_make_credential;

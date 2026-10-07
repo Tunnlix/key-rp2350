@@ -359,16 +359,15 @@ static void test_tokens_policy_and_provider_failures(void)
 {
     Fixture f; fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
     uint8_t input[512], output[512], aaguid[16] = {0}; size_t length, n = make_request(input, true, 3U, NULL);
-    CtapMakeCredential mc;
-    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && mc.user_verified);
-    CtapMakeCredentialWorkspace workspace = {0};
+    CtapMakeCredentialWorkspace workspace = {0}; CtapMakeCredential mc;
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc) == 0U && mc.user_verified);
     assert(ctap_make_credential_finish_at(&f.service, &workspace, &mc, aaguid, output, sizeof output, &length, 1U) == 0U);
     CborValue map, data, extension, policy;
     assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 0xC5U);
     assert(cbor_read_document(data.data + 164U, (size_t)data.value - 164U, &extension) &&
         cbor_map_text(&extension, "credProtect", &policy) && policy.value == 3U);
     assert(f.store.record.cred_protect == 3U && f.store.signatures == 1U && !f.pin.token_active);
-    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 2U, input, n, &mc) == 0x33U);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 2U, input, n, &mc) == 0x33U);
     CtapGetAssertion ga;
     n = assertion_request(input, f.store.record.credential_id, false, true, false);
     assert(ctap_get_assertion_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &ga) == 0x2EU);
@@ -389,9 +388,9 @@ static void test_tokens_policy_and_provider_failures(void)
     assert(ctap_get_assertion_finish_at(&f.service, &ga, output, sizeof output, &length, 3U) == 0x7FU && !f.pin.token_active);
     f.store.counter_fails = false; assert(f.store.record.signature_count == 1U && f.store.signatures == 2U);
     n = make_request(input, false, 1U, f.store.record.credential_id);
-    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && !mc.credential_excluded);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc) == 0U && !mc.credential_excluded);
     issue(&f, 1U, 0U); n = make_request(input, true, 1U, f.store.record.credential_id);
-    assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && mc.credential_excluded);
+    assert(ctap_make_credential_prepare_with_pin(&f.service, &workspace, &f.pin, 0U, input, n, &mc) == 0U && mc.credential_excluded);
     for (unsigned failure = 0U; failure < 3U; ++failure) {
         fixture_init(&f); seed(&f.pin); issue(&f, 1U, 0U);
         CtapClientPinRequest r = token_request(&f.mock.record, 1U); size_t unchanged = 777U;

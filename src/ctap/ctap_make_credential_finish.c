@@ -45,7 +45,7 @@ static AuthStatus prepare_response(void *context, const AuthCredential *credenti
     if (!ctap_attestation_encode(service, credential, public_key, prepared->client_data_hash, response->aaguid,
         prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL,
         prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
-        response->workspace->scratch.encoded, sizeof response->workspace->scratch.encoded, &response->length)) return AUTH_CRYPTO_ERROR;
+        response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length)) return AUTH_CRYPTO_ERROR;
     response->status = CTAP_STATUS_OK;
     return AUTH_OK;
 }
@@ -75,8 +75,8 @@ static uint8_t finish_at(AuthCredentialService *service,
         uint8_t validated = ctap_hmac_secret_validate(service, &prepared->hmac_secret_mc);
         if (validated != CTAP_STATUS_OK) return validated;
     }
-    AuthCredential *credential = &workspace->scratch.credential;
-    uint8_t *public_key = workspace->scratch.public_key;
+    AuthCredential *credential = &workspace->scratch.finish.credential;
+    uint8_t *public_key = workspace->scratch.finish.public_key;
     AuthStatus status;
     RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, CTAP_STATUS_OK};
     if (prepared->discoverable) {
@@ -97,7 +97,7 @@ static uint8_t finish_at(AuthCredentialService *service,
         if (response.status != CTAP_STATUS_OK) return response.status;
         return status == AUTH_CAPACITY ? CTAP_STATUS_KEY_STORE_FULL : CTAP_STATUS_OTHER;
     }
-    memcpy(output, workspace->scratch.encoded, response.length); *length = response.length;
+    memcpy(output, workspace->scratch.finish.encoded, response.length); *length = response.length;
     return CTAP_STATUS_OK;
 }
 
