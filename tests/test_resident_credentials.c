@@ -122,6 +122,13 @@ static size_t discovery(uint8_t *out,bool authorized)
   assert(cbor_write_map(&w,authorized?4U:2U)&&cbor_write_uint(&w,1U)&&cbor_write_text(&w,"example.com")&&
     cbor_write_uint(&w,2U)&&cbor_write_bytes(&w,hash_bytes,32U));
   if(authorized){assert(cbor_write_uint(&w,6U)&&cbor_write_bytes(&w,mac,32U)&&cbor_write_uint(&w,7U)&&cbor_write_uint(&w,2U));}return w.length; }
+static void assert_lookup_scratch_cleared(const AuthCredentialService *service)
+{
+    const unsigned char *bytes = (const unsigned char *)&service->lookup_scratch;
+    for (size_t i = 0U; i < sizeof service->lookup_scratch; ++i) assert(bytes[i] == 0U);
+    assert(!service->lookup_busy);
+}
+
 static void test_atomic_lifecycle_failures(void)
 {
     Fixture f;setup(&f);AuthCredential first=create(&f,"example.com",1U,1U);(void)create(&f,"example.com",2U,2U);
@@ -138,11 +145,19 @@ static void test_atomic_lifecycle_failures(void)
     f.pool.erase_fails=true;assert(auth_credentials_delete(&f.service,replaced.credential_id,replaced.rp_id_hash)==AUTH_IO_ERROR);
     assert(f.pool.destroyed==2U&&f.pool.used[0]);f.pool.erase_fails=false;
     f.pool.update_fails=true;replaced.user_name[0]='B';assert(auth_credentials_update_user(&f.service,&replaced)==AUTH_IO_ERROR);
+    assert_lookup_scratch_cleared(&f.service);
     assert(f.pool.records[0].user_name[0]=='A');f.pool.update_fails=false;
     replaced.cred_protect=1U;replaced.signature_count=77U;replaced.creation_order=99U;replaced.key.bytes[0]=0x99U;
     assert(auth_credentials_update_user(&f.service,&replaced)==AUTH_OK&&f.pool.records[0].user_name[0]=='B');
+    assert_lookup_scratch_cleared(&f.service);
+    assert(auth_credentials_enumerate(&f.service, 0U, &out) == AUTH_OK);
+    assert_lookup_scratch_cleared(&f.service);
     f.pool.enumerate_fails=true;m=metadata("example.com",1U,1U);
     assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_IO_ERROR&&f.pool.generated==generated);
+    AuthCredential saved = out;
+    assert(auth_credentials_enumerate(&f.service, 0U, &out) == AUTH_IO_ERROR);
+    assert(memcmp(&saved, &out, sizeof out) == 0);
+    assert_lookup_scratch_cleared(&f.service);
 }
 static void test_registration_failure_preserves_replaced_credential(void)
 {
@@ -339,11 +354,11 @@ static void test_management_workspace_lifetime(void)
     assert_management_scratch_cleared(&first);
 }
 
-static void assert_resident_scratch_cleared(const AuthCredentialService *service)
+static void assert_creation_scratch_cleared(const AuthCredentialService *service)
 {
-    const unsigned char *bytes = (const unsigned char *)&service->resident_scratch;
-    for (size_t i = 0U; i < sizeof service->resident_scratch; ++i) assert(bytes[i] == 0U);
-    assert(!service->resident_busy);
+    const unsigned char *bytes = (const unsigned char *)&service->creation_scratch;
+    for (size_t i = 0U; i < sizeof service->creation_scratch; ++i) assert(bytes[i] == 0U);
+    assert(!service->creation_busy);
 }
 
 typedef struct {
@@ -357,13 +372,19 @@ static AuthStatus prepare_with_nested_creation(void *context, const AuthCredenti
     PrepareContext *test = context;
     AuthCredential saved = *staged, output;
     uint8_t key[65]; memset(&output, 0xEE, sizeof output); memset(key, 0xEE, sizeof key);
-    assert(test->owner->service.resident_busy && public_key_bytes[0] == 4U);
+    assert(test->owner->service.creation_busy && public_key_bytes[0] == 4U);
     assert(auth_credentials_create_resident(&test->owner->service, &saved, &output, key) == AUTH_INVALID_ARGUMENT);
-    assert(memcmp(staged, &saved, sizeof saved) == 0 && test->owner->service.resident_busy);
+    assert(auth_credentials_create_protected(&test->owner->service, saved.rp_id_hash,
+        saved.user_id, saved.user_id_length, false, 1U, &output, key) == AUTH_INVALID_ARGUMENT);
+    assert(memcmp(staged, &saved, sizeof saved) == 0 && test->owner->service.creation_busy);
     assert(output.credential_id[0] == 0xEEU && key[0] == 0xEEU);
+    assert(auth_credentials_get(&test->owner->service, test->owner->pool.records[0].credential_id,
+        saved.rp_id_hash, &output) == AUTH_OK);
+    assert(!test->owner->service.lookup_busy && test->owner->service.creation_busy);
+    assert(memcmp(staged, &saved, sizeof saved) == 0);
     /* Independent services own independent workspaces. */
     assert(auth_credentials_create_resident(&test->other->service, &saved, &output, key) == AUTH_OK);
-    assert_resident_scratch_cleared(&test->other->service);
+    assert_creation_scratch_cleared(&test->other->service);
     assert(memcmp(staged, &saved, sizeof saved) == 0);
     ++test->calls;
     return AUTH_CRYPTO_ERROR;
@@ -373,7 +394,7 @@ static void test_resident_workspace_lifetime(void)
 {
     Fixture f, other; setup(&f); setup(&other);
     AuthCredential original = create(&f, "example.com", 1U, 1U);
-    assert_resident_scratch_cleared(&f.service);
+    assert_creation_scratch_cleared(&f.service);
     AuthCredential m = metadata("example.com", 1U, 2U), output, saved;
     uint8_t key[65], saved_key[65];
     memset(&output, 0xEE, sizeof output); saved = output;
@@ -385,7 +406,7 @@ static void test_resident_workspace_lifetime(void)
         f.pool.generate_fails = failure == 2U;
         f.pool.put_fails = failure == 3U;
         assert(auth_credentials_create_resident(&f.service, &m, &output, key) != AUTH_OK);
-        assert_resident_scratch_cleared(&f.service);
+        assert_creation_scratch_cleared(&f.service);
         assert(memcmp(&output, &saved, sizeof saved) == 0 && memcmp(key, saved_key, sizeof key) == 0);
         assert(memcmp(&f.pool.records[0], &original, sizeof original) == 0);
         assert(f.service.metadata_revision == revision);
@@ -397,10 +418,10 @@ static void test_resident_workspace_lifetime(void)
     assert(context.calls == 1U && f.service.metadata_revision == revision);
     assert(memcmp(&f.pool.records[0], &original, sizeof original) == 0);
     assert(memcmp(&output, &saved, sizeof saved) == 0 && memcmp(key, saved_key, sizeof key) == 0);
-    assert_resident_scratch_cleared(&f.service);
+    assert_creation_scratch_cleared(&f.service);
     assert(auth_credentials_create_resident(&f.service, &m, &output, key) == AUTH_OK);
     assert(output.cred_protect == 2U && f.service.metadata_revision == revision + 1U);
-    assert_resident_scratch_cleared(&f.service);
+    assert_creation_scratch_cleared(&f.service);
 }
 
 int main(void)

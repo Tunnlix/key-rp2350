@@ -4,22 +4,29 @@
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_secret_crypto.h"
 
-/* Private workspace for resident creation; handles never contain private keys. */
+/* Shared creation workspace; handles never contain private keys. Resident and
+ * non-resident creation are mutually exclusive on a service instance. */
 typedef struct {
     AuthCredential created, found;
     AuthKeyHandle old_key;
     uint8_t old_id[32], store_state[16], public_key[65];
-} AuthResidentScratch;
+} AuthCreationScratch;
 
 /* Pure core composition; no files, OS, heap, or private-key access. Allocate
  * the service in persistent caller-owned RAM, not on a command's stack.
- * Serialize calls and provider callbacks for each instance. Scratch is internal:
+ * Serialize calls and provider callbacks for each instance. Stored-record reads
+ * from a resident preparation callback use separate lookup scratch; mutations
+ * during creation and nested lookup operations are rejected. Scratch is internal:
  * callers must not use it as API input/output or retain pointers into it. */
 typedef struct {
     AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets;
     uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
-    AuthResidentScratch resident_scratch;
-    bool resident_busy;
+    AuthCreationScratch creation_scratch;
+    bool creation_busy;
+    /* Separate from creation so a preparation callback may read stored records
+     * without overwriting the staged credential. Lookup operations cannot nest. */
+    AuthCredential lookup_scratch;
+    bool lookup_busy;
 } AuthCredentialService;
 
 bool auth_credentials_init(AuthCredentialService *service,
@@ -38,7 +45,9 @@ bool auth_credentials_configure_secrets(AuthCredentialService *service,
  * is published only after metadata persistence succeeds. On insert failure the
  * new key is destroyed; cleanup failure returns IO_ERROR and requires provider
  * recovery/garbage collection. No automatic credential overwrites or retries.
- * user_id may be empty (valid in CTAP 2.3); NULL is allowed only with length 0. */
+ * user_id may be empty (valid in CTAP 2.3); NULL is allowed only with length 0.
+ * Creation scratch is wiped on return; nested creation on this service is
+ * rejected without modifying the active operation's workspace. */
 AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65]);
@@ -58,7 +67,7 @@ AuthStatus auth_credentials_create_resident(AuthCredentialService *service,
  * or deleting the old key. The callback must not mutate credential storage and
  * must not publish its response until this function succeeds. A callback failure
  * destroys only the staged key. Callback arguments are borrowed for the call;
- * do not retain them or reenter resident creation on this service. Its workspace
+ * do not retain them or reenter any creation on this service. Its workspace
  * is wiped on every completed call. No private-key export is involved. */
 typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential *credential,
     const uint8_t public_key[65]);

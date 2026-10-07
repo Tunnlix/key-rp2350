@@ -21,7 +21,7 @@ static AuthStatus create_resident_prepared(AuthCredentialService *service,
         !auth_text_valid(metadata->user_display_name, metadata->user_display_name_length) ||
         metadata->cred_protect < 1U || metadata->cred_protect > 3U || service->metadata_revision == UINT64_MAX)
         return AUTH_INVALID_ARGUMENT;
-    AuthResidentScratch *scratch = &service->resident_scratch;
+    AuthCreationScratch *scratch = &service->creation_scratch;
     AuthCredential *found = &scratch->found;
     bool replacing = false; uint64_t newest = 0U;
     size_t total = 0U;
@@ -80,12 +80,12 @@ AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *serv
     const AuthCredential *metadata, AuthCredentialPrepare prepare, void *context,
     AuthCredential *credential, uint8_t public_key[65])
 {
-    if (service == NULL || service->resident_busy) return AUTH_INVALID_ARGUMENT;
-    service->resident_busy = true;
+    if (service == NULL || service->creation_busy || service->lookup_busy) return AUTH_INVALID_ARGUMENT;
+    service->creation_busy = true;
     AuthStatus status = create_resident_prepared(service, metadata, prepare, context, credential, public_key);
     /* Includes early RNG/provider failures. Nested calls must not clear the
      * outer operation's staged key or replacement metadata. */
-    auth_secure_zero(&service->resident_scratch, sizeof service->resident_scratch);
-    service->resident_busy = false;
+    auth_secure_zero(&service->creation_scratch, sizeof service->creation_scratch);
+    service->creation_busy = false;
     return status;
 }

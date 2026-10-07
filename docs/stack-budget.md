@@ -16,14 +16,24 @@ On native x64 GCC 16.2, the workspace occupies 4,352 bytes and the complete
 management state 4,944 bytes. Use `sizeof` with the firmware compiler for its RAM
 budget; structure alignment and configuration affect these values.
 
-Allocate `AuthCredentialService` in persistent caller-owned RAM as well. Resident
-creation owns a 2,968-byte workspace on native x64 GCC: two records, the previous
+Allocate `AuthCredentialService` in persistent caller-owned RAM as well. Both
+creation paths share a 2,968-byte workspace on native x64 GCC: two records, the previous
 credential's ID/opaque handle, store-state random and generated public key.
 Only the old ID and handle survive the enumeration scan. The scan validates
 provider records directly, avoiding a second full-record stack copy. Creation
-wipes the workspace on success and every failure. A nested resident-creation
-call on the same service is rejected without clearing the active workspace.
+wipes the workspace on success and every failure. Any nested creation call on
+the same service is rejected without clearing the active workspace. Non-resident
+creation reuses its records and public-key buffer, adding no RAM to the service.
 Callbacks borrow their arguments only for the duration of the call.
+
+Lookup, enumeration, signing, counter updates, deletion and user updates share
+a separate 1,408-byte credential record. A single operation owns it through
+validation and its dependent provider action, then wipes it on every acquired
+exit. Rejected nested operations do not clear the active record. Keeping it
+separate permits stored-record reads during resident preparation; mutations
+during creation and creation during an active lookup are rejected. The service
+now occupies 4,616 bytes on native x64 GCC, a 1,416-byte increase with alignment
+and the lookup guard. Input/output must not alias either internal workspace.
 
 Registration finish takes a `CtapMakeCredentialWorkspace *` as its second
 argument. The backend owns and initializes one; direct callers must allocate
@@ -44,8 +54,14 @@ Other compilers print that this check is unavailable. MSVC test success does
 not validate the stack budget.
 
 `auth_resident.c` has a separate 512-byte per-function limit configured through
-`CTAP_RESIDENT_STACK_BUDGET`. Keeping creation in its own source file applies
-this limit without allowing the larger, unmigrated credential-service frames.
+`CTAP_RESIDENT_STACK_BUDGET`.
+
+`auth_credentials.c` has a 512-byte per-function limit configured through
+`CTAP_CREDENTIALS_STACK_BUDGET`, covering lookup, enumeration and mutations.
+
+`auth_nonresident.c` has a 512-byte per-function limit configured through
+`CTAP_NONRESIDENT_STACK_BUDGET`; collision checks and insertion cleanup remain
+inside this checked module.
 
 `ctap_make_credential_finish.c` has a 512-byte per-function limit configured
 through `CTAP_MC_FINISH_STACK_BUDGET`. Registration preparation remains in a
@@ -70,8 +86,7 @@ Native GCC 16.2 x64 measurements, in bytes:
 
 Before migration, execution and entry encoding alone totalled 7,616 bytes at
 `-O2`. The new sums exclude callers, other callees, providers and interrupts;
-they are **not** a required firmware stack size. Credential-service mutation
-and lookup frames still contribute substantial stack on other branches.
+they are **not** a required firmware stack size.
 
 Resident creation's helper uses 128 bytes at `-O2` and 208 bytes at `-O0`; its
 public cleanup wrapper uses 80 bytes in both builds. Their combined contribution
@@ -79,16 +94,28 @@ is 208/288 bytes, compared with the previous 4,432-byte creation frame at `-O2`.
 These values exclude the convenience entry point, registration caller, callees
 and provider callbacks. Caller-owned workspace RAM is additional to the stack.
 
+Non-resident creation's helper uses 112 bytes at `-O2` and 128 bytes at `-O0`;
+its cleanup wrapper uses 96 bytes in both builds. Their combined contribution
+is 208/224 bytes, compared with the previous 2,992-byte creation frame at `-O2`.
+These values exclude the convenience entry point and provider callees.
+
 Registration finish's helper uses 240 bytes at `-O2` and 224 bytes at `-O0`;
 its cleanup wrapper uses 96 bytes in both builds. The combined contribution
 is 336/320 bytes, compared with the previous 2,240-byte finish frame at `-O2`.
 The response callback adds 272/304 bytes when active. These figures exclude
 credential-service calls, attestation/crypto helpers and provider stack.
 
+The migrated lookup/mutation functions use 64–96 bytes at `-O2`; the shared
+lookup helper uses 80 bytes. At `-O0` those functions use 64–80 bytes, lookup
+uses 64 bytes and cleanup uses 48 bytes. For example, the `get` and lookup
+frames total 144 bytes at `-O2`, replacing the previous 1,472-byte `get` frame;
+deletion plus lookup totals 176 bytes, replacing 1,520 + 1,472 bytes. These
+totals exclude their provider, validation and erasure callees.
+
 ## Establishing the firmware budget
 
-The checks are per function and cover credential management, resident creation
-and registration finish. Preparation and other credential-service scratch migration remain in
+The checks are per function and cover credential management, credential service,
+both creation paths and registration finish. Preparation and assertion scratch migration remain in
 `tasks.md`. A complete stack bound is not established yet.
 
 With final firmware optimization/LTO settings, account for each simultaneously
