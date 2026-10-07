@@ -190,7 +190,11 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     ctap_client_pin_poll(backend->pin, now_ms);
     if (backend->assertion_sequence.active && (uint32_t)(now_ms - backend->assertion_sequence.last_call_ms) > 30000U)
         ctap_assertion_sequence_clear(&backend->assertion_sequence);
-    if (backend->management.kind != 0U && (uint32_t)(now_ms - backend->management.last_call_ms) > 30000U)
+    /* Discard the authenticated snapshot as soon as its token expires (§6). */
+    if (backend->management.kind != 0U &&
+        (backend->pin == NULL || !backend->pin->token_active ||
+         backend->management.token_generation != backend->pin->token_generation ||
+         (uint32_t)(now_ms - backend->management.last_call_ms) > 30000U))
         ctap_credential_management_clear(&backend->management);
     if (!backend->pending) {
         ctap_reset_poll(&backend->reset, now_ms);

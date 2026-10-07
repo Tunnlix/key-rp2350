@@ -280,13 +280,41 @@ static void test_backend_channel_resync_and_cancel(void)
 static size_t management_request(uint8_t *out, uint8_t command, const uint8_t *id)
 {
     uint8_t mac[32]; memset(mac, 0x3C, 32U); CborWriter w; cbor_writer_init(&w, out, 256U);
-    assert(cbor_write_map(&w, command == 3U ? 1U : (id != NULL ? 4U : 3U)) &&
+    bool continuation = command == 3U || command == 5U;
+    assert(cbor_write_map(&w, continuation ? 1U : (id != NULL ? 4U : 3U)) &&
         cbor_write_uint(&w, 1U) && cbor_write_uint(&w, command));
     if (id != NULL) assert(cbor_write_uint(&w, 2U) && cbor_write_map(&w, 1U) &&
-        cbor_write_uint(&w, 2U) && ctap_credential_descriptor_write(&w, id));
-    if (command != 3U) assert(cbor_write_uint(&w, 3U) && cbor_write_uint(&w, 2U) &&
+        cbor_write_uint(&w, command == 4U ? 1U : 2U) &&
+        (command == 4U ? cbor_write_bytes(&w, id, 32U) : ctap_credential_descriptor_write(&w, id)));
+    if (!continuation) assert(cbor_write_uint(&w, 3U) && cbor_write_uint(&w, 2U) &&
         cbor_write_uint(&w, 4U) && cbor_write_bytes(&w, mac, 32U));
     return w.length;
+}
+static void test_management_expiry_discards_snapshot(void)
+{
+    for (uint8_t command = 2U; command <= 4U; command += 2U) {
+        Fixture f; setup(&f); AuthCredential a = create(&f, "example.com", 1U, 1U);
+        (void)create(&f, command == 2U ? "other.example" : "example.com", 2U, 2U);
+        token(&f, CTAP_PIN_PERMISSION_CM, NULL); f.pin.token_used = true;
+        /* Exercise expiry across clock wrap, one millisecond after begin. */
+        f.pin.issued_at_ms = UINT32_MAX - CTAP_PIN_MAX_TIMEOUT_MS + 1U;
+        uint8_t request[256], output[1024]; size_t length;
+        size_t n = management_request(request, command, command == 4U ? a.rp_id_hash : NULL);
+        assert(ctap_credential_management_execute(&f.service, &f.pin, &f.backend.management,
+            request, n, output, sizeof output, &length, UINT32_MAX) == CTAP_STATUS_OK);
+        CborValue map, total;
+        assert(cbor_read_document(output, length, &map) &&
+            cbor_map_uint(&map, command == 2U ? 5U : 9U, &total) && total.value == 2U);
+        assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, UINT32_MAX) == CTAPHID_DEVICE_OK);
+        assert(f.pin.token_active && f.backend.management.count == 2U);
+        assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, 0U) == CTAPHID_DEVICE_OK);
+        assert(!f.pin.token_active);
+        const unsigned char *bytes = (const unsigned char *)&f.backend.management;
+        for (size_t i = 0U; i < sizeof f.backend.management; ++i) assert(bytes[i] == 0U);
+        n = management_request(request, command + 1U, NULL);
+        assert(ctap_credential_management_execute(&f.service, &f.pin, &f.backend.management,
+            request, n, output, sizeof output, &length, 0U) == CTAP_STATUS_NOT_ALLOWED);
+    }
 }
 static void test_management_failures_and_channel_binding(void)
 {
@@ -517,6 +545,7 @@ int main(void)
 { test_atomic_lifecycle_failures();test_registration_failure_preserves_replaced_credential();test_discovery_privacy_and_sequence_failures();test_backend_channel_resync_and_cancel();test_management_failures_and_channel_binding();
   test_management_authentication_precedes_unknown_credential();
   test_management_missing_parameters_precede_protocol_errors();
+  test_management_expiry_discards_snapshot();
   test_management_workspace_lifetime();
   test_resident_workspace_lifetime();
   puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }
