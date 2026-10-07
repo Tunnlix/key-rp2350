@@ -4,10 +4,22 @@
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_secret_crypto.h"
 
-/* Pure core composition; no files, OS, heap, or private-key access. */
+/* Private workspace for resident creation; handles never contain private keys. */
+typedef struct {
+    AuthCredential created, found;
+    AuthKeyHandle old_key;
+    uint8_t old_id[32], store_state[16], public_key[65];
+} AuthResidentScratch;
+
+/* Pure core composition; no files, OS, heap, or private-key access. Allocate
+ * the service in persistent caller-owned RAM, not on a command's stack.
+ * Serialize calls and provider callbacks for each instance. Scratch is internal:
+ * callers must not use it as API input/output or retain pointers into it. */
 typedef struct {
     AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets;
     uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
+    AuthResidentScratch resident_scratch;
+    bool resident_busy;
 } AuthCredentialService;
 
 bool auth_credentials_init(AuthCredentialService *service,
@@ -45,7 +57,9 @@ AuthStatus auth_credentials_create_resident(AuthCredentialService *service,
 /* Run preparation against the new, provider-owned key BEFORE committing metadata
  * or deleting the old key. The callback must not mutate credential storage and
  * must not publish its response until this function succeeds. A callback failure
- * destroys only the staged key. No private-key export is involved. */
+ * destroys only the staged key. Callback arguments are borrowed for the call;
+ * do not retain them or reenter resident creation on this service. Its workspace
+ * is wiped on every completed call. No private-key export is involved. */
 typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential *credential,
     const uint8_t public_key[65]);
 AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *service,

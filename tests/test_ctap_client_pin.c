@@ -361,7 +361,8 @@ static void test_tokens_policy_and_provider_failures(void)
     uint8_t input[512], output[512], aaguid[16] = {0}; size_t length, n = make_request(input, true, 3U, NULL);
     CtapMakeCredential mc;
     assert(ctap_make_credential_prepare_with_pin(&f.service, &f.pin, 0U, input, n, &mc) == 0U && mc.user_verified);
-    assert(ctap_make_credential_finish_at(&f.service, &mc, aaguid, output, sizeof output, &length, 1U) == 0U);
+    CtapMakeCredentialWorkspace workspace = {0};
+    assert(ctap_make_credential_finish_at(&f.service, &workspace, &mc, aaguid, output, sizeof output, &length, 1U) == 0U);
     CborValue map, data, extension, policy;
     assert(cbor_read_document(output, length, &map) && cbor_map_uint(&map, 2U, &data) && data.data[32] == 0xC5U);
     assert(cbor_read_document(data.data + 164U, (size_t)data.value - 164U, &extension) &&

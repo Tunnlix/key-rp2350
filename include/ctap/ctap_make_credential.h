@@ -22,6 +22,17 @@ typedef struct {
     AuthCredential metadata;
 } CtapMakeCredential;
 
+/* Zero-initialize once in persistent caller-owned RAM. Each finish call wipes
+ * scratch before returning. Do not alias API buffers with this workspace or
+ * reenter an active workspace; callbacks may not retain pointers into it. */
+typedef struct {
+    struct {
+        AuthCredential credential;
+        uint8_t public_key[65], encoded[512];
+    } scratch;
+    bool busy;
+} CtapMakeCredentialWorkspace;
+
 /* Validate the parameter map and check RP-bound exclusion before asking for UP.
  * Success means ready to wait for a fresh touch, not a created credential.
  * Invalid/unsupported requests produce a CTAP status and never create keys.
@@ -47,12 +58,14 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
  * (512 bytes when hmac-secret-mc is requested).
  * CANCEL/INIT before this call must discard prepared state without invoking it. */
 uint8_t ctap_make_credential_finish(AuthCredentialService *service,
+    CtapMakeCredentialWorkspace *workspace,
     const CtapMakeCredential *prepared, const uint8_t aaguid[16],
     uint8_t *output, size_t capacity, size_t *length);
 /* Required for PIN-bound prepared state: rechecks expiry/generation after UP,
  * then consumes token permissions before creating/signing. Failures may consume
  * permissions but cannot publish an unauthorized credential. */
 uint8_t ctap_make_credential_finish_at(AuthCredentialService *service,
+    CtapMakeCredentialWorkspace *workspace,
     const CtapMakeCredential *prepared, const uint8_t aaguid[16],
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 

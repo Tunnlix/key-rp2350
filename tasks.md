@@ -14,7 +14,7 @@ The items below are outstanding verification work, not confirmed vulnerabilities
 
 P2 below denotes finding severity, not the numbered review priority.
 
-- [ ] **P2 — Reduce registration and credential-service stack usage.** Move reusable large credential scratch into caller-owned per-instance storage while preserving output-on-success semantics, provider ownership and replacement rollback. Native GCC `-O2` reports `ctap_make_credential_finish_at` at 2,240 bytes and `auth_credentials_create_resident_prepared` at 4,432 bytes before provider calls; lookup/mutation paths also nest full records. Reuse registration, credential-service and resident failure tests, and extend the per-function build budget to each migrated module.
+- [ ] **P2 — Reduce remaining preparation and credential-service stack usage.** Move large scratch records in registration/assertion preparation and non-resident creation/lookup/mutation paths into caller-owned per-instance storage while preserving output-on-success semantics and provider ownership. Lookup/mutation paths still nest full records. Reuse registration, assertion, credential-service and resident failure tests, and extend the per-function build budget to each migrated module.
 
 - [ ] **P2 — Establish the complete target stack budget.** Follow `docs/stack-budget.md` with the RP2350 compiler and final providers. Measure the deepest live call chains, including CBOR recursion, library calls, callbacks and interrupt nesting; account for caller-owned workspace RAM and reserve a documented stack margin. The existing GCC credential-management limit is only a per-function regression check, not a firmware stack guarantee.
 

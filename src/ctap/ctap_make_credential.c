@@ -1,5 +1,4 @@
 #include "ctap/ctap_make_credential.h"
-#include "ctap/ctap_attestation.h"
 #include "ctap/cbor_reader.h"
 #include "ctap/ctap_request.h"
 #include "ctap/ctap_entities.h"
@@ -176,97 +175,5 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
         CTAP_PIN_PERMISSION_MC, now_ms, true);
     if (status != CTAP_STATUS_OK) return status;
     *prepared = result;
-    return CTAP_STATUS_OK;
-}
-
-uint8_t ctap_make_credential_finish(AuthCredentialService *service,
-    const CtapMakeCredential *prepared, const uint8_t aaguid[16],
-    uint8_t *output, size_t capacity, size_t *length)
-{
-    if (prepared != NULL && prepared->pin != NULL) return CTAP_STATUS_OTHER;
-    return ctap_make_credential_finish_at(service, prepared, aaguid, output, capacity, length, 0U);
-}
-
-typedef struct {
-    AuthCredentialService *service;
-    const CtapMakeCredential *request;
-    const uint8_t *aaguid;
-    uint8_t encoded[512];
-    size_t length;
-    uint8_t status;
-} RegistrationResponse;
-
-static AuthStatus prepare_response(void *context, const AuthCredential *credential, const uint8_t public_key[65])
-{
-    RegistrationResponse *response = context;
-    AuthCredentialService *service = response->service;
-    const CtapMakeCredential *prepared = response->request;
-    bool has_secret = false;
-    response->status = CTAP_STATUS_OTHER;
-    if (prepared->hmac_secret_requested && (!auth_secret_crypto_valid(&service->secrets) ||
-        service->secrets.credential_supported(service->secrets.context, &credential->key, &has_secret) != AUTH_OK))
-        return AUTH_CRYPTO_ERROR;
-    uint8_t secret_output[CTAP_HMAC_SECRET_MAX_ENCRYPTED_SIZE]; size_t secret_length = 0U;
-    if (prepared->hmac_secret_mc.requested) {
-        response->status = ctap_hmac_secret_evaluate(service, credential, &prepared->hmac_secret_mc,
-            prepared->user_verified, secret_output, &secret_length);
-        if (response->status != CTAP_STATUS_OK) return AUTH_CRYPTO_ERROR;
-    }
-    response->status = CTAP_STATUS_OTHER;
-    if (!ctap_attestation_encode(service, credential, public_key, prepared->client_data_hash, response->aaguid,
-        prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL,
-        prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
-        response->encoded, sizeof response->encoded, &response->length)) return AUTH_CRYPTO_ERROR;
-    response->status = CTAP_STATUS_OK;
-    return AUTH_OK;
-}
-
-uint8_t ctap_make_credential_finish_at(AuthCredentialService *service,
-    const CtapMakeCredential *prepared, const uint8_t aaguid[16],
-    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
-{
-    if (service == NULL || prepared == NULL || aaguid == NULL || output == NULL || length == NULL ||
-        capacity < (prepared->hmac_secret_mc.requested ? 512U : 384U))
-        return CTAP_STATUS_OTHER;
-    if (prepared->auth.probe) return ctap_client_pin_probe(prepared->pin);
-    if (prepared->user_verified != prepared->auth.present || (prepared->pin != NULL && prepared->pin->service != service))
-        return CTAP_STATUS_OTHER;
-    CtapPinAuth auth = prepared->auth;
-    if (auth.present && auth.token_generation == 0U) return CTAP_STATUS_PIN_AUTH_INVALID;
-    uint8_t authorized = ctap_client_pin_authorize(prepared->pin, &auth, prepared->rp_id_hash, prepared->client_data_hash,
-        CTAP_PIN_PERMISSION_MC, now_ms, false);
-    if (authorized != CTAP_STATUS_OK) return authorized;
-    if (prepared->credential_excluded) {
-        ctap_client_pin_invalidate(prepared->pin);
-        return CTAP_STATUS_CREDENTIAL_EXCLUDED;
-    }
-    ctap_client_pin_invalidate(prepared->pin); /* Fresh UP consumes MC/GA and UV state. */
-    if (prepared->hmac_secret_mc.requested) {
-        uint8_t validated = ctap_hmac_secret_validate(service, &prepared->hmac_secret_mc);
-        if (validated != CTAP_STATUS_OK) return validated;
-    }
-    AuthCredential credential;
-    uint8_t public_key[65];
-    AuthStatus status;
-    RegistrationResponse response = {service, prepared, aaguid, {0}, 0U, CTAP_STATUS_OK};
-    if (prepared->discoverable) {
-        status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
-            prepare_response, &response, &credential, public_key);
-    } else {
-        status = auth_credentials_create_protected(service, prepared->rp_id_hash,
-            prepared->user_id, prepared->user_id_length, false,
-            prepared->cred_protect == 0U ? 1U : prepared->cred_protect, &credential, public_key);
-        if (status == AUTH_OK && prepare_response(&response, &credential, public_key) != AUTH_OK) {
-            if (auth_credentials_delete(service, credential.credential_id, credential.rp_id_hash) != AUTH_OK)
-                return CTAP_STATUS_OTHER;
-            return response.status;
-        }
-    }
-    if (status != AUTH_OK) {
-        if (status == AUTH_IO_ERROR) return CTAP_STATUS_OTHER;
-        if (response.status != CTAP_STATUS_OK) return response.status;
-        return status == AUTH_CAPACITY ? CTAP_STATUS_KEY_STORE_FULL : CTAP_STATUS_OTHER;
-    }
-    memcpy(output, response.encoded, response.length); *length = response.length;
     return CTAP_STATUS_OK;
 }

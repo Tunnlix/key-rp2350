@@ -175,7 +175,8 @@ static void test_registration_extension_output_and_availability(void)
         CtapMakeCredential prepared = {0}; prepared.hmac_secret_requested = true;
         memset(prepared.rp_id_hash, 0x42, 32U);
         uint8_t response[384], aaguid[16] = {0}; size_t length;
-        assert(ctap_make_credential_finish(&service, &prepared, aaguid, response, sizeof response, &length) == 0U);
+        CtapMakeCredentialWorkspace workspace = {0};
+        assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, response, sizeof response, &length) == 0U);
         assert(store.hashed_length == 210U && store.hashed_data[32] == 0xC1U);
         CborValue map, data, extension, supported;
         assert(cbor_read_document(response, length, &map) && cbor_map_uint(&map, 2U, &data) && data.value == 178U);

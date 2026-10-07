@@ -272,7 +272,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
                 ctap_client_pin_invalidate(backend->pin);
             }
             else if (presence == CTAP_PRESENCE_CONFIRMED) {
-                status = ctap_make_credential_finish_at(backend->credentials, &backend->make_credential,
+                status = ctap_make_credential_finish_at(backend->credentials, &backend->make_credential_workspace, &backend->make_credential,
                     backend->profile.aaguid, backend->response + 1U, sizeof backend->response - 1U, &encoded_length, now_ms);
             }
             backend->response[0] = status;

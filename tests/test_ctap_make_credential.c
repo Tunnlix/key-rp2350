@@ -29,6 +29,12 @@ static size_t request(uint8_t *out, bool exclude, bool none)
     return writer.length;
 }
 
+static void assert_workspace_cleared(const CtapMakeCredentialWorkspace *workspace)
+{
+    const unsigned char *bytes = (const unsigned char *)&workspace->scratch;
+    for (size_t i = 0U; i < sizeof workspace->scratch; ++i) assert(bytes[i] == 0U);
+    assert(!workspace->busy);
+}
 static void test_failure_rollback_and_none(void)
 {
     Store store = {0}; AuthCredentialService service; service_init(&service, &store);
@@ -38,25 +44,43 @@ static void test_failure_rollback_and_none(void)
     assert(ctap_make_credential_prepare(&service, input, input_length, &prepared) == 0U);
     assert(!store.exists && store.generated == 0U); /* Validation is side-effect free. */
     memset(output, 0xEE, sizeof output);
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, 383U, &length) == 0x7FU);
+    CtapMakeCredentialWorkspace workspace = {0};
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, 383U, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(store.generated == 0U && output[0] == 0xEEU && length == 999U);
+    /* Reject reuse of active scratch without clearing the outer operation. */
+    memset(&workspace.scratch, 0xA5, sizeof workspace.scratch); workspace.busy = true;
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid,
+        output, sizeof output, &length) == CTAP_STATUS_OTHER);
+    assert(workspace.busy && store.generated == 0U && length == 999U && output[0] == 0xEEU);
+    const unsigned char *bytes = (const unsigned char *)&workspace.scratch;
+    for (size_t i = 0U; i < sizeof workspace.scratch; ++i) assert(bytes[i] == 0xA5U);
+    workspace.busy = false;
+    assert(ctap_make_credential_finish_at(NULL, &workspace, &prepared, aaguid,
+        output, sizeof output, &length, 0U) == CTAP_STATUS_OTHER);
+    assert_workspace_cleared(&workspace);
     store.generate_fails = true;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(!store.exists && store.destroyed == 0U);
     store.generate_fails = false; store.insert_fails = true;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(!store.exists && store.destroyed == 1U);
     store.insert_fails = false; store.sign_fails = true;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(!store.exists && store.destroyed == 2U && output[0] == 0xEEU && length == 999U);
     store.sign_fails = false; store.hash_fails = true;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(!store.exists && store.destroyed == 3U);
     store.hash_fails = false;
     input_length = request(input, false, true);
     assert(ctap_make_credential_prepare(&service, input, input_length, &prepared) == 0U);
     size_t signed_before = store.signatures;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0U);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0U);
+    assert_workspace_cleared(&workspace);
     assert(store.exists && store.signatures == signed_before && store.record.user_id_length == 0U && !store.record.discoverable);
     CborValue response, data, statement;
     assert(cbor_read_document(output, length, &response));
@@ -66,16 +90,19 @@ static void test_failure_rollback_and_none(void)
     input_length = request(input, true, false);
     assert(ctap_make_credential_prepare(&service, input, input_length, &prepared) == 0U && prepared.credential_excluded);
     size_t generated = store.generated;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x19U);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x19U);
+    assert_workspace_cleared(&workspace);
     assert(store.generated == generated);
     prepared.credential_excluded = false;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x28U);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x28U);
+    assert_workspace_cleared(&workspace);
     /* Failed rollback must not claim success or destroy a still-referenced key. */
     assert(auth_credentials_delete(&service, store.record.credential_id, store.record.rp_id_hash) == AUTH_OK);
     prepared.omit_attestation = false;
     store.sign_fails = true; store.erase_fails = true;
     size_t destroyed = store.destroyed;
-    assert(ctap_make_credential_finish(&service, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert(ctap_make_credential_finish(&service, &workspace, &prepared, aaguid, output, sizeof output, &length) == 0x7FU);
+    assert_workspace_cleared(&workspace);
     assert(store.exists && store.destroyed == destroyed);
 }
 
