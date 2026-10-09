@@ -89,8 +89,8 @@ uint8_t ctap_hmac_secret_key_agreement(AuthCredentialService *service,
 {
     if (service == NULL || !auth_secret_crypto_valid(&service->secrets) || output == NULL || length == NULL)
         return CTAP_STATUS_OTHER;
-    CborValue fields[3] = {{0}}; bool present[3] = {false};
-    uint8_t status = ctap_request_map(input, input_length, 3U, fields, present);
+    CborValue fields[11] = {{0}}; bool present[11] = {false};
+    uint8_t status = ctap_request_client_pin_map(input, input_length, fields, present);
     if (status != CTAP_STATUS_OK) return status;
     if (!present[1] || !present[2]) return CTAP_STATUS_MISSING_PARAMETER;
     if (fields[1].major != 0U || fields[2].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

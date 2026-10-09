@@ -4,13 +4,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "ctap_config.h"
 
 #define AUTH_CREDENTIAL_ID_SIZE 32U
 #define AUTH_RP_HASH_SIZE 32U
 #define AUTH_USER_ID_MAX_SIZE 64U
 #define AUTH_ENTITY_NAME_MAX_SIZE 64U
-#define AUTH_RP_ID_MAX_SIZE 1024U
-#define AUTH_RESIDENT_MAX_COUNT 16U
+#define AUTH_RP_ID_MAX_SIZE CTAP_MESSAGE_CAPACITY
+#define AUTH_RESIDENT_MAX_COUNT CTAP_RESIDENT_CAPACITY
 #define AUTH_KEY_HANDLE_SIZE 32U
 #define AUTH_P256_PUBLIC_KEY_SIZE 65U /* SEC1 uncompressed: 04 || X[32] || Y[32]. */
 #define AUTH_ES256_DER_MAX_SIZE 72U

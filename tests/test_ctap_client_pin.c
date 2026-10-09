@@ -146,9 +146,13 @@ static void test_validation_and_pin_policy(void)
         {{0xA2,1,1,2,2},5U,2}, {{0xA2,1,2,2,3},5U,0x14}, {{0xA1,2,9},3U,0x14},
         {{0xA2,2,1,2,1},5U,0x12}
     };
-    CtapClientPinRequest prepared;
-    for (size_t i = 0U; i < sizeof cases / sizeof cases[0]; ++i)
+    CtapClientPinRequest prepared, saved;
+    memset(&prepared, 0xA5, sizeof prepared);
+    memcpy(&saved, &prepared, sizeof saved);
+    for (size_t i = 0U; i < sizeof cases / sizeof cases[0]; ++i) {
         assert(ctap_client_pin_prepare(cases[i].bytes, cases[i].size, &prepared) == cases[i].status);
+        assert(memcmp(&prepared, &saved, sizeof prepared) == 0);
+    }
     const uint8_t retries[] = {0xA1,2,1};
     assert(ctap_client_pin_prepare(retries, sizeof retries, &prepared) == 0U && prepared.subcommand == 1U);
     Store store = {0}; PinMock m; AuthCredentialService service; CtapClientPin pin;
@@ -285,8 +289,9 @@ static bool reset_storage(void *ctx)
 static void fixture_init(Fixture *f)
 {
     memset(f, 0, sizeof *f); setup(&f->pin, &f->service, &f->store, &f->mock);
-    CtapGetInfoProfile profile = {0}; profile.max_message_size = 1024U; profile.user_presence = true;
+    CtapGetInfoProfile profile = {0}; profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE; profile.user_presence = true;
     assert(ctaphid_ctap_backend_init(&f->backend, &profile));
+    f->backend.presence_timeout_ms = 30000U; /* Fixed timeline for these scenarios. */
     assert(!ctaphid_ctap_backend_configure_pin(&f->backend, &f->pin));
     assert(ctaphid_ctap_backend_configure_credentials(&f->backend, &f->service));
     assert(ctaphid_ctap_backend_configure_reset(&f->backend, 0U, reset_storage, f));

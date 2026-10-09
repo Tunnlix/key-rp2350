@@ -120,9 +120,9 @@ static void test_selection_outcomes(void)
     finish(&fixture, 301U, 0x27U);
 
     begin_selection(&fixture, 400U);
-    assert(ctaphid_ctap_backend_poll(&fixture.backend, &fixture.device, 30399U) == CTAPHID_DEVICE_OK);
+    assert(ctaphid_ctap_backend_poll(&fixture.backend, &fixture.device, 400U + CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS - 1U) == CTAPHID_DEVICE_OK);
     assert(fixture.device.phase == CTAPHID_DEVICE_PROCESSING);
-    finish(&fixture, 30400U, 0x2FU); /* Virtual time; no 30-second test sleep. */
+    finish(&fixture, 400U + CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS, 0x2FU); /* Configured deadline, using virtual time. */
 }
 
 static void test_cancel_and_resync_clear_presence(void)
@@ -151,7 +151,7 @@ static void test_cancel_and_resync_clear_presence(void)
 static void test_selection_request_validation(void)
 {
     CtapGetInfoProfile profile = {0};
-    profile.max_message_size = 1024U;
+    profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE;
     uint8_t response[CTAP_MAX_RESPONSE_SIZE];
     const uint8_t request[] = {0x0B, 0xA0};
     size_t length = 999U;

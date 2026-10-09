@@ -17,6 +17,22 @@ uint8_t ctap_request_map(const uint8_t *input, size_t length, size_t field_count
     return CTAP_STATUS_OK;
 }
 
+uint8_t ctap_request_client_pin_map(const uint8_t *input, size_t length,
+    CborValue fields[11], bool present[11])
+{
+    uint8_t status = ctap_request_map(input, length, 11U, fields, present);
+    if (status != CTAP_STATUS_OK) return status;
+    if (!present[2]) return CTAP_STATUS_MISSING_PARAMETER;
+    if (fields[2].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    /* Known optional members retain their types even when unused by a
+     * subcommand. Unknown members remain ignored for forward compatibility. */
+    if ((present[3] && fields[3].major != 5U) ||
+        (present[4] && fields[4].major != 2U) || (present[5] && fields[5].major != 2U) ||
+        (present[6] && fields[6].major != 2U) || (present[9] && fields[9].major != 0U) ||
+        (present[10] && fields[10].major != 3U)) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    return CTAP_STATUS_OK;
+}
+
 uint8_t ctap_request_text_map(const CborValue *map)
 {
     if (map == NULL || map->major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

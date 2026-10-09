@@ -3,6 +3,35 @@
 #include "ctap/ctap_request.h"
 #include <string.h>
 
+enum {
+    CM_GET_METADATA = 1U,
+    CM_ENUMERATE_RPS_BEGIN = 2U,
+    CM_ENUMERATE_RPS_NEXT = 3U,
+    CM_ENUMERATE_CREDENTIALS_BEGIN = 4U,
+    CM_ENUMERATE_CREDENTIALS_NEXT = 5U,
+    CM_DELETE_CREDENTIAL = 6U,
+    CM_UPDATE_USER = 7U
+};
+
+/* Borrowed CBOR spans live only during execute; IDs/hashes are copied before
+ * authorization. Parsed user metadata belongs to the instance's wiped scratch. */
+typedef struct {
+    CborValue fields[5];
+    bool present[5];
+    uint8_t command, id[32], rp_hash[32];
+    bool supported_descriptor;
+} ManagementRequest;
+
+static bool mutation(uint8_t command)
+{
+    return command == CM_DELETE_CREDENTIAL || command == CM_UPDATE_USER;
+}
+
+static bool has_parameters(uint8_t command)
+{
+    return command == CM_ENUMERATE_CREDENTIALS_BEGIN || mutation(command);
+}
+
 void ctap_credential_management_clear(CtapCredentialManagement *state)
 { if (state != NULL) auth_secure_zero(state, sizeof *state); }
 
@@ -16,7 +45,7 @@ static uint8_t entry(AuthCredentialService *service, CtapCredentialManagement *s
     uint8_t *encoded = state->scratch.bytes; CborWriter writer;
     cbor_writer_init(&writer, encoded, sizeof state->scratch.bytes);
     bool ok;
-    if (state->kind == 2U) {
+    if (state->kind == CM_ENUMERATE_RPS_BEGIN) {
         ok = cbor_write_map(&writer, first ? 3U : 2U) && cbor_write_uint(&writer, 3U) &&
             ctap_rp_entity_write(&writer, credential) && cbor_write_uint(&writer, 4U) &&
             cbor_write_bytes(&writer, credential->rp_id_hash, 32U);
@@ -37,98 +66,125 @@ static uint8_t entry(AuthCredentialService *service, CtapCredentialManagement *s
     return CTAP_STATUS_OK;
 }
 
-static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
-    CtapCredentialManagement *state, const uint8_t *input, size_t input_length,
+static uint8_t parse_subcommand(const uint8_t *input, size_t input_length, ManagementRequest *request)
+{
+    uint8_t status = ctap_request_map(input, input_length, 5U, request->fields, request->present);
+    if (status != CTAP_STATUS_OK) return status;
+    if (!request->present[1]) return CTAP_STATUS_MISSING_PARAMETER;
+    if (request->fields[1].major != 0U || (request->present[2] && request->fields[2].major != 5U) ||
+        (request->present[3] && request->fields[3].major != 0U) || (request->present[4] && request->fields[4].major != 2U))
+        return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    uint64_t command = request->fields[1].value;
+    if (command < CM_GET_METADATA || command > CM_UPDATE_USER) return CTAP_STATUS_INVALID_SUBCOMMAND;
+    request->command = (uint8_t)command;
+    return CTAP_STATUS_OK;
+}
+
+/* Requires the same live token, unchanged metadata and matching sequence kind. */
+static uint8_t continue_enumeration(AuthCredentialService *service, CtapClientPin *pin,
+    CtapCredentialManagement *state, uint8_t command,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
 {
-    if (!auth_credentials_resident_supported(service) || pin == NULL || pin->service != service || state == NULL ||
-        output == NULL || length == NULL) return CTAP_STATUS_OTHER;
-    CborValue fields[5] = {{0}}; bool present[5] = {false};
-    uint8_t status = ctap_request_map(input, input_length, 5U, fields, present);
-    if (status != CTAP_STATUS_OK) { ctap_credential_management_clear(state); return status; }
-    if (!present[1]) { ctap_credential_management_clear(state); return CTAP_STATUS_MISSING_PARAMETER; }
-    if (fields[1].major != 0U || (present[2] && fields[2].major != 5U) ||
-        (present[3] && fields[3].major != 0U) || (present[4] && fields[4].major != 2U))
-        { ctap_credential_management_clear(state); return CTAP_STATUS_CBOR_UNEXPECTED_TYPE; }
-    uint64_t command = fields[1].value;
-    if (command < 1U || command > 7U) { ctap_credential_management_clear(state); return CTAP_STATUS_INVALID_SUBCOMMAND; }
-    ctap_client_pin_poll(pin, now_ms);
-    if (command == 3U || command == 5U) {
-        uint8_t kind = command == 3U ? 2U : 4U;
-        if (state->kind != kind || state->next >= state->count || pin->faulted || !pin->token_active ||
-            (pin->permissions & CTAP_PIN_PERMISSION_CM) == 0U || pin->token_rp_bound ||
-            state->token_generation != pin->token_generation || state->metadata_revision != service->metadata_revision ||
-            (uint32_t)(now_ms - state->last_call_ms) > 30000U) {
-            ctap_credential_management_clear(state); return CTAP_STATUS_NOT_ALLOWED;
-        }
-        status = entry(service, state, false, output, capacity, length);
-        if (status == CTAP_STATUS_OK) state->last_call_ms = now_ms;
-        if (status != CTAP_STATUS_OK || state->next == state->count) ctap_credential_management_clear(state);
-        return status;
+    uint8_t status;
+    uint8_t kind = command == CM_ENUMERATE_RPS_NEXT ? CM_ENUMERATE_RPS_BEGIN : CM_ENUMERATE_CREDENTIALS_BEGIN;
+    if (state->kind != kind || state->next >= state->count || pin->faulted || !pin->token_active ||
+        (pin->permissions & CTAP_PIN_PERMISSION_CM) == 0U || pin->token_rp_bound ||
+        state->token_generation != pin->token_generation || state->metadata_revision != service->metadata_revision ||
+        (uint32_t)(now_ms - state->last_call_ms) > 30000U) {
+        ctap_credential_management_clear(state); return CTAP_STATUS_NOT_ALLOWED;
     }
-    ctap_credential_management_clear(state);
-    if (!present[4]) return CTAP_STATUS_PUAT_REQUIRED;
-    if (!present[3] || (command >= 4U && !present[2])) return CTAP_STATUS_MISSING_PARAMETER;
+    status = entry(service, state, false, output, capacity, length);
+    if (status == CTAP_STATUS_OK) state->last_call_ms = now_ms;
+    if (status != CTAP_STATUS_OK || state->next == state->count) ctap_credential_management_clear(state);
+    return status;
+}
+
+static uint8_t parse_parameters(ManagementRequest *request, CtapCredentialManagement *state)
+{
+    uint8_t command = request->command, status;
+    if (!request->present[4]) return CTAP_STATUS_PUAT_REQUIRED;
+    if (!request->present[3] || (has_parameters(command) && !request->present[2])) return CTAP_STATUS_MISSING_PARAMETER;
     CborValue params[4] = {{0}}; bool supplied[4] = {false};
-    uint8_t id[32] = {0}, rp_hash[32] = {0}; AuthCredential *updated = &state->scratch.updated_user;
-    bool supported_descriptor = true;
-    if (present[2] && command >= 4U) {
-        status = ctap_request_map(fields[2].encoded, fields[2].encoded_length, 4U, params, supplied);
+    AuthCredential *updated = &state->scratch.updated_user;
+    request->supported_descriptor = true;
+    if (request->present[2] && has_parameters(command)) {
+        status = ctap_request_map(request->fields[2].encoded, request->fields[2].encoded_length, 4U, params, supplied);
         if (status != CTAP_STATUS_OK) return status;
     }
     /* Required subcommand fields precede protocol and MAC checks (§6.8.4–6). */
-    if ((command == 4U && !supplied[1]) ||
-        (command >= 6U && !supplied[2]) || (command == 7U && !supplied[3]))
+    if ((command == CM_ENUMERATE_CREDENTIALS_BEGIN && !supplied[1]) ||
+        (mutation(command) && !supplied[2]) || (command == CM_UPDATE_USER && !supplied[3]))
         return CTAP_STATUS_MISSING_PARAMETER;
-    if (fields[3].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
-    if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
-    if (command == 4U) {
+    if (request->fields[3].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
+    if (request->fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
+    if (command == CM_ENUMERATE_CREDENTIALS_BEGIN) {
         if (params[1].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         if (params[1].value != 32U) return CTAP_STATUS_INVALID_PARAMETER;
-        memcpy(rp_hash, params[1].data, 32U);
+        memcpy(request->rp_hash, params[1].data, 32U);
     }
-    if (command == 6U || command == 7U) {
+    if (command == CM_DELETE_CREDENTIAL || command == CM_UPDATE_USER) {
         CborValue credential_id, type;
         status = ctap_request_descriptor(&params[2], &credential_id, &type);
         if (status != CTAP_STATUS_OK) return status;
-        supported_descriptor = cbor_text_equal(&type, "public-key") && credential_id.value == sizeof id;
-        if (supported_descriptor) memcpy(id, credential_id.data, sizeof id);
-        if (command == 7U) {
+        request->supported_descriptor = cbor_text_equal(&type, "public-key") && credential_id.value == sizeof request->id;
+        if (request->supported_descriptor) memcpy(request->id, credential_id.data, sizeof request->id);
+        if (command == CM_UPDATE_USER) {
             status = ctap_user_entity_parse(&params[3], updated);
             if (status != CTAP_STATUS_OK) return status;
         }
     }
+    return CTAP_STATUS_OK;
+}
+
+/* MAC covers the received canonical bytes, never reconstructed parameters.
+ * Mutations may use RP-scoped tokens; target binding is checked after lookup. */
+static uint8_t authorize_request(CtapClientPin *pin, CtapCredentialManagement *state,
+    const ManagementRequest *request, uint32_t now_ms)
+{
+    uint8_t command = request->command;
     uint8_t *message = state->scratch.bytes; message[0] = (uint8_t)command;
     size_t message_length = 1U;
-    if (present[2] && command >= 4U) {
-        if (fields[2].encoded_length > sizeof state->scratch.bytes - 1U) return CTAP_STATUS_INVALID_LENGTH;
-        memcpy(message + 1U, fields[2].encoded, fields[2].encoded_length); message_length += fields[2].encoded_length;
+    if (request->present[2] && has_parameters(command)) {
+        if (request->fields[2].encoded_length > sizeof state->scratch.bytes - 1U) return CTAP_STATUS_INVALID_LENGTH;
+        memcpy(message + 1U, request->fields[2].encoded, request->fields[2].encoded_length); message_length += request->fields[2].encoded_length;
     }
-    const uint8_t *scope = command >= 6U && pin->token_rp_bound ? pin->token_rp_hash : NULL;
-    status = ctap_client_pin_authorize_management(pin, scope, message, message_length, fields[4].data, now_ms);
-    if (status != CTAP_STATUS_OK) return status;
-    if (command == 6U || command == 7U) {
-        /* Authenticate before reporting credential availability (§6.8.5–6).
-         * Structurally valid foreign descriptors cannot match local records. */
-        if (!supported_descriptor) return CTAP_STATUS_NO_CREDENTIALS;
-        AuthCredential *found = &state->scratch.record;
-        AuthStatus lookup = service->storage.read(service->storage.context, id, found);
-        if (lookup == AUTH_NOT_FOUND) return CTAP_STATUS_NO_CREDENTIALS;
-        if (lookup != AUTH_OK || !auth_credential_valid(found) || memcmp(found->credential_id, id, 32U) != 0) return CTAP_STATUS_OTHER;
-        if (!found->discoverable) return CTAP_STATUS_NO_CREDENTIALS;
-        if (pin->token_rp_bound && memcmp(pin->token_rp_hash, found->rp_id_hash, 32U) != 0) return CTAP_STATUS_PIN_AUTH_INVALID;
-        if (command == 6U) lookup = auth_credentials_delete(service, id, found->rp_id_hash);
-        else {
-            if (found->user_id_length != updated->user_id_length || memcmp(found->user_id, updated->user_id, found->user_id_length) != 0)
-                return CTAP_STATUS_INVALID_PARAMETER;
-            memcpy(found->user_name, updated->user_name, sizeof found->user_name); found->user_name_length = updated->user_name_length;
-            memcpy(found->user_display_name, updated->user_display_name, sizeof found->user_display_name);
-            found->user_display_name_length = updated->user_display_name_length;
-            lookup = auth_credentials_update_user(service, found);
-        }
-        if (lookup != AUTH_OK) return lookup == AUTH_CAPACITY ? CTAP_STATUS_KEY_STORE_FULL : CTAP_STATUS_OTHER;
-        *length = 0U; return CTAP_STATUS_OK;
+    const uint8_t *scope = mutation(command) && pin->token_rp_bound ? pin->token_rp_hash : NULL;
+    return ctap_client_pin_authorize_management(pin, scope, message, message_length, request->fields[4].data, now_ms);
+}
+
+/* Requires successful authorization; no mutation precedes availability,
+ * RP scope and user-ID checks. The service atomically commits metadata/state. */
+static uint8_t mutate_credential(AuthCredentialService *service, CtapClientPin *pin,
+    CtapCredentialManagement *state, const ManagementRequest *request, size_t *length)
+{
+    uint8_t command = request->command;
+    AuthCredential *updated = &state->scratch.updated_user;
+    if (!request->supported_descriptor) return CTAP_STATUS_NO_CREDENTIALS;
+    AuthCredential *found = &state->scratch.record;
+    AuthStatus lookup = service->storage.read(service->storage.context, request->id, found);
+    if (lookup == AUTH_NOT_FOUND) return CTAP_STATUS_NO_CREDENTIALS;
+    if (lookup != AUTH_OK || !auth_credential_valid(found) || memcmp(found->credential_id, request->id, 32U) != 0) return CTAP_STATUS_OTHER;
+    if (!found->discoverable) return CTAP_STATUS_NO_CREDENTIALS;
+    if (pin->token_rp_bound && memcmp(pin->token_rp_hash, found->rp_id_hash, 32U) != 0) return CTAP_STATUS_PIN_AUTH_INVALID;
+    if (command == CM_DELETE_CREDENTIAL) lookup = auth_credentials_delete(service, request->id, found->rp_id_hash);
+    else {
+        if (found->user_id_length != updated->user_id_length || memcmp(found->user_id, updated->user_id, found->user_id_length) != 0)
+            return CTAP_STATUS_INVALID_PARAMETER;
+        memcpy(found->user_name, updated->user_name, sizeof found->user_name); found->user_name_length = updated->user_name_length;
+        memcpy(found->user_display_name, updated->user_display_name, sizeof found->user_display_name);
+        found->user_display_name_length = updated->user_display_name_length;
+        lookup = auth_credentials_update_user(service, found);
     }
+    if (lookup != AUTH_OK) return lookup == AUTH_CAPACITY ? CTAP_STATUS_KEY_STORE_FULL : CTAP_STATUS_OTHER;
+    *length = 0U; return CTAP_STATUS_OK;
+}
+
+/* Requires an unscoped authenticated token; state was cleared before parsing. */
+static uint8_t begin_enumeration(AuthCredentialService *service, CtapClientPin *pin,
+    CtapCredentialManagement *state, const ManagementRequest *request,
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
+    uint8_t command = request->command;
     size_t resident_count = 0U;
     uint8_t (*rp_hashes)[32] = state->scratch.rp_hashes;
     for (size_t i = 0U; i < service->storage.capacity; ++i) {
@@ -137,9 +193,9 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
         if (lookup != AUTH_OK) { ctap_credential_management_clear(state); return CTAP_STATUS_OTHER; }
         if (!found->discoverable) continue;
         ++resident_count;
-        if (command == 1U) continue;
-        if (command == 4U && memcmp(found->rp_id_hash, rp_hash, 32U) != 0) continue;
-        if (command == 2U) {
+        if (command == CM_GET_METADATA) continue;
+        if (command == CM_ENUMERATE_CREDENTIALS_BEGIN && memcmp(found->rp_id_hash, request->rp_hash, 32U) != 0) continue;
+        if (command == CM_ENUMERATE_RPS_BEGIN) {
             bool duplicate = false;
             for (size_t j = 0U; j < state->count; ++j) if (memcmp(rp_hashes[j], found->rp_id_hash, 32U) == 0) duplicate = true;
             if (duplicate) continue;
@@ -147,7 +203,7 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
         }
         memcpy(state->ids[state->count++], found->credential_id, 32U);
     }
-    if (command == 1U) {
+    if (command == CM_GET_METADATA) {
         size_t total; if (service->storage.count(service->storage.context, &total) != AUTH_OK || total > service->storage.capacity)
             return CTAP_STATUS_OTHER;
         uint8_t encoded[24]; CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
@@ -158,10 +214,34 @@ static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
     }
     if (state->count == 0U) return CTAP_STATUS_NO_CREDENTIALS;
     state->kind = (uint8_t)command; state->token_generation = pin->token_generation;
-    state->metadata_revision = service->metadata_revision; state->last_call_ms = now_ms; memcpy(state->rp_hash, rp_hash, 32U);
-    status = entry(service, state, true, output, capacity, length);
+    state->metadata_revision = service->metadata_revision; state->last_call_ms = now_ms; memcpy(state->rp_hash, request->rp_hash, 32U);
+    uint8_t status = entry(service, state, true, output, capacity, length);
     if (status != CTAP_STATUS_OK || state->next == state->count) ctap_credential_management_clear(state);
     return status;
+}
+
+static uint8_t execute(AuthCredentialService *service, CtapClientPin *pin,
+    CtapCredentialManagement *state, const uint8_t *input, size_t input_length,
+    uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
+    if (!auth_credentials_resident_supported(service) || pin == NULL || pin->service != service || state == NULL ||
+        output == NULL || length == NULL) return CTAP_STATUS_OTHER;
+    ManagementRequest request = {0};
+    uint8_t status = parse_subcommand(input, input_length, &request);
+    if (status != CTAP_STATUS_OK) {
+        ctap_credential_management_clear(state);
+        return status;
+    }
+    ctap_client_pin_poll(pin, now_ms);
+    if (request.command == CM_ENUMERATE_RPS_NEXT || request.command == CM_ENUMERATE_CREDENTIALS_NEXT)
+        return continue_enumeration(service, pin, state, request.command, output, capacity, length, now_ms);
+    ctap_credential_management_clear(state);
+    status = parse_parameters(&request, state);
+    if (status != CTAP_STATUS_OK) return status;
+    status = authorize_request(pin, state, &request, now_ms);
+    if (status != CTAP_STATUS_OK) return status;
+    if (mutation(request.command)) return mutate_credential(service, pin, state, &request, length);
+    return begin_enumeration(service, pin, state, &request, output, capacity, length, now_ms);
 }
 
 uint8_t ctap_credential_management_execute(AuthCredentialService *service, CtapClientPin *pin,

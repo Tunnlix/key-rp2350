@@ -102,7 +102,8 @@ static void test_all_supported_lengths(void)
             assert(state.buffer[i] == 0U); /* Final report padding wasn't copied. */
         }
         CtaphidReassembler saved = state;
-        packet = parse_report(1U, sequence, 0U, offset);
+        /* Keep this spurious packet a continuation even after sequence 127. */
+        packet = parse_report(1U, sequence & 0x7FU, 0U, offset);
         assert(ctaphid_reassemble_packet(&state, &packet, 100U) == CTAPHID_REASSEMBLE_IGNORED);
         assert(memcmp(&state, &saved, sizeof state) == 0);
         packet = parse_report(2U, 0x81U, 0U, 0U);
@@ -256,8 +257,12 @@ static void test_reassembler_validation(void)
 {
     CtaphidReassembler state = {0};
     CtaphidReassembler saved = state;
-    CtaphidParsedPacket packet = parse_report(1U, 0x81U, 1025U, 0U);
-    assert(ctaphid_reassemble_packet(&state, &packet, 0U) == CTAPHID_REASSEMBLE_MESSAGE_TOO_LARGE);
+    CtaphidParsedPacket packet = parse_report(1U, 0x81U, 200U, 0U);
+    packet.message_length = CTAPHID_MAX_MESSAGE_SIZE + 1U;
+    /* At maximum capacity, the extra byte also exceeds the wire format. */
+    CtaphidReassembleResult oversized = CTAPHID_MAX_MESSAGE_SIZE < CTAPHID_MAX_WIRE_MESSAGE_SIZE
+        ? CTAPHID_REASSEMBLE_MESSAGE_TOO_LARGE : CTAPHID_REASSEMBLE_INVALID_PACKET;
+    assert(ctaphid_reassemble_packet(&state, &packet, 0U) == oversized);
     assert(memcmp(&state, &saved, sizeof state) == 0);
     assert(ctaphid_reassemble_packet(NULL, &packet, 0U) == CTAPHID_REASSEMBLE_NULL_ARGUMENT);
     assert(ctaphid_reassemble_packet(&state, NULL, 0U) == CTAPHID_REASSEMBLE_NULL_ARGUMENT);
@@ -289,6 +294,6 @@ int main(void)
     test_explicit_expiry();
     test_expiry_continues_assembly();
     test_reassembler_validation();
-    puts("CTAPHID parser/reassembler tests passed (all payload lengths 0..1024).");
+    puts("CTAPHID parser/reassembler tests passed (all configured payload lengths).");
     return 0;
 }

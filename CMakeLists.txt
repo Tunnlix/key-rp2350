@@ -40,6 +40,17 @@ add_library(ctap_core STATIC
 )
 target_include_directories(ctap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(ctap_core PUBLIC c_std_17)
+# Empty cache values retain the defaults in ctap_config.h. PUBLIC definitions
+# keep application/provider struct layouts consistent with the library.
+foreach(setting IN ITEMS CTAP_MESSAGE_CAPACITY CTAP_RESIDENT_CAPACITY CTAP_TOUCH_TIMEOUT_MS)
+    set(${setting} "" CACHE STRING "Override ${setting} from ctap_config.h")
+    if(NOT "${${setting}}" STREQUAL "")
+        if(NOT "${${setting}}" MATCHES "^[1-9][0-9]*$")
+            message(FATAL_ERROR "${setting} must be a positive integer")
+        endif()
+        target_compile_definitions(ctap_core PUBLIC ${setting}=${${setting}})
+    endif()
+endforeach()
 set_target_properties(ctap_core PROPERTIES C_EXTENSIONS OFF)
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(ctap_core PRIVATE -Wall -Wextra -Wpedantic -Werror)

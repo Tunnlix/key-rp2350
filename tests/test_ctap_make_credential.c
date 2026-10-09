@@ -144,8 +144,9 @@ static bool receive(void *ctx, const uint8_t report[64])
 static void setup(Fixture *f)
 {
     memset(f, 0, sizeof *f); service_init(&f->service, &f->store);
-    CtapGetInfoProfile profile = {0}; profile.max_message_size = 1024U; profile.user_presence = true;
+    CtapGetInfoProfile profile = {0}; profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE; profile.user_presence = true;
     assert(ctaphid_ctap_backend_init(&f->backend, &profile));
+    f->backend.presence_timeout_ms = 30000U; /* Fixed timeline for these scenarios. */
     assert(ctaphid_ctap_backend_configure_credentials(&f->backend, &f->service));
     assert(!ctaphid_ctap_backend_configure_credentials(&f->backend, &f->service));
     CtaphidDeviceConfig config = {0}; config.submit_report = submit; config.transport_context = f;

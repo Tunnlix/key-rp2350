@@ -190,7 +190,7 @@ static void test_backend_coordinator_bridge(void)
     ctaphid_ctap_backend_start(&backend, 999U, request, sizeof request);
     assert(ctaphid_ctap_backend_poll(&backend, &device, 5U) == CTAPHID_DEVICE_IGNORED);
     assert(!backend.pending && device.phase == CTAPHID_DEVICE_IDLE);
-    profile.max_message_size = 2048U;
+    profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE + 1U;
     assert(!ctaphid_ctap_backend_init(&backend, &profile));
 }
 

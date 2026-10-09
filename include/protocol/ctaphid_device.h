@@ -5,7 +5,9 @@
 
 /* CTAP 2.3, section 11.2: device-level transaction coordination.
  * https://fidoalliance.org/specs/fido-v2.3-ps-20260226/fido-client-to-authenticator-protocol-v2.3-ps-20260226.html#usb-hid */
-#define CTAPHID_DEVICE_RESPONSE_REPORTS 18U /* Enough for a 1024-byte response. */
+#define CTAPHID_DEVICE_RESPONSE_REPORTS (1U + \
+    (CTAPHID_MAX_MESSAGE_SIZE - CTAPHID_INITIAL_PAYLOAD_SIZE + CTAPHID_CONTINUATION_PAYLOAD_SIZE - 1U) / \
+    CTAPHID_CONTINUATION_PAYLOAD_SIZE)
 #define CTAPHID_DEVICE_CONTROL_REPORTS 4U
 #define CTAPHID_KEEPALIVE_INTERVAL_MS 100U
 #define CTAPHID_SEND_TIMEOUT_MS 3000U /* Local transport watchdog, not a CTAP mandate. */
@@ -119,7 +121,7 @@ CtaphidDeviceResult ctaphid_device_poll(CtaphidDevice *device, uint32_t now_ms);
 CtaphidDeviceResult ctaphid_device_report_sent(CtaphidDevice *device,
     uint64_t transfer_id, bool success);
 
-/* CBOR payload includes its CTAP status byte; current storage allows 1..1024
+/* CBOR payload includes its CTAP status byte; storage allows 1..CTAP_MESSAGE_CAPACITY
  * bytes. Stale completion tokens cannot complete a resynchronized transaction.
  * No generic 3-second processing deadline is imposed on user-presence operations. */
 CtaphidDeviceResult ctaphid_device_complete_cbor(CtaphidDevice *device,

@@ -57,6 +57,13 @@ scratch and copies the response only after counter persistence, signing and
 encoding succeed. Continuation copies its request into scratch before selecting
 the next ID; its authenticated sequence remains separate between calls.
 
+ClientPIN preparation validates into CBOR views and a 65-byte public-key buffer,
+then publishes directly to the caller-owned request. Input must not overlap that
+request. GetInfo dispatch uses a fixed 257-byte response buffer. Native x64 GCC
+16.2 at `-O2` reports 576 bytes for PIN preparation and 336 bytes for dispatch,
+at both 1,024-byte and 7,609-byte message capacity. These are per-function
+measurements, excluding callees and provider callbacks.
+
 ## Regression check
 
 GCC builds emit `.su` stack-usage reports for every core source. CMake also sets
@@ -98,10 +105,11 @@ Native GCC 16.2 x64 measurements, in bytes:
 
 | Credential-management function | `-O2` | `-O0` |
 | --- | ---: | ---: |
-| Public execute/cleanup wrapper | 112 | 112 |
-| Internal command execution | 720 | 784 |
-| Entry response encoding | 192 | 192 |
-| Sum of these simultaneously live frames | 1,024 | 1,088 |
+| Public execute/cleanup wrapper | 64 | 112 |
+| Internal command execution | 640 | 368 |
+| Enumeration helper | inlined | 192 |
+| Entry response encoding | 192 | 208 |
+| Sum on the enumeration response path | 896 | 880 |
 
 Before migration, execution and entry encoding alone totalled 7,616 bytes at
 `-O2`. The new sums exclude callers, other callees, providers and interrupts;
@@ -121,7 +129,8 @@ These values exclude the convenience entry point and provider callees.
 Registration finish's helper uses 240 bytes at `-O2` and 224 bytes at `-O0`;
 its cleanup wrapper uses 96 bytes in both builds. The combined contribution
 is 336/320 bytes, compared with the previous 2,240-byte finish frame at `-O2`.
-The response callback adds 272/304 bytes when active. These figures exclude
+The backend adds 112 bytes at `-O2` or 128 bytes at `-O0` while registration
+finishing is active (poll plus its presence helper). These figures exclude
 credential-service calls, attestation/crypto helpers and provider stack.
 
 Registration preparation's helper uses 960 bytes at `-O2` and 832 bytes at

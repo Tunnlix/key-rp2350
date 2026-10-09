@@ -26,6 +26,9 @@ typedef struct {
 } CtapCredentialManagement;
 
 void ctap_credential_management_clear(CtapCredentialManagement *state);
+/* Parse and authenticate before lookup/mutation. MAC input preserves the exact
+ * received parameter bytes; borrowed CBOR spans never survive this call.
+ * Every exit wipes scratch; only successful enumeration keeps its ID snapshot. */
 uint8_t ctap_credential_management_execute(AuthCredentialService *service, CtapClientPin *pin,
     CtapCredentialManagement *state, const uint8_t *input, size_t input_length,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);

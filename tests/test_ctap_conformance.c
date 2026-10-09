@@ -90,8 +90,9 @@ static void test_excluded_result_survives_token_expiry(void)
         f.pin.service = &f.service; f.pin.pin_set = true; f.pin.token_active = f.pin.token_used = true;
         f.pin.permissions = CTAP_PIN_PERMISSION_MC; f.pin.token_generation = 1U; f.pin.token_rp_bound = true;
         memcpy(f.pin.token_rp_hash, rp, 32U);
-        CtapGetInfoProfile profile = {0}; profile.max_message_size = 1024U; profile.user_presence = true;
+        CtapGetInfoProfile profile = {0}; profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE; profile.user_presence = true;
         assert(ctaphid_ctap_backend_init(&f.backend, &profile));
+        f.backend.presence_timeout_ms = 30000U; /* Exclusion/expiry timeline below. */
         assert(ctaphid_ctap_backend_configure_credentials(&f.backend, &f.service));
         assert(ctaphid_ctap_backend_configure_reset(&f.backend, 0U, reset, &f));
         assert(ctaphid_ctap_backend_configure_pin(&f.backend, &f.pin));

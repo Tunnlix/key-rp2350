@@ -6,8 +6,8 @@
 
 /* Deterministic fake USB driver and deferred CBOR worker. No wall-clock sleeps. */
 typedef struct {
-    uint8_t reports[128][64];
-    uint64_t transfers[128];
+    uint8_t reports[256][64];
+    uint64_t transfers[256];
     size_t count, transport_aborts, cbor_starts, cbor_aborts, winks;
     uint64_t aborted_transfer, operation;
     bool reject;
@@ -18,7 +18,7 @@ typedef struct { CtaphidDevice device; Mock mock; } Fixture;
 static bool submit(void *context, const uint8_t report[64], uint64_t id)
 {
     Mock *mock = context;
-    assert(mock->count < 128U);
+    assert(mock->count < 256U);
     memcpy(mock->reports[mock->count], report, 64U);
     mock->transfers[mock->count++] = id;
     return !mock->reject;
@@ -143,7 +143,7 @@ static void test_basic_commands(void)
     Fixture fixture;
     setup(&fixture, false, false);
     uint32_t cid = allocate(&fixture, 0U);
-    const uint16_t lengths[] = {0U, 1U, 57U, 58U, 60U, 116U, 117U, 1024U};
+    const uint16_t lengths[] = {0U, 1U, 57U, 58U, 60U, 116U, 117U, CTAPHID_MAX_MESSAGE_SIZE};
     for (size_t n = 0; n < sizeof lengths / sizeof lengths[0]; ++n) {
         size_t before = fixture.mock.count;
         assert(initial(&fixture, cid, 0x01U, lengths[n], 10U) == CTAPHID_DEVICE_OK);
@@ -240,7 +240,7 @@ static void test_validation_and_sequence_errors(void)
         poll_at(&fixture, 2U);
         expect_error(&fixture, invalid_cids[i], 0x0BU);
     }
-    const uint16_t oversized[] = {1025U, 7610U};
+    const uint16_t oversized[] = {CTAPHID_MAX_MESSAGE_SIZE + 1U, CTAPHID_MAX_WIRE_MESSAGE_SIZE + 1U};
     for (size_t i = 0; i < sizeof oversized / sizeof oversized[0]; ++i) {
         assert(initial(&fixture, cid, 0x01U, oversized[i], 3U) == CTAPHID_DEVICE_OK);
         poll_at(&fixture, 3U);

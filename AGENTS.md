@@ -2,12 +2,12 @@
 
 - Do not create README files.
 - When asked for the next task, give the next implementation step directly. Keep tasks small; prioritize portable implementation and reuse existing targeted checks.
-- Follow `tasks.md` in execution order unless the user changes priorities.
+- Follow `tasks.md` in execution order unless the user changes priorities. Tasks 8–12 are deferred in `hardware-tasks.md`; resume them when the XIAO RP2350 hardware arrives and the user asks to proceed.
 - This repository now contains the portable C17 core and native C tests only. Do not reintroduce Windows implementations, Python clients/helpers, host examples or platform-specific runtime dependencies.
 - Keep `src/` and `include/` independent of console I/O, heap allocation and host APIs. Inject platform actions through callbacks; providers own private keys and credential randoms.
 - CTAP2 only: no CTAP1/U2F or legacy compatibility paths. Keep CTAPHID_MSG unsupported and advertise CAPABILITY_NMSG.
 - Follow the [CTAP 2.3 Proposed Standard (2026-02-26)](https://fidoalliance.org/specs/fido-v2.3-ps-20260226/fido-client-to-authenticator-protocol-v2.3-ps-20260226.html). Claim full compliance only after applicable requirements have been verified.
-- Target RP2350 onboard resources, then a possible custom board/external security chip. Separate credential metadata from crypto providers; use opaque key handles without private-key exports or persistent-format dependencies.
+- Target Seeed XIAO RP2350 onboard resources, then a possible custom board/external security chip. Separate credential metadata from crypto providers; use opaque key handles without private-key exports or persistent-format dependencies.
 - USB integration, descriptors, endpoints and USB/WebAuthn hardware testing are explicitly out of scope for this refactoring. Preserve the portable CTAPHID codec/coordinator; do not add a USB driver.
 - Maintain only outstanding work below. Remove completed items; do not restore implementation-history tables or treat optional features as mandatory.
 
@@ -21,6 +21,14 @@ Use `cmake --preset native-tests`, `cmake --build --preset native-tests`, then
 `ctest --preset native-tests`. The `core-only` configure/build presets produce
 the library without tests. Firmware can use `add_subdirectory()` and link
 `ctap_core` with `BUILD_TESTING=OFF`; it supplies providers and its main loop.
+
+Build capacities/default touch timeout are defined in `include/ctap_config.h`.
+Override `CTAP_MESSAGE_CAPACITY`, `CTAP_RESIDENT_CAPACITY` and
+`CTAP_TOUCH_TIMEOUT_MS` with CMake cache settings or compiler definitions.
+For example: `cmake --preset core-only -DCTAP_MESSAGE_CAPACITY=2048`.
+CMake propagates these settings to consumers; other builds must use identical
+definitions for the core, application and providers because struct layouts change.
+Set the backend profile's `max_message_size` to `CTAP_MESSAGE_CAPACITY`.
 
 Retain native protocol, state-machine, failure and bounds tests. Their mock
 primitives verify orchestration, not crypto algorithms, flash durability or

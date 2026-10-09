@@ -5,8 +5,9 @@
 #include <stdint.h>
 
 #include "protocol/ctaphid_parser.h"
+#include "ctap_config.h"
 
-#define CTAPHID_MAX_MESSAGE_SIZE 1024U
+#define CTAPHID_MAX_MESSAGE_SIZE CTAP_MESSAGE_CAPACITY
 #define CTAPHID_TRANSACTION_TIMEOUT_MS 3000U
 
 typedef struct {

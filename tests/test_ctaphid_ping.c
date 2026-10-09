@@ -2,10 +2,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "protocol/ctaphid_dispatcher.h"
+#include "protocol/ctaphid_device.h"
 
 typedef struct {
-    uint8_t reports[18][CTAPHID_REPORT_SIZE];
+    uint8_t reports[CTAPHID_DEVICE_RESPONSE_REPORTS][CTAPHID_REPORT_SIZE];
     size_t accepted;
     size_t attempted;
     size_t fail_at;
@@ -16,7 +16,7 @@ static bool capture_report(void *context, const uint8_t report[CTAPHID_REPORT_SI
     PingTransport *transport = context;
     ++transport->attempted;
     if (transport->attempted == transport->fail_at) return false;
-    assert(transport->accepted < 18U);
+    assert(transport->accepted < sizeof transport->reports / sizeof transport->reports[0]);
     memcpy(transport->reports[transport->accepted++], report, CTAPHID_REPORT_SIZE);
     return true;
 }
@@ -143,6 +143,6 @@ int main(void)
     test_all_ping_lengths();
     test_send_failure_consumes_request();
     test_validation_does_not_send();
-    puts("CTAPHID PING tests passed (request-to-response lengths 0..1024).");
+    puts("CTAPHID PING tests passed (all configured request-to-response lengths).");
     return 0;
 }

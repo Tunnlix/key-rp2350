@@ -73,7 +73,11 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
 bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin);
 
 /* Config callbacks: start prepares a reply, abort discards it. Neither callback
- * reenters the coordinator. context must point to an initialized backend. */
+ * reenters the coordinator. context must point to an initialized backend.
+ * Completing a reply clears pending inputs/waits but retains assertion and
+ * management continuations. A new command preserves only its matching
+ * continuation family. Matching-operation CANCEL/abort clears both; channel
+ * resynchronization clears continuations owned by that CID, including idle INIT. */
 void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     const uint8_t *request, size_t request_length);
 void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id);

@@ -48,22 +48,14 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
 {
     if (request == NULL) return CTAP_STATUS_OTHER;
     CborValue fields[11] = {{0}}; bool present[11] = {false};
-    uint8_t status = ctap_request_map(input, length, 11U, fields, present);
+    uint8_t status = ctap_request_client_pin_map(input, length, fields, present);
     if (status != CTAP_STATUS_OK) return status;
-    if (!present[2]) return CTAP_STATUS_MISSING_PARAMETER;
-    if (fields[2].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    /* Known optional members retain their declared types even on subcommands
-     * that do not use their values. Unknown members remain ignored (§8). */
-    if ((present[3] && fields[3].major != 5U) ||
-        (present[4] && fields[4].major != 2U) || (present[5] && fields[5].major != 2U) ||
-        (present[6] && fields[6].major != 2U) || (present[9] && fields[9].major != 0U) ||
-        (present[10] && fields[10].major != 3U)) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     uint64_t command = fields[2].value;
     if ((command < 1U || command > 4U) && command != 9U) return CTAP_STATUS_INVALID_SUBCOMMAND;
     if (present[1] && fields[1].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (command != 1U && !present[1]) return CTAP_STATUS_MISSING_PARAMETER;
     if (present[1] && fields[1].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
-    CtapClientPinRequest prepared = {0}; prepared.subcommand = (uint8_t)command;
+    uint8_t peer[65] = {0};
     if (command == 9U) {
         if (!present[3] || !present[6] || !present[9]) return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[6].major != 2U || fields[9].major != 0U || (present[10] && fields[10].major != 3U))
@@ -73,21 +65,12 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (fields[6].value != 32U || fields[9].value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
         /* Known unavailable permissions are rejected; undefined bits ignored. */
         if ((fields[9].value & 0x78U) != 0U) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
-        if (present[10] && (fields[10].value == 0U || fields[10].value > sizeof prepared.rp_id))
+        if (present[10] && (fields[10].value == 0U || fields[10].value > sizeof request->rp_id))
             return CTAP_STATUS_INVALID_PARAMETER;
-        prepared.permissions = fields[9].value & 7U;
-        prepared.rp_present = present[10];
-        if (present[10]) {
-            prepared.rp_length = (size_t)fields[10].value;
-            memcpy(prepared.rp_id, fields[10].data, prepared.rp_length);
-        }
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        status = ctap_pin_public_key_parse(&fields[3], prepared.peer);
+        status = ctap_pin_public_key_parse(&fields[3], peer);
         if (status != CTAP_STATUS_OK) return status;
-        memcpy(prepared.pin_hash_enc, fields[6].data, 32U);
-        *request = prepared; return CTAP_STATUS_OK;
-    }
-    if (command >= 3U) {
+    } else if (command >= 3U) {
         if (!present[3] || !present[4] || !present[5] || (command == 4U && !present[6]))
             return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[4].major != 2U || fields[5].major != 2U || (command == 4U && fields[6].major != 2U))
@@ -96,13 +79,27 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
         /* ClientPIN COSE keys cannot include optional parameters other than alg. */
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        status = ctap_pin_public_key_parse(&fields[3], prepared.peer);
+        status = ctap_pin_public_key_parse(&fields[3], peer);
         if (status != CTAP_STATUS_OK) return status;
-        memcpy(prepared.new_pin_enc, fields[5].data, 80U);
-        memcpy(prepared.auth, fields[4].data, 32U); prepared.auth_length = 32U;
-        if (command == 4U) memcpy(prepared.pin_hash_enc, fields[6].data, 32U);
     }
-    *request = prepared;
+    /* Publish only after validation; the caller owns the message-sized RP buffer. */
+    memset(request, 0, sizeof *request);
+    request->subcommand = (uint8_t)command;
+    memcpy(request->peer, peer, sizeof peer);
+    if (command == 9U) {
+        request->permissions = fields[9].value & 7U;
+        request->rp_present = present[10];
+        if (present[10]) {
+            request->rp_length = (size_t)fields[10].value;
+            memcpy(request->rp_id, fields[10].data, request->rp_length);
+        }
+        memcpy(request->pin_hash_enc, fields[6].data, 32U);
+    } else if (command >= 3U) {
+        memcpy(request->new_pin_enc, fields[5].data, 80U);
+        memcpy(request->auth, fields[4].data, 32U);
+        request->auth_length = 32U;
+        if (command == 4U) memcpy(request->pin_hash_enc, fields[6].data, 32U);
+    }
     return CTAP_STATUS_OK;
 }
 
@@ -140,6 +137,114 @@ done:
     return status;
 }
 
+/* Preconditions are checked before ECDH, request authentication or retry writes. */
+static uint8_t check_pin_state(const CtapClientPin *pin, const CtapClientPinRequest *request,
+    const AuthPinRecord *record)
+{
+    if (request->subcommand == 3U && record->set) return CTAP_STATUS_PIN_AUTH_INVALID;
+    if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_CM) != 0U &&
+        !pin->credential_management) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
+    if (request->subcommand == 4U || request->subcommand == 9U) {
+        if (!record->set) return CTAP_STATUS_PIN_NOT_SET;
+        if (record->retries == 0U) return CTAP_STATUS_PIN_BLOCKED;
+        if (pin->consecutive_failures >= 3U) return CTAP_STATUS_PIN_AUTH_BLOCKED;
+    }
+    return CTAP_STATUS_OK;
+}
+
+static uint8_t authenticate_pin_change(const AuthSecretCrypto *crypto,
+    const CtapClientPinRequest *request, const uint8_t keys[64])
+{
+    uint8_t message[112] = {0};
+    memcpy(message, request->new_pin_enc, 80U);
+    if (request->subcommand == 4U) memcpy(message + 80U, request->pin_hash_enc, 32U);
+    uint8_t status = ctap_pin_protocol_verify(crypto, keys, message,
+        request->subcommand == 4U ? 112U : 80U, request->auth, request->auth_length);
+    auth_secure_zero(message, sizeof message);
+    return status == CTAP_STATUS_OK ? CTAP_STATUS_OK : CTAP_STATUS_PIN_AUTH_INVALID;
+}
+
+/* Charge an attempt durably before decrypting or comparing the PIN verifier,
+ * so interruption cannot restore retries. Restore retries only after a match. */
+static uint8_t verify_current_pin(CtapClientPin *pin, const CtapClientPinRequest *request,
+    const uint8_t keys[64], AuthPinRecord *record)
+{
+    const AuthSecretCrypto *crypto = &pin->service->secrets;
+    uint8_t current_hash[16] = {0};
+    uint8_t status = CTAP_STATUS_OTHER;
+    --record->retries;
+    if (!persist(pin, record)) goto done;
+    if (crypto->aes256_cbc(crypto->context, false, keys + 32U, request->pin_hash_enc,
+        request->pin_hash_enc + 16U, 16U, current_hash) != AUTH_OK ||
+        !ctap_pin_equal(record->hash, current_hash, sizeof current_hash)) {
+        ++pin->consecutive_failures;
+        if (crypto->regenerate(crypto->context) != AUTH_OK) {
+            pin->faulted = true;
+            ctap_client_pin_invalidate(pin);
+            goto done;
+        }
+        status = record->retries == 0U ? CTAP_STATUS_PIN_BLOCKED :
+            (pin->consecutive_failures >= 3U ? CTAP_STATUS_PIN_AUTH_BLOCKED : CTAP_STATUS_PIN_INVALID);
+        goto done;
+    }
+    record->retries = AUTH_PIN_MAX_RETRIES;
+    if (!persist(pin, record)) goto done;
+    pin->consecutive_failures = 0U;
+    status = CTAP_STATUS_OK;
+done:
+    auth_secure_zero(current_hash, sizeof current_hash);
+    return status;
+}
+
+/* Called only after successful PIN verification. Retire the old token first;
+ * publish a replacement only after RNG, encryption and complete encoding succeed. */
+static uint8_t publish_token(CtapClientPin *pin, const CtapClientPinRequest *request,
+    const uint8_t keys[64], uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
+{
+    ctap_client_pin_invalidate(pin);
+    const AuthSecretCrypto *crypto = &pin->service->secrets;
+    uint8_t token[32] = {0}, encrypted[48] = {0}, rp_hash[32] = {0}, encoded[52];
+    CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
+    uint8_t status = CTAP_STATUS_OTHER;
+    if (request->rp_length > sizeof request->rp_id || (request->permissions & ~7ULL) != 0U ||
+        ((request->permissions & 3U) != 0U && !request->rp_present)) goto done;
+    if (request->rp_present && pin->service->crypto.sha256(pin->service->crypto.context,
+        request->rp_id, request->rp_length, rp_hash) != AUTH_OK) goto done;
+    if (pin->token_generation == UINT64_MAX ||
+        pin->service->crypto.random(pin->service->crypto.context, token, sizeof token) != AUTH_OK ||
+        pin->service->crypto.random(pin->service->crypto.context, encrypted, 16U) != AUTH_OK ||
+        crypto->aes256_cbc(crypto->context, true, keys + 32U, encrypted, token, 32U, encrypted + 16U) != AUTH_OK ||
+        !cbor_write_map(&writer, 1U) || !cbor_write_uint(&writer, 2U) ||
+        !cbor_write_bytes(&writer, encrypted, sizeof encrypted) || writer.length > capacity) goto done;
+    memcpy(pin->token, token, sizeof token);
+    memcpy(pin->token_rp_hash, rp_hash, sizeof rp_hash);
+    pin->permissions = (uint8_t)request->permissions;
+    pin->token_rp_bound = request->rp_present;
+    pin->issued_at_ms = now_ms;
+    pin->token_active = true;
+    pin->token_used = false;
+    ++pin->token_generation;
+    memcpy(output, encoded, writer.length);
+    *length = writer.length;
+    status = CTAP_STATUS_OK;
+done:
+    auth_secure_zero(token, sizeof token);
+    auth_secure_zero(encrypted, sizeof encrypted);
+    auth_secure_zero(rp_hash, sizeof rp_hash);
+    return status;
+}
+
+static uint8_t commit_new_pin(CtapClientPin *pin, const CtapClientPinRequest *request,
+    const uint8_t keys[64], AuthPinRecord *record)
+{
+    uint8_t status = new_pin(pin, keys, request->new_pin_enc, record);
+    if (status != CTAP_STATUS_OK) return status;
+    if (!persist(pin, record)) return CTAP_STATUS_OTHER;
+    pin->consecutive_failures = 0U;
+    pin->pin_set = true;
+    return reset_token(pin) ? CTAP_STATUS_OK : CTAP_STATUS_OTHER;
+}
+
 uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *request,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
 {
@@ -150,7 +255,7 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
     if (request->subcommand != 1U && request->subcommand != 3U && request->subcommand != 4U && request->subcommand != 9U)
         return CTAP_STATUS_INVALID_SUBCOMMAND;
     AuthPinRecord record = {0};
-    uint8_t keys[64] = {0}, message[112] = {0}, current_hash[16] = {0};
+    uint8_t keys[64] = {0};
     const AuthSecretCrypto *crypto = &pin->service->secrets;
     uint8_t status = CTAP_STATUS_OTHER;
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
@@ -162,82 +267,28 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
             !cbor_write_uint(&writer, 4U) || !cbor_write_bool(&writer, pin->consecutive_failures >= 3U) || writer.length > capacity) goto done;
         memcpy(output, encoded, writer.length); *length = writer.length; status = CTAP_STATUS_OK; goto done;
     }
-    if (request->subcommand == 3U && record.set) { status = CTAP_STATUS_PIN_AUTH_INVALID; goto done; }
-    if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_CM) != 0U && !pin->credential_management) {
-        status = CTAP_STATUS_UNAUTHORIZED_PERMISSION; goto done;
-    }
-    if (request->subcommand == 4U || request->subcommand == 9U) {
-        if (!record.set) { status = CTAP_STATUS_PIN_NOT_SET; goto done; }
-        if (record.retries == 0U) { status = CTAP_STATUS_PIN_BLOCKED; goto done; }
-        if (pin->consecutive_failures >= 3U) { status = CTAP_STATUS_PIN_AUTH_BLOCKED; goto done; }
-    }
+    status = check_pin_state(pin, request, &record);
+    if (status != CTAP_STATUS_OK) goto done;
     status = ctap_pin_protocol_shared(crypto, request->peer, keys);
-    /* ClientPIN defines decapsulation/verification wire errors independently
-     * of the provider's failure category (§§6.5.5.5–6, 6.5.5.7.2). */
+    /* ClientPIN maps decapsulation errors to INVALID_PARAMETER (§6.5.5). */
     if (status != CTAP_STATUS_OK) { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
     if (request->subcommand != 9U) {
-        memcpy(message, request->new_pin_enc, 80U);
-        if (request->subcommand == 4U) memcpy(message + 80U, request->pin_hash_enc, 32U);
-        status = ctap_pin_protocol_verify(crypto, keys, message, request->subcommand == 4U ? 112U : 80U,
-            request->auth, request->auth_length);
-        if (status != CTAP_STATUS_OK) { status = CTAP_STATUS_PIN_AUTH_INVALID; goto done; }
+        status = authenticate_pin_change(crypto, request, keys);
+        if (status != CTAP_STATUS_OK) goto done;
     }
     if (request->subcommand == 4U || request->subcommand == 9U) {
-        /* Persist before decrypting/trying the verifier, including crash recovery. */
-        --record.retries;
-        status = CTAP_STATUS_OTHER;
-        if (!persist(pin, &record)) goto done;
-        if (crypto->aes256_cbc(crypto->context, false, keys + 32U, request->pin_hash_enc,
-            request->pin_hash_enc + 16U, 16U, current_hash) != AUTH_OK || !ctap_pin_equal(record.hash, current_hash, 16U)) {
-            ++pin->consecutive_failures;
-            if (crypto->regenerate(crypto->context) != AUTH_OK) {
-                pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
-            }
-            status = record.retries == 0U ? CTAP_STATUS_PIN_BLOCKED :
-                (pin->consecutive_failures >= 3U ? CTAP_STATUS_PIN_AUTH_BLOCKED : CTAP_STATUS_PIN_INVALID);
-            goto done;
-        }
-        record.retries = AUTH_PIN_MAX_RETRIES;
-        if (!persist(pin, &record)) goto done;
-        pin->consecutive_failures = 0U;
+        status = verify_current_pin(pin, request, keys, &record);
+        if (status != CTAP_STATUS_OK) goto done;
     }
     if (request->subcommand == 9U) {
-        /* Successful PIN verification invalidates every previously issued token.
-         * Publish the new state only after RNG, encryption and encoding succeed. */
-        ctap_client_pin_invalidate(pin);
-        uint8_t token[32] = {0}, encrypted[48] = {0}, rp_hash[32] = {0}, encoded[52];
-        CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
-        status = CTAP_STATUS_OTHER;
-        if (request->rp_length > sizeof request->rp_id ||
-            (request->permissions & ~7ULL) != 0U || ((request->permissions & 3U) != 0U && !request->rp_present)) goto token_done;
-        if (request->rp_present && pin->service->crypto.sha256(pin->service->crypto.context,
-            request->rp_id, request->rp_length, rp_hash) != AUTH_OK) goto token_done;
-        if (pin->token_generation == UINT64_MAX ||
-            pin->service->crypto.random(pin->service->crypto.context, token, sizeof token) != AUTH_OK ||
-            pin->service->crypto.random(pin->service->crypto.context, encrypted, 16U) != AUTH_OK ||
-            crypto->aes256_cbc(crypto->context, true, keys + 32U, encrypted, token, 32U, encrypted + 16U) != AUTH_OK ||
-            !cbor_write_map(&writer, 1U) || !cbor_write_uint(&writer, 2U) ||
-            !cbor_write_bytes(&writer, encrypted, sizeof encrypted) || writer.length > capacity) goto token_done;
-        memcpy(pin->token, token, 32U); memcpy(pin->token_rp_hash, rp_hash, 32U);
-        pin->permissions = (uint8_t)request->permissions;
-        pin->token_rp_bound = request->rp_present;
-        pin->issued_at_ms = now_ms; pin->token_active = true; pin->token_used = false;
-        ++pin->token_generation;
-        memcpy(output, encoded, writer.length); *length = writer.length; status = CTAP_STATUS_OK;
-token_done:
-        auth_secure_zero(token, sizeof token); auth_secure_zero(encrypted, sizeof encrypted);
-        auth_secure_zero(rp_hash, sizeof rp_hash); goto done;
+        status = publish_token(pin, request, keys, output, capacity, length, now_ms);
+    } else {
+        status = commit_new_pin(pin, request, keys, &record);
+        if (status == CTAP_STATUS_OK) *length = 0U;
     }
-    status = new_pin(pin, keys, request->new_pin_enc, &record);
-    if (status != CTAP_STATUS_OK) goto done;
-    if (!persist(pin, &record)) { status = CTAP_STATUS_OTHER; goto done; }
-    pin->consecutive_failures = 0U;
-    pin->pin_set = true;
-    if (!reset_token(pin)) { status = CTAP_STATUS_OTHER; goto done; }
-    *length = 0U;
 done:
-    auth_secure_zero(&record, sizeof record); auth_secure_zero(keys, sizeof keys);
-    auth_secure_zero(message, sizeof message); auth_secure_zero(current_hash, sizeof current_hash);
+    auth_secure_zero(&record, sizeof record);
+    auth_secure_zero(keys, sizeof keys);
     return status;
 }
 

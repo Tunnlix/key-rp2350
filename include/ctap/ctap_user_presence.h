@@ -3,9 +3,10 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "ctap_config.h"
 
 #define CTAP_USER_PRESENCE_MIN_TIMEOUT_MS 10000U
-#define CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS 30000U
+#define CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS CTAP_TOUCH_TIMEOUT_MS
 
 typedef enum {
     CTAP_PRESENCE_IDLE = 0,

@@ -47,11 +47,15 @@ typedef struct {
     CtapGetAssertion request;
     size_t next;
     uint32_t last_call_ms;
+    uint32_t token_issued_at_ms;
     bool active;
 } CtapAssertionSequence;
 void ctap_assertion_sequence_clear(CtapAssertionSequence *sequence);
 /* Begin only after the first assertion was successfully signed/encoded. */
 void ctap_assertion_sequence_begin(CtapAssertionSequence *sequence, const CtapGetAssertion *request, uint32_t now_ms);
+/* Call while idle as well as before continuation. UP consumes permissions,
+ * but the initializing token's original lifetime still bounds this snapshot. */
+void ctap_assertion_sequence_poll(CtapAssertionSequence *sequence, uint32_t now_ms);
 uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace, CtapAssertionSequence *sequence,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms);
 

@@ -8,7 +8,7 @@ CtapExecutionResult ctap_execute(const CtapGetInfoProfile *profile,
 {
     if (profile == NULL || profile->max_message_size == 0U || request == NULL ||
         response == NULL || response_length == NULL || capacity == 0U) return CTAP_EXECUTION_ERROR;
-    uint8_t encoded[CTAP_MAX_RESPONSE_SIZE];
+    uint8_t encoded[1U + CTAP_GET_INFO_MAX_CBOR_SIZE];
     size_t length = 1U;
     if (request_length == 0U) encoded[0] = CTAP_STATUS_INVALID_LENGTH;
     else if (request[0] == CTAP_COMMAND_RESET) {

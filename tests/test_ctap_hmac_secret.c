@@ -222,8 +222,9 @@ static bool receive(void *context, const uint8_t report[64])
 static void setup(Fixture *f)
 {
     memset(f, 0, sizeof *f); configure(&f->service, &f->store, &f->mock); (void)seed(&f->service);
-    CtapGetInfoProfile profile = {0}; profile.max_message_size = 1024U; profile.user_presence = true;
+    CtapGetInfoProfile profile = {0}; profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE; profile.user_presence = true;
     assert(ctaphid_ctap_backend_init(&f->backend, &profile));
+    f->backend.presence_timeout_ms = 30000U; /* Fixed timeline for these scenarios. */
     assert(ctaphid_ctap_backend_configure_credentials(&f->backend, &f->service) && f->backend.profile.hmac_secret);
     CtaphidDeviceConfig config = {0}; config.submit_report = send;
     config.start_cbor = ctaphid_ctap_backend_start; config.abort_cbor = ctaphid_ctap_backend_abort; config.cbor_context = &f->backend;
@@ -246,6 +247,33 @@ static void test_no_extension_crypto_before_consent_or_after_abort(void)
     assert(ctaphid_device_receive_report(&f.device, init, sizeof init, 1U) == CTAPHID_DEVICE_OK);
     assert(!f.backend.pending && !f.backend.get_assertion.hmac_secret.requested && f.mock.evaluations == 0U);
 }
+static void test_key_agreement_parameter_types(void)
+{
+    Store store = {0}; SecretMock mock = {0}; AuthCredentialService service;
+    configure(&service, &store, &mock);
+    const uint8_t keys[] = {3U, 4U, 5U, 6U, 9U, 10U, 11U};
+    for (size_t i = 0U; i < sizeof keys; ++i) {
+        /* No known optional ClientPIN member accepts a boolean. Unknown key
+         * 11 must still be ignored by both paths. */
+        uint8_t request[] = {0xA3U, 1U, 2U, 2U, 2U, keys[i], 0xF4U};
+        uint8_t expected = keys[i] == 11U ? CTAP_STATUS_OK : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        CtapClientPinRequest prepared;
+        uint8_t output[128]; memset(output, 0xEE, sizeof output);
+        size_t length = 999U;
+        assert(ctap_client_pin_prepare(request, sizeof request, &prepared) == expected);
+        assert(ctap_hmac_secret_key_agreement(&service, request, sizeof request,
+            output, sizeof output, &length) == expected);
+        if (expected != CTAP_STATUS_OK) {
+            assert(length == 999U);
+            for (size_t j = 0U; j < sizeof output; ++j) assert(output[j] == 0xEEU);
+        } else {
+            CborValue response, public_key;
+            assert(cbor_read_document(output, length, &response) &&
+                cbor_map_uint(&response, 1U, &public_key) && public_key.major == 5U);
+        }
+    }
+}
+
 int main(void)
 {
     test_protocol_two_kdf_and_uv_separation();
@@ -254,6 +282,7 @@ int main(void)
     test_registration_salt_authentication_precedes_creation();
     test_registration_extension_output_and_availability();
     test_no_extension_crypto_before_consent_or_after_abort();
+    test_key_agreement_parameter_types();
     puts("hmac-secret tests passed (protocol 2 KDF, auth, UV separation, signed outputs, failure/abort behavior).");
     return 0;
 }

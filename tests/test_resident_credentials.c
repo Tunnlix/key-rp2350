@@ -7,6 +7,8 @@
 
 /* Bounded mock providers test ownership, atomic failures, privacy and channels.
  * Cryptographic primitive correctness belongs to the injected provider. */
+#define POOL_CAPACITY (CTAP_RESIDENT_CAPACITY < 2U ? CTAP_RESIDENT_CAPACITY : 2U)
+
 typedef struct {
     AuthCredential records[2]; bool used[2], keys[3];
     unsigned random_counter, generated, destroyed, signed_count;
@@ -33,27 +35,27 @@ static AuthStatus sign(void *ctx, const AuthKeyHandle *key, const uint8_t digest
   memcpy(out, (uint8_t[]){0x30,6,2,1,1,2,1,1}, 8U); *length = 8U; return AUTH_OK; }
 static AuthStatus destroy(void *ctx, const AuthKeyHandle *key)
 { Pool *p = ctx; if (p->destroy_fails) return AUTH_IO_ERROR;
-  for (size_t i = 0U; i < 2U; ++i) assert(!p->used[i] || memcmp(p->records[i].key.bytes, key->bytes, 32U) != 0);
+  for (size_t i = 0U; i < POOL_CAPACITY; ++i) assert(!p->used[i] || memcmp(p->records[i].key.bytes, key->bytes, 32U) != 0);
   assert(key->bytes[0] >= 1U && key->bytes[0] <= 3U && p->keys[key->bytes[0]-1U]);
   p->keys[key->bytes[0]-1U] = false; ++p->destroyed; return AUTH_OK; }
 static int slot(Pool *p, const uint8_t id[32])
-{ for (size_t i = 0U; i < 2U; ++i) if (p->used[i] && memcmp(p->records[i].credential_id, id, 32U) == 0) return (int)i; return -1; }
+{ for (size_t i = 0U; i < POOL_CAPACITY; ++i) if (p->used[i] && memcmp(p->records[i].credential_id, id, 32U) == 0) return (int)i; return -1; }
 static AuthStatus read_record(void *ctx, const uint8_t id[32], AuthCredential *out)
 { Pool *p = ctx; if (p->read_fails) return AUTH_IO_ERROR; int i = slot(p,id); if (i < 0) return AUTH_NOT_FOUND; *out=p->records[i]; return AUTH_OK; }
 static AuthStatus insert(void *ctx, const AuthCredential *in)
-{ Pool *p = ctx; for (size_t i=0U;i<2U;++i) if (!p->used[i]) { p->used[i]=true;p->records[i]=*in;return AUTH_OK; } return AUTH_CAPACITY; }
+{ Pool *p = ctx; for (size_t i=0U;i<POOL_CAPACITY;++i) if (!p->used[i]) { p->used[i]=true;p->records[i]=*in;return AUTH_OK; } return AUTH_CAPACITY; }
 static AuthStatus erase(void *ctx, const uint8_t id[32])
 { Pool *p=ctx; if(p->erase_fails)return AUTH_IO_ERROR;int i=slot(p,id);if(i<0)return AUTH_NOT_FOUND;p->used[i]=false;return AUTH_OK; }
 static AuthStatus find(void *ctx,const uint8_t rp[32],bool discoverable,size_t index,AuthCredential *out)
-{ Pool *p=ctx;for(size_t i=0U;i<2U;++i)if(p->used[i]&&memcmp(p->records[i].rp_id_hash,rp,32U)==0&&
+{ Pool *p=ctx;for(size_t i=0U;i<POOL_CAPACITY;++i)if(p->used[i]&&memcmp(p->records[i].rp_id_hash,rp,32U)==0&&
   (!discoverable||p->records[i].discoverable)&&index--==0U){*out=p->records[i];return AUTH_OK;}return AUTH_NOT_FOUND; }
 static AuthStatus count(void *ctx,size_t *out)
-{ Pool *p=ctx;*out=(p->used[0]?1U:0U)+(p->used[1]?1U:0U);return AUTH_OK; }
+{ Pool *p=ctx;*out=0U;for(size_t i=0U;i<POOL_CAPACITY;++i)if(p->used[i])++*out;return AUTH_OK; }
 static AuthStatus counter(void *ctx,const uint8_t id[32],uint32_t old,uint32_t next)
 { Pool *p=ctx;int i=slot(p,id);if(i<0)return AUTH_NOT_FOUND;assert(p->records[i].signature_count==old&&next==old+1U);
   p->records[i].signature_count=next;return AUTH_OK; }
 static AuthStatus enumerate(void *ctx,size_t index,AuthCredential *out)
-{ Pool *p=ctx;if(p->enumerate_fails)return AUTH_IO_ERROR;for(size_t i=0U;i<2U;++i)if(p->used[i]&&index--==0U){*out=p->records[i];return AUTH_OK;}return AUTH_NOT_FOUND; }
+{ Pool *p=ctx;if(p->enumerate_fails)return AUTH_IO_ERROR;for(size_t i=0U;i<POOL_CAPACITY;++i)if(p->used[i]&&index--==0U){*out=p->records[i];return AUTH_OK;}return AUTH_NOT_FOUND; }
 static AuthStatus put(void *ctx,const uint8_t *old_id,const AuthCredential *in,const uint8_t state[16])
 { Pool *p=ctx;if(p->put_fails)return AUTH_IO_ERROR;AuthStatus status;
   if(old_id){int i=slot(p,old_id);if(i<0)return AUTH_NOT_FOUND;p->records[i]=*in;status=AUTH_OK;}else status=insert(ctx,in);
@@ -92,12 +94,12 @@ static bool reset(void *ctx){(void)ctx;return true;}
 static void setup(Fixture *f)
 {
     memset(f,0,sizeof *f);AuthCrypto crypto={&f->pool,random_bytes,hash,generate,public_key,sign,destroy};
-    AuthStorage storage={&f->pool,2U,read_record,insert,erase,find,count,counter,enumerate,put,erase_resident,update};
+    AuthStorage storage={&f->pool,POOL_CAPACITY,read_record,insert,erase,find,count,counter,enumerate,put,erase_resident,update};
     assert(auth_credentials_init(&f->service,&crypto,&storage));
     AuthSecretCrypto secrets={&f->pool,agreement_key,ecdh,hmac,aes,supported,credential_mac,regenerate};
     assert(auth_credentials_configure_secrets(&f->service,&secrets));AuthPinStorage ps={&f->pool,pin_read,pin_write};
     assert(ctap_client_pin_init(&f->pin,&f->service,&ps));
-    CtapGetInfoProfile profile={0};profile.max_message_size=1024U;profile.user_presence=true;
+    CtapGetInfoProfile profile={0};profile.max_message_size=CTAPHID_MAX_MESSAGE_SIZE;profile.user_presence=true;
     assert(ctaphid_ctap_backend_init(&f->backend,&profile));
     assert(ctaphid_ctap_backend_configure_credentials(&f->backend,&f->service));
     assert(ctaphid_ctap_backend_configure_reset(&f->backend,0U,reset,f));
@@ -131,12 +133,12 @@ static void assert_lookup_scratch_cleared(const AuthCredentialService *service)
 
 static void test_atomic_lifecycle_failures(void)
 {
-    Fixture f;setup(&f);AuthCredential first=create(&f,"example.com",1U,1U);(void)create(&f,"example.com",2U,2U);
+    Fixture f;setup(&f);AuthCredential first=create(&f,"example.com",1U,1U);if (POOL_CAPACITY > 1U) (void)create(&f,"example.com",2U,2U);
     AuthCredential m=metadata("example.com",1U,3U),out;uint8_t pub[65];memset(&out,0xEE,sizeof out);
     f.pool.put_fails=true;assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_IO_ERROR);
     assert(out.credential_id[0]==0xEEU&&f.pool.records[0].credential_id[0]==first.credential_id[0]&&f.pool.destroyed==1U);
     f.pool.put_fails=false;AuthCredential replaced;assert(auth_credentials_create_resident(&f.service,&m,&replaced,pub)==AUTH_OK);
-    assert(memcmp(replaced.credential_id,first.credential_id,32U)!=0&&f.pool.destroyed==2U&&replaced.creation_order==3U);
+    assert(memcmp(replaced.credential_id,first.credential_id,32U)!=0&&f.pool.destroyed==2U&&replaced.creation_order==POOL_CAPACITY+1U);
     m=metadata("example.com",3U,1U);unsigned generated=f.pool.generated;
     m.user_name[0]=0xC0U;m.user_name_length=1U;
     assert(auth_credentials_create_resident(&f.service,&m,&out,pub)==AUTH_INVALID_ARGUMENT&&f.pool.generated==generated);
@@ -164,7 +166,7 @@ static void test_registration_failure_preserves_replaced_credential(void)
     for (unsigned failure = 0U; failure < 3U; ++failure) {
         Fixture f; setup(&f);
         AuthCredential original = create(&f, "example.com", 1U, 1U);
-        (void)create(&f, "example.com", 2U, 1U); /* Replacement at capacity. */
+        if (POOL_CAPACITY > 1U) (void)create(&f, "example.com", 2U, 1U); /* Replacement at capacity. */
         CtapMakeCredential request = {0};
         request.discoverable = true; request.metadata = metadata("example.com", 1U, 1U);
         memcpy(request.rp_id_hash, original.rp_id_hash, 32U);
@@ -219,12 +221,14 @@ static void test_discovery_privacy_and_sequence_failures(void)
     { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
       assert(!ga_workspace.busy);
       for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
+    f.pin.issued_at_ms = UINT32_MAX - 99U;
     CtapAssertionSequence sequence;ctap_assertion_sequence_begin(&sequence,&prepared,UINT32_MAX-99U);
     assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,(UINT32_MAX-99U)+30000U)==0U);
     { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
       assert(!ga_workspace.busy);
       for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
     assert(!sequence.active&&f.pool.signed_count==3U);
+    f.pin.issued_at_ms = 0U;
     ctap_assertion_sequence_begin(&sequence,&prepared,0U);unsigned signatures=f.pool.signed_count;
     assert(ctap_get_next_assertion(&f.service, &ga_workspace,&sequence,out,sizeof out,&length,30001U)==0x30U&&f.pool.signed_count==signatures);
     { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
@@ -241,6 +245,48 @@ static void test_discovery_privacy_and_sequence_failures(void)
     { const unsigned char *bytes = (const unsigned char *)&ga_workspace.scratch;
       assert(!ga_workspace.busy);
       for (size_t i = 0U; i < sizeof ga_workspace.scratch; ++i) assert(bytes[i] == 0U); }
+}
+static void test_assertion_token_expiry(void)
+{
+    /* Exercise UP-consumed and still-active tokens, direct continuation and
+     * idle backend polling, including a token lifetime crossing clock wrap. */
+    for (unsigned mode = 0U; mode < 8U; ++mode) {
+        Fixture f; setup(&f);
+        (void)create(&f, "example.com", 1U, 3U);
+        (void)create(&f, "example.com", 2U, 3U);
+        token(&f, CTAP_PIN_PERMISSION_GA, "example.com");
+        f.pin.token_used = true;
+        uint32_t issued = (mode & 4U) ? UINT32_MAX - 300000U : 0U;
+        f.pin.issued_at_ms = issued;
+        uint32_t first = issued + CTAP_PIN_MAX_TIMEOUT_MS - 1U;
+        uint32_t expired = issued + CTAP_PIN_MAX_TIMEOUT_MS;
+        uint8_t input[256], output[1024], digest[32] = {0}, mac[32];
+        memset(mac, 0x3C, sizeof mac);
+        CborWriter w; cbor_writer_init(&w, input, sizeof input);
+        assert(cbor_write_map(&w, 5U) && cbor_write_uint(&w, 1U) && cbor_write_text(&w, "example.com") &&
+            cbor_write_uint(&w, 2U) && cbor_write_bytes(&w, digest, sizeof digest) &&
+            cbor_write_uint(&w, 5U) && cbor_write_map(&w, 1U) && cbor_write_text(&w, "up") &&
+            cbor_write_bool(&w, (mode & 1U) != 0U) && cbor_write_uint(&w, 6U) &&
+            cbor_write_bytes(&w, mac, sizeof mac) && cbor_write_uint(&w, 7U) && cbor_write_uint(&w, 2U));
+        CtapGetAssertionWorkspace workspace = {0}; CtapGetAssertion prepared;
+        size_t length = 0U;
+        assert(ctap_get_assertion_prepare_with_pin(&f.service, &workspace, &f.pin,
+            first, input, w.length, &prepared) == CTAP_STATUS_OK);
+        assert(prepared.credential_count == 2U);
+        assert(ctap_get_assertion_finish_at(&f.service, &workspace, &prepared,
+            output, sizeof output, &length, first) == CTAP_STATUS_OK);
+        ctap_assertion_sequence_begin(&f.backend.assertion_sequence, &prepared, first);
+        assert(f.backend.assertion_sequence.active);
+        if (mode & 2U) {
+            assert(ctaphid_ctap_backend_poll(&f.backend, &f.device, expired) == CTAPHID_DEVICE_OK);
+            assert(!f.backend.assertion_sequence.active);
+        }
+        length = 999U; output[0] = 0xEEU;
+        assert(ctap_get_next_assertion(&f.service, &workspace, &f.backend.assertion_sequence,
+            output, sizeof output, &length, expired) == CTAP_STATUS_NOT_ALLOWED);
+        assert(!f.backend.assertion_sequence.active && f.pool.signed_count == 1U);
+        assert(length == 999U && output[0] == 0xEEU);
+    }
 }
 static void test_backend_channel_resync_and_cancel(void)
 {
@@ -609,11 +655,22 @@ static void test_resident_workspace_lifetime(void)
 }
 
 int main(void)
-{ test_atomic_lifecycle_failures();test_registration_failure_preserves_replaced_credential();test_discovery_privacy_and_sequence_failures();test_backend_channel_resync_and_cancel();test_management_failures_and_channel_binding();
-  test_management_authentication_precedes_unknown_credential();
-  test_management_missing_parameters_precede_protocol_errors();
-  test_management_expiry_discards_snapshot();
-  test_management_responses_and_user_updates();
-  test_management_workspace_lifetime();
-  test_resident_workspace_lifetime();
-  puts("Resident tests passed (atomic replacement/failures, privacy, ordering, counters, timeout/wrap, CID/INIT/CANCEL).");return 0; }
+{
+    test_atomic_lifecycle_failures();
+    test_registration_failure_preserves_replaced_credential();
+    test_management_authentication_precedes_unknown_credential();
+    test_management_missing_parameters_precede_protocol_errors();
+    test_resident_workspace_lifetime();
+    /* Continuation/enumeration scenarios require two stored credentials. */
+    if (POOL_CAPACITY > 1U) {
+        test_discovery_privacy_and_sequence_failures();
+        test_backend_channel_resync_and_cancel();
+        test_management_failures_and_channel_binding();
+        test_management_expiry_discards_snapshot();
+        test_assertion_token_expiry();
+        test_management_responses_and_user_updates();
+        test_management_workspace_lifetime();
+    }
+    puts("Resident tests passed (lifecycle/failures; multi-credential scenarios when capacity permits).");
+    return 0;
+}

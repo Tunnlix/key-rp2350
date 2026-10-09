@@ -125,17 +125,32 @@ void ctap_assertion_sequence_begin(CtapAssertionSequence *sequence, const CtapGe
     if (sequence == NULL || request == NULL || !request->discovery || request->credential_count <= 1U ||
         request->credential_count > AUTH_RESIDENT_MAX_COUNT) return;
     sequence->request = *request; sequence->next = 1U; sequence->last_call_ms = now_ms; sequence->active = true;
+    if (request->user_verified && request->pin != NULL)
+        sequence->token_issued_at_ms = request->pin->issued_at_ms;
+    ctap_assertion_sequence_poll(sequence, now_ms);
+}
+
+void ctap_assertion_sequence_poll(CtapAssertionSequence *sequence, uint32_t now_ms)
+{
+    if (sequence == NULL || !sequence->active) return;
+    const CtapClientPin *pin = sequence->request.pin;
+    /* Do not require token_active: a successful UP assertion consumes its
+     * permissions before the sequence begins. Preserve the absolute expiry. */
+    if ((uint32_t)(now_ms - sequence->last_call_ms) > 30000U ||
+        (sequence->request.user_verified && (pin == NULL || pin->faulted || !pin->pin_set ||
+            pin->token_generation != sequence->request.auth.token_generation ||
+            (uint32_t)(now_ms - sequence->token_issued_at_ms) >= CTAP_PIN_MAX_TIMEOUT_MS)))
+        ctap_assertion_sequence_clear(sequence);
 }
 
 uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapGetAssertionWorkspace *workspace, CtapAssertionSequence *sequence,
     uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
 {
     if (!acquire(workspace)) return CTAP_STATUS_OTHER;
+    ctap_assertion_sequence_poll(sequence, now_ms);
     if (service == NULL || sequence == NULL || !sequence->active || sequence->next >= sequence->request.credential_count ||
         sequence->request.credential_count > AUTH_RESIDENT_MAX_COUNT ||
-        (uint32_t)(now_ms - sequence->last_call_ms) > 30000U || sequence->request.metadata_revision != service->metadata_revision ||
-        (sequence->request.user_verified && (sequence->request.pin == NULL || sequence->request.pin->faulted ||
-            !sequence->request.pin->pin_set || sequence->request.pin->token_generation != sequence->request.auth.token_generation))) {
+        sequence->request.metadata_revision != service->metadata_revision) {
         ctap_assertion_sequence_clear(sequence); return release(workspace, CTAP_STATUS_NOT_ALLOWED);
     }
     CtapGetAssertion *request = &workspace->scratch.request;

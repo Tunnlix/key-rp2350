@@ -77,9 +77,10 @@ static void setup(Fixture *fixture, bool reset_enabled)
     memset(fixture->storage.records, 0xA5, sizeof fixture->storage.records);
     fixture->storage.pin_set = true;
     CtapGetInfoProfile profile = {0};
-    profile.max_message_size = 1024U;
+    profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE;
     profile.user_presence = true;
     assert(ctaphid_ctap_backend_init(&fixture->backend, &profile));
+    fixture->backend.presence_timeout_ms = 30000U; /* Fixed reset-test timeline. */
     assert(ctaphid_ctap_backend_configure_reset(&fixture->backend, 0U,
         reset_enabled ? clear_storage : NULL, &fixture->storage));
     assert(!ctaphid_ctap_backend_configure_reset(&fixture->backend, 1U, clear_storage, &fixture->storage));
@@ -194,7 +195,7 @@ static void test_storage_failure_and_lost_response(void)
 static void test_reset_request_validation(void)
 {
     CtapGetInfoProfile profile = {0};
-    profile.max_message_size = 1024U;
+    profile.max_message_size = CTAPHID_MAX_MESSAGE_SIZE;
     uint8_t response[CTAP_MAX_RESPONSE_SIZE];
     const uint8_t request[] = {0x07, 0xA0};
     size_t length;

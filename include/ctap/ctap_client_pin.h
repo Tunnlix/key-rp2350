@@ -36,7 +36,7 @@ typedef struct {
     size_t auth_length;
     uint64_t permissions;
     bool rp_present;
-    uint8_t rp_id[1024];
+    uint8_t rp_id[AUTH_RP_ID_MAX_SIZE];
     size_t rp_length;
 } CtapClientPinRequest;
 
@@ -47,6 +47,7 @@ typedef struct {
 } CtapPinAuth;
 
 bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, const AuthPinStorage *storage);
+/* Input must not overlap request. Failure leaves request unchanged. */
 uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientPinRequest *request);
 /* Execute only outside transport callbacks after checking transaction ownership.
  * read/write/crypto failure fails closed. Successful set/change has no CBOR body.
@@ -59,6 +60,9 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
  * rather than claiming success, even if persistent deletion already committed. */
 void ctap_client_pin_reset_state(CtapClientPin *pin);
 void ctap_client_pin_poll(CtapClientPin *pin, uint32_t now_ms);
+/* MC/GA call after required UP to consume token permissions, even when a later
+ * extension/signing stage fails. Silent GA and credential management preserve
+ * permissions. Also retires tokens on expiry, replacement and storage failure. */
 void ctap_client_pin_invalidate(CtapClientPin *pin);
 uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);

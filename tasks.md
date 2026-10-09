@@ -1,19 +1,5 @@
-# Remaining tasks in execution order
+# Active tasks
 
-Continue with the portable-core review and refactors. Tasks 8–12 depend on final providers and target integration; their implementation remains outside the portable-core refactoring. USB integration and hardware USB/WebAuthn tests remain out of scope. Keep only outstanding work here.
+Awaiting new steps from the user.
 
-- [ ] **5. Make ClientPIN security transitions easier to audit.** Separate dense checks and state mutations in `ctap_client_pin_execute()` into small, named stages for retry persistence, PIN verification and token publication. Preserve error precedence, write ordering and common secret cleanup. Explain why retries persist before PIN verification and when touch consumes permissions; remove comments made redundant by the refactor. Reuse ClientPIN and conformance checks.
-
-- [ ] **6. Simplify backend command lifecycle handling.** Centralize repeated pending-operation cleanup in `ctaphid_ctap_backend.c`; separate command preparation, presence completion and response publication. Preserve CANCEL/INIT ownership checks and prevent duplicated side effects. Document which continuation state survives a response and which cancellation/resynchronization clears. Reuse backend, presence, Reset and resident-credential tests.
-
-- [ ] **7. Separate credential-management authorization from execution.** Make subcommand parsing, MAC/scope validation, enumeration continuation and metadata mutation independently readable. Replace unexplained subcommand literals with named constants where useful. Preserve the exact authenticated parameter bytes and checks before storage mutation. Document helper preconditions, scratch ownership and authorization/commit boundaries; remove stale or redundant comments. Reuse resident-credential and conformance tests.
-
-- [ ] **8. Bind the final target providers.** Complete the RP2350 touch, monotonic timing, secure RNG, crypto and durable storage bindings already tracked in `AGENTS.md`. Keep platform implementations outside `src/` and `include/`; preserve opaque key handles and provider-owned credential randoms. Account for any external storage or security-chip provider in the following validation tasks.
-
-- [ ] **9. Validate final cryptographic providers.** Verify SHA-256, HMAC-SHA-256, protocol-2 HKDF, AES-CBC, P-256 ECDH and ECDSA with independent known-answer/interoperability vectors. Exercise invalid/off-curve peer coordinates, key-generation/RNG failure and UV/non-UV credential-secret separation. Confirm errors prevent token, credential or assertion publication.
-
-- [ ] **10. Verify erasure and side-channel behavior with the production toolchain.** Inspect optimized `auth_secure_zero` and `ctap_pin_equal`, and provider code for secret-dependent branches/accesses in scalar, nonce, AES and HMAC operations. Instrument success/failure paths for cleanup of PIN plaintext/verifiers, ECDH/HKDF intermediates, tokens and provider-owned copies. Perform applicable target timing checks and document limitations; volatile writes alone do not prove complete hardware erasure or side-channel resistance.
-
-- [ ] **11. Verify durable failure handling.** Inject interruptions around PIN retry writes, credential replacement/deletion, counter updates and combined Reset using final storage/key providers. Verify retries cannot be restored, counters cannot roll back, abandoned staged keys are recovered and successful Reset leaves no usable old credentials or PIN/token state. Reuse native failure scenarios and coordinate with `AGENTS.md`.
-
-- [ ] **12. Establish the complete firmware stack budget and finish provider-dependent CTAP validation.** Follow `docs/stack-budget.md` with the RP2350 compiler, final optimization/LTO settings and providers. Account for complete live call chains, CBOR recursion, library calls, callbacks, interrupts and persistent workspace RAM; measure high-water usage and reserve a documented margin. Per-function native limits are not firmware stack guarantees. Resolve applicable provider-dependent CTAP checks before claiming device compliance; USB remains outside this task.
+Tasks 8–12 are saved in [hardware-tasks.md](hardware-tasks.md), pending the Seeed XIAO RP2350 hardware.
