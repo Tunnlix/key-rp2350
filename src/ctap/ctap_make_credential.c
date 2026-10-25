@@ -29,16 +29,16 @@ static uint8_t algorithms(const CborValue *array)
         /* Keep duplicate rejection based on type/alg, ignoring unknown members.
          * Input bounds the scan; retain no per-entry table on embedded targets. */
         const uint8_t *previous = array->data;
-        CborValue earlier_type, earlier_algorithm;
+        CborValue earlier;
         for (uint64_t j = 0; j < i; ++j) {
             /* Reuse the entry view now that type/algorithm retain our fields.
              * Earlier entries have already passed field/type validation. */
             if (!cbor_read_next(&previous, end, &entry)) return CTAP_STATUS_INVALID_CBOR;
-            if (!cbor_map_text(&entry, "type", &earlier_type) ||
-                !cbor_map_text(&entry, "alg", &earlier_algorithm)) return CTAP_STATUS_INVALID_CBOR;
-            if (earlier_algorithm.major == algorithm.major && earlier_algorithm.value == algorithm.value &&
-                earlier_type.value == type.value && memcmp(earlier_type.data, type.data, (size_t)type.value) == 0)
-                return CTAP_STATUS_INVALID_PARAMETER;
+            if (!cbor_map_text(&entry, "alg", &earlier)) return CTAP_STATUS_INVALID_CBOR;
+            bool same_algorithm = earlier.major == algorithm.major && earlier.value == algorithm.value;
+            if (!cbor_map_text(&entry, "type", &earlier)) return CTAP_STATUS_INVALID_CBOR;
+            if (same_algorithm && earlier.value == type.value &&
+                memcmp(earlier.data, type.data, (size_t)type.value) == 0) return CTAP_STATUS_INVALID_PARAMETER;
         }
         if (cbor_text_equal(&type, "public-key") && es256(&algorithm)) supported = true;
     }
@@ -116,17 +116,20 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
     if (fields[1].value != 32U) return CTAP_STATUS_INVALID_LENGTH;
     status = ctap_request_text_map(&fields[2]);
     if (status != 0U) return status;
-    CborValue rp, user;
-    status = member(&fields[2], "id", 3U, true, &rp);
+    status = member(&fields[2], "id", 3U, true, &value);
     if (status != 0U) return status;
-    if (rp.value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
+    if (value.value == 0U) return CTAP_STATUS_INVALID_PARAMETER;
+    const uint8_t *rp_id = value.data;
+    size_t rp_id_length = (size_t)value.value;
     status = member(&fields[2], "name", 3U, false, &value);
     if (status != 0U) return status;
     status = ctap_request_text_map(&fields[3]);
     if (status != 0U) return status;
-    status = member(&fields[3], "id", 2U, true, &user);
+    status = member(&fields[3], "id", 2U, true, &value);
     if (status != 0U) return status;
-    if (user.value > AUTH_USER_ID_MAX_SIZE) return CTAP_STATUS_INVALID_LENGTH;
+    if (value.value > AUTH_USER_ID_MAX_SIZE) return CTAP_STATUS_INVALID_LENGTH;
+    const uint8_t *user_id = value.data;
+    size_t user_id_length = (size_t)value.value;
     status = member(&fields[3], "name", 3U, false, &value);
     if (status != 0U) return status;
     status = member(&fields[3], "displayName", 3U, false, &value);
@@ -164,9 +167,9 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
         }
     }
     memcpy(result->client_data_hash, fields[1].data, 32U);
-    result->user_id_length = (size_t)user.value;
-    memcpy(result->user_id, user.data, result->user_id_length); /* Empty user.id is valid. */
-    if (service->crypto.sha256(service->crypto.context, rp.data, (size_t)rp.value, result->rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
+    result->user_id_length = user_id_length;
+    memcpy(result->user_id, user_id, result->user_id_length); /* Empty user.id is valid. */
+    if (service->crypto.sha256(service->crypto.context, rp_id, rp_id_length, result->rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
     status = ctap_client_pin_authorize(pin, &result->auth, result->rp_id_hash, result->client_data_hash,
         CTAP_PIN_PERMISSION_MC, now_ms, false);
     if (status != CTAP_STATUS_OK) return status;
