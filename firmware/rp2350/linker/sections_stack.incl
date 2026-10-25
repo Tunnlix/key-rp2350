@@ -1,0 +1,5 @@
+SECTIONS
+{
+    .stack1_dummy (NOLOAD): { *(.stack1*) } > SCRATCH_X
+    .stack_dummy (NOLOAD): { KEEP(*(.stack*)) } > CTAP_STACK
+}

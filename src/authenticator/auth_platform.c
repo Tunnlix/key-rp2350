@@ -1,5 +1,10 @@
 #include "authenticator/auth_platform.h"
 
+bool auth_credential_id_length_valid(size_t length)
+{
+    return length != 0U && length <= AUTH_CREDENTIAL_ID_MAX_SIZE;
+}
+
 static bool nonzero(const uint8_t *bytes, size_t length)
 {
     uint8_t combined = 0U;

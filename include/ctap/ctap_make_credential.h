@@ -30,7 +30,9 @@ typedef struct {
     union {
         struct {
             AuthCredential credential;
-            uint8_t public_key[65], encoded[512];
+            uint8_t public_key[65], encoded[512U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
+            uint8_t wire_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
+            size_t wire_id_length;
         } finish;
         struct {
             CtapMakeCredential request;

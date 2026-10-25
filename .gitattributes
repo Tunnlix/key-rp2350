@@ -1,0 +1,6 @@
+# Local assistant instructions/backlogs do not belong in source distributions.
+/AGENTS.md export-ignore
+/development/ai export-ignore
+/development export-ignore
+/tests export-ignore
+/diagnostics export-ignore

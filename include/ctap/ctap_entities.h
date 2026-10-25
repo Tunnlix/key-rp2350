@@ -13,6 +13,7 @@ uint8_t ctap_rp_entity_parse(const CborValue *value, AuthCredential *metadata);
 bool ctap_user_entity_write(CborWriter *writer, const AuthCredential *credential, bool identifying);
 bool ctap_rp_entity_write(CborWriter *writer, const AuthCredential *credential);
 bool ctap_credential_descriptor_write(CborWriter *writer, const uint8_t id[32]);
+bool ctap_credential_descriptor_write_id(CborWriter *writer, const uint8_t *id, size_t length);
 bool ctap_public_key_write(CborWriter *writer, const uint8_t public_key[65]);
 
 #endif

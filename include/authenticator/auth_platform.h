@@ -5,8 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "ctap_config.h"
+#include "authenticator/auth_credential_id.h"
 
-#define AUTH_CREDENTIAL_ID_SIZE 32U
+#define AUTH_CREDENTIAL_ID_SIZE 32U /* Stored resident/stateful locator size. */
 #define AUTH_RP_HASH_SIZE 32U
 #define AUTH_USER_ID_MAX_SIZE 64U
 #define AUTH_ENTITY_NAME_MAX_SIZE 64U

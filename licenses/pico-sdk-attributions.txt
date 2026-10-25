@@ -1,0 +1,245 @@
+Selected Pico SDK 2.3.1 source attributions
+SDK commit: 079c6f39023649b154152db30f1d781e884879bc
+Inventory based on the approved 0.3.0 application link map.
+Listed inputs may be discarded by the linker; include this conservative set.
+The accompanying pico-sdk.txt and pico-printf.txt contain license terms.
+
+src/rp2_common/pico_stdlib/stdlib.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_gpio/gpio.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2350/pico_platform/platform.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_platform_common/common.c
+* Copyright (c) 2025 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_platform_panic/panic.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_platform_panic/custom_panic_function.S
+* Copyright (c) 2026 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/hardware_claim/claim.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_sync/sync.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_sync_spin_lock/sync_spin_lock.c
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_irq/irq.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_irq/irq_handler_chain.S
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_sync/sem.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_sync/lock_core.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_sync/mutex.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_sync/critical_section.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_time/time.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_time/timeout_helper.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_timer/timer.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_util/fixed_bitset.c
+* Copyright (c) 2026 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_util/pheap.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/common/pico_util/queue.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_uart/uart.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_clocks/clocks.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_pll/pll.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_vreg/vreg.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_watchdog/watchdog.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_ticks/ticks.c
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_bootrom/bootrom.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_bootrom/bootrom_lock.c
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_boot_lock/boot_lock.c
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_flash/flash.c
+* Copyright (c) 2023 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_xosc/xosc.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_divider/divider.c
+* Copyright (c) 2023 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_runtime/runtime.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_runtime_init/runtime_init.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_runtime_init/runtime_init_clocks.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_bit_ops/bit_ops_aeabi.S
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_divider/divider_compiler.c
+* Copyright (c) 2023 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_double/double_math.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_double/double_aeabi_dcp.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_double/double_fma_dcp.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_double/double_sci_m33.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_double/double_conv_m33.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_float/float_math.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_float/float_conv32_vfp.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_float/float_common_m33.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_float/float_sci_m33_vfp.S
+* Copyright (c) 2024 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_malloc/malloc.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_atomic/atomic.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_cxx_options/new_delete.cpp
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_standard_binary_info/standard_binary_info.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_printf/printf.c
+// \license The MIT License (MIT)
+
+src/rp2_common/pico_crt0/crt0.S
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_clib_interface/newlib_interface.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_clib_interface/cxa_guard.c
+* Copyright (c) 2026 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_stdio/stdio.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_thread_local/thread_local.c
+* Copyright (c) 2026 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/hardware_flash/flash.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_fix/rp2040_usb_device_enumeration/rp2040_usb_device_enumeration.c
+* Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+
+src/rp2_common/pico_unique_id/unique_id.c
+* Copyright (c) 2021 Raspberry Pi (Trading) Ltd.
+* SPDX-License-Identifier: BSD-3-Clause
+

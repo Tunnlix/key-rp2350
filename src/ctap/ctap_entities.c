@@ -63,7 +63,13 @@ bool ctap_rp_entity_write(CborWriter *writer, const AuthCredential *credential)
 
 bool ctap_credential_descriptor_write(CborWriter *writer, const uint8_t id[32])
 {
-    return cbor_write_map(writer, 2U) && cbor_write_text(writer, "id") && cbor_write_bytes(writer, id, 32U) &&
+    return ctap_credential_descriptor_write_id(writer, id, AUTH_CREDENTIAL_ID_SIZE);
+}
+
+bool ctap_credential_descriptor_write_id(CborWriter *writer, const uint8_t *id, size_t length)
+{
+    if (writer == NULL || id == NULL || !auth_credential_id_length_valid(length)) return false;
+    return cbor_write_map(writer, 2U) && cbor_write_text(writer, "id") && cbor_write_bytes(writer, id, length) &&
         cbor_write_text(writer, "type") && cbor_write_text(writer, "public-key");
 }
 

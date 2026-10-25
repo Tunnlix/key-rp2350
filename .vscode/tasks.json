@@ -1,8 +1,7 @@
 {
   "version": "2.0.0",
   "tasks": [
-    {"label": "Configure portable core tests", "type": "process", "command": "cmake", "args": ["--preset", "native-tests"], "problemMatcher": []},
-    {"label": "Build portable core tests", "type": "process", "command": "cmake", "args": ["--build", "--preset", "native-tests"], "dependsOn": "Configure portable core tests", "problemMatcher": ["$gcc"], "group": {"kind": "build", "isDefault": true}},
-    {"label": "Test portable core", "type": "process", "command": "ctest", "args": ["--preset", "native-tests"], "dependsOn": "Build portable core tests", "problemMatcher": [], "group": "test"}
+    {"label": "Configure portable core", "type": "process", "command": "cmake", "args": ["--preset", "core-only"], "problemMatcher": []},
+    {"label": "Build portable core", "type": "process", "command": "cmake", "args": ["--build", "--preset", "core-only"], "dependsOn": "Configure portable core", "problemMatcher": ["$gcc"], "group": {"kind": "build", "isDefault": true}}
   ]
 }

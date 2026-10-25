@@ -1,0 +1,11 @@
+/* Development layout ONLY: reported/configured 2 MiB is not identified chip
+ * geometry. Keep writers unbound until independent geometry qualification.
+ * No output section is placed in CTAP_STORE: ordinary UF2s contain no store
+ * data and firmware cannot grow into the planned 512 KiB owned partition. */
+MEMORY
+{
+    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 1536K
+    CTAP_STORE(r) : ORIGIN = 0x10180000, LENGTH = 512K
+}
+__ctap_store_start = ORIGIN(CTAP_STORE);
+__ctap_store_end = ORIGIN(CTAP_STORE) + LENGTH(CTAP_STORE);

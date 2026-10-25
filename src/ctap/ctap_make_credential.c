@@ -26,14 +26,19 @@ static uint8_t algorithms(const CborValue *array)
         if (status != 0U) return status;
         if (!cbor_map_text(&entry, "type", &type) || !cbor_map_text(&entry, "alg", &algorithm)) return CTAP_STATUS_INVALID_CBOR;
         if (type.major != 3U || algorithm.major > 1U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        /* The request array must not contain duplicate entries (6.1). Input
-         * bounds the scan; retain no per-entry table on embedded targets. */
+        /* Keep duplicate rejection based on type/alg, ignoring unknown members.
+         * Input bounds the scan; retain no per-entry table on embedded targets. */
         const uint8_t *previous = array->data;
-        CborValue earlier;
+        CborValue earlier_type, earlier_algorithm;
         for (uint64_t j = 0; j < i; ++j) {
-            if (!cbor_read_next(&previous, end, &earlier)) return CTAP_STATUS_INVALID_CBOR;
-            if (earlier.encoded_length == entry.encoded_length &&
-                memcmp(earlier.encoded, entry.encoded, entry.encoded_length) == 0) return CTAP_STATUS_INVALID_PARAMETER;
+            /* Reuse the entry view now that type/algorithm retain our fields.
+             * Earlier entries have already passed field/type validation. */
+            if (!cbor_read_next(&previous, end, &entry)) return CTAP_STATUS_INVALID_CBOR;
+            if (!cbor_map_text(&entry, "type", &earlier_type) ||
+                !cbor_map_text(&entry, "alg", &earlier_algorithm)) return CTAP_STATUS_INVALID_CBOR;
+            if (earlier_algorithm.major == algorithm.major && earlier_algorithm.value == algorithm.value &&
+                earlier_type.value == type.value && memcmp(earlier_type.data, type.data, (size_t)type.value) == 0)
+                return CTAP_STATUS_INVALID_PARAMETER;
         }
         if (cbor_text_equal(&type, "public-key") && es256(&algorithm)) supported = true;
     }
@@ -52,8 +57,8 @@ static uint8_t exclusions(AuthCredentialService *service, const CborValue *array
         if (status != 0U) return status;
         /* Unknown credential types and other authenticators' ID sizes cannot
          * refer to our records. Still validate the entire list before touch. */
-        if (cbor_text_equal(&type, "public-key") && id.value == 32U) {
-            AuthStatus lookup = auth_credentials_get(service, id.data, prepared->rp_id_hash, found);
+        if (cbor_text_equal(&type, "public-key") && id.value != 0U && id.value <= AUTH_CREDENTIAL_ID_MAX_SIZE) {
+            AuthStatus lookup = auth_credentials_get_id(service, id.data, (size_t)id.value, prepared->rp_id_hash, found);
             if (lookup == AUTH_OK && (found->cred_protect != 3U || prepared->user_verified)) prepared->credential_excluded = true;
             else if (lookup == AUTH_OK) continue;
             else if (lookup != AUTH_NOT_FOUND) return CTAP_STATUS_OTHER;
@@ -198,5 +203,6 @@ uint8_t ctap_make_credential_prepare_with_pin(AuthCredentialService *service, Ct
     uint8_t status = prepare_with_pin(service, workspace, pin, now_ms, parameters, length, prepared);
     auth_secure_zero(&workspace->scratch, sizeof workspace->scratch);
     workspace->busy = false;
+    auth_credentials_release_nonresident(service);
     return status;
 }

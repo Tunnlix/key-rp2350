@@ -12,7 +12,8 @@
  * hmac-secret supports protocol 2 with UP; PIN authorization explicitly
  * selects its WithUV secret. Credential protection is enforced on selection. */
 typedef struct {
-    uint8_t client_data_hash[32], rp_id_hash[32], credential_id[32];
+    uint8_t client_data_hash[32], rp_id_hash[32], credential_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
+    uint16_t credential_id_length;
     bool user_presence_required;
     uint8_t extension_status;
     CtapHmacSecret hmac_secret;

@@ -1,0 +1,7 @@
+/* Reserve the upper 16 KiB of main SRAM for core 0, separate from the heap.
+ * Uses Pico SDK 2.3.1 linker override hooks; scratch banks are unchanged. */
+MEMORY
+{
+    RAM(rwx) : ORIGIN = RAM_ORIGIN, LENGTH = RAM_LENGTH - 16K
+    CTAP_STACK(rw) : ORIGIN = RAM_ORIGIN + RAM_LENGTH - 16K, LENGTH = 16K
+}

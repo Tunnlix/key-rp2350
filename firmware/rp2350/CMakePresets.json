@@ -1,0 +1,26 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "rp2350-release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../build/rp2350",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "PICO_SDK_PATH": "$env{PICO_SDK_PATH}",
+        "PICO_TOOLCHAIN_PATH": "$env{PICO_TOOLCHAIN_PATH}",
+        "RP2350_CORE_LTO": "OFF"
+      }
+    },
+    {
+      "name": "rp2350-lto",
+      "inherits": "rp2350-release",
+      "binaryDir": "${sourceDir}/../../build/rp2350-lto",
+      "cacheVariables": {"RP2350_CORE_LTO": "ON"}
+    }
+  ],
+  "buildPresets": [
+    {"name": "rp2350-release", "configurePreset": "rp2350-release"},
+    {"name": "rp2350-lto", "configurePreset": "rp2350-lto"}
+  ]
+}

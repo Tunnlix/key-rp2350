@@ -85,6 +85,7 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
         if (result->credential_count == 0U) return CTAP_STATUS_NO_CREDENTIALS;
         result->discovery = true; result->metadata_revision = service->metadata_revision;
         memcpy(result->credential_id, result->credential_ids[0], 32U);
+        result->credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
         status = ctap_client_pin_authorize(pin, &result->auth, result->rp_id_hash, result->client_data_hash,
             CTAP_PIN_PERMISSION_GA, now_ms, true);
         if (status != CTAP_STATUS_OK) return status;
@@ -97,10 +98,12 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
         if (!cbor_read_next(&cursor, end, &entry)) return CTAP_STATUS_INVALID_CBOR;
         status = ctap_request_descriptor(&entry, &id, &type);
         if (status != CTAP_STATUS_OK) return status;
-        if (!cbor_text_equal(&type, "public-key") || id.value != AUTH_CREDENTIAL_ID_SIZE) continue;
-        AuthStatus lookup = auth_credentials_get(service, id.data, result->rp_id_hash, found);
+        if (!cbor_text_equal(&type, "public-key") || id.value == 0U ||
+            id.value > AUTH_CREDENTIAL_ID_MAX_SIZE) continue;
+        AuthStatus lookup = auth_credentials_get_id(service, id.data, (size_t)id.value, result->rp_id_hash, found);
         if (lookup == AUTH_OK && !selected && (found->cred_protect != 3U || result->user_verified)) {
-            memcpy(result->credential_id, found->credential_id, 32U);
+            memcpy(result->credential_id, id.data, (size_t)id.value);
+            result->credential_id_length = (uint16_t)id.value;
             selected = true;
         } else if (lookup != AUTH_OK && lookup != AUTH_NOT_FOUND) return CTAP_STATUS_OTHER;
     }
@@ -121,5 +124,6 @@ uint8_t ctap_get_assertion_prepare_with_pin(AuthCredentialService *service, Ctap
     uint8_t status = prepare_with_pin(service, workspace, pin, now_ms, parameters, length, prepared);
     auth_secure_zero(&workspace->scratch, sizeof workspace->scratch);
     workspace->busy = false;
+    auth_credentials_release_nonresident(service);
     return status;
 }

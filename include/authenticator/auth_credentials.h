@@ -3,6 +3,7 @@
 
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_secret_crypto.h"
+#include "authenticator/auth_nonresident_provider.h"
 
 /* Shared creation workspace; handles never contain private keys. Resident and
  * non-resident creation are mutually exclusive on a service instance. */
@@ -10,6 +11,8 @@ typedef struct {
     AuthCredential created, found;
     AuthKeyHandle old_key;
     uint8_t old_id[32], store_state[16], public_key[65];
+    uint8_t wire_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
+    size_t wire_id_length;
 } AuthCreationScratch;
 
 /* Pure core composition; no files, OS, heap, or private-key access. Allocate
@@ -20,6 +23,7 @@ typedef struct {
  * callers must not use it as API input/output or retain pointers into it. */
 typedef struct {
     AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets;
+    AuthNonresidentProvider nonresident;
     uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
     AuthCreationScratch creation_scratch;
     bool creation_busy;
@@ -37,6 +41,9 @@ bool auth_credentials_init(AuthCredentialService *service,
  * core metadata never contains their bytes. Bind once after service init. */
 bool auth_credentials_configure_secrets(AuthCredentialService *service,
     const AuthSecretCrypto *secrets);
+bool auth_credentials_configure_nonresident(AuthCredentialService *,const AuthNonresidentProvider *);
+bool auth_credentials_nonresident_supported(const AuthCredentialService *);
+void auth_credentials_release_nonresident(AuthCredentialService *);
 
 /* Store a new non-discoverable credential with a random ID and P-256 key.
  * discoverable must be false; resident creation requires the metadata-aware
@@ -71,6 +78,11 @@ AuthStatus auth_credentials_create_resident(AuthCredentialService *service,
  * is wiped on every completed call. No private-key export is involved. */
 typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential *credential,
     const uint8_t public_key[65]);
+typedef AuthStatus (*AuthCredentialPrepareId)(void *,const AuthCredential *,
+    const uint8_t *,size_t,const uint8_t public_key[65]);
+AuthStatus auth_credentials_create_nonresident_prepared(AuthCredentialService *,
+    const uint8_t rp_hash[32],uint8_t cred_protect,AuthCredentialPrepareId,void *,
+    AuthCredential *,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *,uint8_t public_key[65]);
 AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *service,
     const AuthCredential *metadata, AuthCredentialPrepare prepare, void *context,
     AuthCredential *credential, uint8_t public_key[65]);
@@ -82,14 +94,24 @@ AuthStatus auth_credentials_update_user(AuthCredentialService *service,
  * establish UP/UV itself: the CTAP handler must authorize the operation. */
 AuthStatus auth_credentials_get(AuthCredentialService *service,
     const uint8_t id[32], const uint8_t rp_hash[32], AuthCredential *credential);
+/* Wire-ID lookup must validate the length before a fixed-size backend sees it.
+ * Unknown formats return NOT_FOUND; no prefix/truncation matching is allowed.
+ * The current stored provider supports only 32-byte locators. */
+AuthStatus auth_credentials_get_id(AuthCredentialService *service,
+    const uint8_t *id, size_t id_length, const uint8_t rp_hash[32], AuthCredential *credential);
 AuthStatus auth_credentials_sign_digest(AuthCredentialService *service,
     const uint8_t id[32], const uint8_t rp_hash[32], const uint8_t digest[32],
+    uint8_t signature[72], size_t *signature_length);
+AuthStatus auth_credentials_sign_digest_id(AuthCredentialService *service,
+    const uint8_t *id, size_t id_length, const uint8_t rp_hash[32], const uint8_t digest[32],
     uint8_t signature[72], size_t *signature_length);
 
 /* Commit the next counter before building/signing authenticatorData. Failures
  * must abort assertion generation. Skipped counters are allowed; wrap is not. */
 AuthStatus auth_credentials_next_counter(AuthCredentialService *service,
     const uint8_t id[32], const uint8_t rp_hash[32], uint32_t *counter);
+AuthStatus auth_credentials_next_counter_id(AuthCredentialService *service,
+    const uint8_t *id, size_t id_length, const uint8_t rp_hash[32], uint32_t *counter);
 
 /* Erase metadata before destroying its key so failures cannot leave usable
  * credential metadata pointing at a missing/reused key. A deletion failure may

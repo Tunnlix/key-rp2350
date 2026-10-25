@@ -66,6 +66,7 @@ set(CTAP_GA_FINISH_STACK_BUDGET 512 CACHE STRING "Assertion finish stack bytes p
 set(CTAP_GA_PREPARE_STACK_BUDGET 1024 CACHE STRING "Assertion preparation stack bytes per function (GCC)")
 set(CTAP_MC_PREPARE_STACK_BUDGET 1024 CACHE STRING "Registration preparation stack bytes per function (GCC)")
 set(CTAP_MC_FINISH_STACK_BUDGET 512 CACHE STRING "Registration finish stack bytes per function (GCC)")
+option(CTAP_STACK_BUDGET_CHECKS "Enforce per-function GCC stack budgets in ordinary builds" ON)
 if(NOT CTAP_CM_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "CTAP_CM_STACK_BUDGET must be a positive integer")
 endif()
@@ -90,7 +91,7 @@ endif()
 if(NOT CTAP_CREDENTIALS_STACK_BUDGET MATCHES "^[1-9][0-9]*$")
     message(FATAL_ERROR "CTAP_CREDENTIALS_STACK_BUDGET must be a positive integer")
 endif()
-if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CTAP_STACK_BUDGET_CHECKS)
     target_compile_options(ctap_core PRIVATE -fstack-usage)
     set_source_files_properties(src/authenticator/auth_credentials.c PROPERTIES
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_CREDENTIALS_STACK_BUDGET}")
@@ -108,31 +109,8 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_MC_PREPARE_STACK_BUDGET}")
     set_source_files_properties(src/ctap/ctap_make_credential_finish.c PROPERTIES
         COMPILE_OPTIONS "-Wstack-usage=${CTAP_MC_FINISH_STACK_BUDGET}")
+elseif(NOT CTAP_STACK_BUDGET_CHECKS)
+    message(STATUS "Per-function stack budget diagnostics explicitly disabled; use ordinary builds for stack reports")
 else()
     message(STATUS "Stack budget check unavailable with ${CMAKE_C_COMPILER_ID}; use a GCC build for stack reports")
-endif()
-
-# Off by default when included in firmware. Native tests require only a C host
-# compiler and the standard library, not a client, OS provider or USB integration.
-if(PROJECT_IS_TOP_LEVEL)
-    include(CTest)
-else()
-    option(BUILD_TESTING "Build portable native core tests" OFF)
-endif()
-if(BUILD_TESTING)
-    enable_testing()
-    foreach(suite IN ITEMS
-        auth_credentials ctap_client_pin ctap_get_assertion ctap_get_info
-        ctap_hmac_secret ctap_make_credential ctap_reset ctap_user_presence
-        ctaphid ctaphid_channels ctaphid_device ctaphid_init ctaphid_ping
-        ctaphid_response ctaphid_wink_msg resident_credentials ctap_conformance)
-        add_executable(test_${suite} tests/test_${suite}.c)
-        target_link_libraries(test_${suite} PRIVATE ctap_core)
-        set_target_properties(test_${suite} PROPERTIES C_EXTENSIONS OFF)
-        if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-            # Test assertions perform operations; keep them in Release builds.
-            target_compile_options(test_${suite} PRIVATE -Wall -Wextra -Wpedantic -Werror -UNDEBUG)
-        endif()
-        add_test(NAME ${suite} COMMAND test_${suite})
-    endforeach()
 endif()

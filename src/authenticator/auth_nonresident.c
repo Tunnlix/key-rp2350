@@ -2,6 +2,33 @@
 
 #include <string.h>
 
+AuthStatus auth_credentials_create_nonresident_prepared(AuthCredentialService *s,
+    const uint8_t rp[32],uint8_t policy,AuthCredentialPrepareId prepare,void *context,
+    AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65])
+{
+    if(!auth_credentials_nonresident_supported(s) || s->creation_busy || s->lookup_busy || !rp ||
+        !out || !id || !length || !pub || policy<1 || policy>3) return AUTH_INVALID_ARGUMENT;
+    s->creation_busy=true;
+    AuthCreationScratch *w=&s->creation_scratch;
+    auth_secure_zero(w,sizeof(*w));
+    AuthStatus status=s->nonresident.create(s->nonresident.context,rp,policy,&w->created,
+        w->wire_id,&w->wire_id_length,w->public_key);
+    if(status==AUTH_OK && (!auth_credential_id_length_valid(w->wire_id_length) ||
+        w->wire_id_length<=AUTH_CREDENTIAL_ID_SIZE || !auth_credential_valid(&w->created) ||
+        w->created.discoverable || w->created.cred_protect!=policy || memcmp(w->created.rp_id_hash,rp,32)!=0 ||
+        w->public_key[0]!=4)) status=AUTH_BAD_DATA;
+    uint8_t digest[32]={0};
+    if(status==AUTH_OK) status=s->crypto.sha256(s->crypto.context,w->wire_id,w->wire_id_length,digest);
+    if(status==AUTH_OK && memcmp(digest,w->created.credential_id,32)!=0) status=AUTH_BAD_DATA;
+    if(status==AUTH_OK && prepare) status=prepare(context,&w->created,w->wire_id,w->wire_id_length,w->public_key);
+    if(status==AUTH_OK) {
+        *out=w->created; memcpy(id,w->wire_id,w->wire_id_length); *length=w->wire_id_length; memcpy(pub,w->public_key,65);
+    }
+    auth_secure_zero(digest,sizeof digest); auth_secure_zero(w,sizeof(*w));
+    s->creation_busy=false; auth_credentials_release_nonresident(s);
+    return status;
+}
+
 AuthStatus auth_credentials_create(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, AuthCredential *credential, uint8_t public_key[65])

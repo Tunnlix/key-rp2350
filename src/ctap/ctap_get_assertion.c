@@ -11,6 +11,11 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
         capacity < (prepared->hmac_secret.requested ? 288U : 192U))
         return CTAP_STATUS_OTHER;
     if (prepared->auth.probe) return ctap_client_pin_probe(prepared->pin);
+    if (!auth_credential_id_length_valid(prepared->credential_id_length)) return CTAP_STATUS_OTHER;
+    size_t id_extra = prepared->credential_id_length > AUTH_CREDENTIAL_ID_SIZE ?
+        prepared->credential_id_length - AUTH_CREDENTIAL_ID_SIZE : 0U;
+    if (capacity < (prepared->hmac_secret.requested ? 288U : 192U) + id_extra)
+        return CTAP_STATUS_OTHER;
     if (prepared->user_verified != prepared->auth.present || (prepared->pin != NULL && prepared->pin->service != service))
         return CTAP_STATUS_OTHER;
     if (prepared->discovery && (prepared->metadata_revision != service->metadata_revision || capacity < 768U)) return CTAP_STATUS_OTHER;
@@ -22,7 +27,8 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
         if (authorized != CTAP_STATUS_OK) return authorized;
     }
     AuthCredential *credential = &workspace->scratch.credential;
-    AuthStatus status = auth_credentials_get(service, prepared->credential_id, prepared->rp_id_hash, credential);
+    AuthStatus status = auth_credentials_get_id(service, prepared->credential_id,
+        prepared->credential_id_length, prepared->rp_id_hash, credential);
     if (status != AUTH_OK) return status == AUTH_NOT_FOUND ? CTAP_STATUS_NO_CREDENTIALS : CTAP_STATUS_OTHER;
     if (credential->cred_protect == 3U && !prepared->user_verified) return CTAP_STATUS_NO_CREDENTIALS;
     if (credential->discoverable && capacity < 768U) return CTAP_STATUS_OTHER;
@@ -54,13 +60,14 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
         data_length += extension.length;
     }
     uint32_t counter;
-    if (auth_credentials_next_counter(service, prepared->credential_id, prepared->rp_id_hash, &counter) != AUTH_OK)
+    if (auth_credentials_next_counter_id(service, prepared->credential_id, prepared->credential_id_length,
+        prepared->rp_id_hash, &counter) != AUTH_OK)
         return CTAP_STATUS_OTHER;
     for (size_t i = 0U; i < 4U; ++i) signed_data[33U + i] = (uint8_t)(counter >> (24U - 8U * i));
     memcpy(signed_data + data_length, prepared->client_data_hash, 32U);
     size_t signature_length = 0U;
     if (service->crypto.sha256(service->crypto.context, signed_data, data_length + 32U, digest) != AUTH_OK ||
-        auth_credentials_sign_digest(service, prepared->credential_id, prepared->rp_id_hash,
+        auth_credentials_sign_digest_id(service, prepared->credential_id, prepared->credential_id_length, prepared->rp_id_hash,
             digest, signature, &signature_length) != AUTH_OK || signature_length == 0U || signature_length > sizeof workspace->scratch.phase.finish.signature)
         return CTAP_STATUS_OTHER;
     uint8_t *encoded = workspace->scratch.phase.finish.encoded;
@@ -72,7 +79,7 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     bool include_count = prepared->discovery && prepared->credential_count > 1U && !continuation;
     bool ok = cbor_write_map(&writer, 3U + (include_user ? 1U : 0U) + (include_count ? 1U : 0U)) &&
         cbor_write_uint(&writer, 1U) && cbor_write_map(&writer, 2U) &&
-        cbor_write_text(&writer, "id") && cbor_write_bytes(&writer, prepared->credential_id, 32U) &&
+        cbor_write_text(&writer, "id") && cbor_write_bytes(&writer, prepared->credential_id, prepared->credential_id_length) &&
         cbor_write_text(&writer, "type") && cbor_write_text(&writer, "public-key") &&
         cbor_write_uint(&writer, 2U) && cbor_write_bytes(&writer, signed_data, data_length) &&
         cbor_write_uint(&writer, 3U) && cbor_write_bytes(&writer, signature, signature_length);
@@ -106,6 +113,7 @@ uint8_t ctap_get_assertion_finish(AuthCredentialService *service, CtapGetAsserti
     if (!acquire(workspace)) return CTAP_STATUS_OTHER;
     uint8_t status = prepared != NULL && prepared->pin != NULL ? CTAP_STATUS_OTHER :
         finish(service, workspace, prepared, output, capacity, length, 0U, false);
+    auth_credentials_release_nonresident(service);
     return release(workspace, status);
 }
 
@@ -113,7 +121,9 @@ uint8_t ctap_get_assertion_finish_at(AuthCredentialService *service, CtapGetAsse
     const CtapGetAssertion *prepared, uint8_t *output, size_t capacity, size_t *length, uint32_t now_ms)
 {
     if (!acquire(workspace)) return CTAP_STATUS_OTHER;
-    return release(workspace, finish(service, workspace, prepared, output, capacity, length, now_ms, false));
+    uint8_t status=finish(service, workspace, prepared, output, capacity, length, now_ms, false);
+    auth_credentials_release_nonresident(service);
+    return release(workspace, status);
 }
 
 void ctap_assertion_sequence_clear(CtapAssertionSequence *sequence)
@@ -156,6 +166,7 @@ uint8_t ctap_get_next_assertion(AuthCredentialService *service, CtapGetAssertion
     CtapGetAssertion *request = &workspace->scratch.request;
     *request = sequence->request;
     memcpy(request->credential_id, request->credential_ids[sequence->next], 32U);
+    request->credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
     uint8_t status = finish(service, workspace, request, output, capacity, length, now_ms, true);
     if (status == CTAP_STATUS_OK) {
         ++sequence->next; sequence->last_call_ms = now_ms;

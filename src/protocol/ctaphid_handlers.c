@@ -1,14 +1,12 @@
 #include "protocol/ctaphid_handlers.h"
 #include "protocol/ctaphid_dispatcher.h"
+#include "ctap_device_version.h"
 
 #include <string.h>
 
 /* Device version is vendor-defined; CTAP 2.3 still uses HID protocol version 2.
  * Capability selection belongs to routing/device configuration. */
 #define CTAPHID_PROTOCOL_VERSION 2U
-#define CTAPHID_DEVICE_VERSION_MAJOR 0U
-#define CTAPHID_DEVICE_VERSION_MINOR 1U
-#define CTAPHID_DEVICE_VERSION_BUILD 0U
 
 CtaphidResponseResult ctaphid_handle_init(
     const CtaphidReassembler *message,
@@ -27,9 +25,9 @@ CtaphidResponseResult ctaphid_handle_init(
     response[10] = (uint8_t)(allocated_channel_id >> 8);
     response[11] = (uint8_t)allocated_channel_id;
     response[12] = CTAPHID_PROTOCOL_VERSION;
-    response[13] = CTAPHID_DEVICE_VERSION_MAJOR;
-    response[14] = CTAPHID_DEVICE_VERSION_MINOR;
-    response[15] = CTAPHID_DEVICE_VERSION_BUILD;
+    response[13] = CTAP_DEVICE_VERSION_MAJOR;
+    response[14] = CTAP_DEVICE_VERSION_MINOR;
+    response[15] = CTAP_DEVICE_VERSION_BUILD;
     response[16] = capabilities;
     return ctaphid_send_response(message->channel_id, CTAPHID_COMMAND_INIT,
         response, sizeof response, send_report, transport_context);

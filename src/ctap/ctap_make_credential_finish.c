@@ -21,11 +21,12 @@ typedef struct {
     const CtapMakeCredential *request;
     const uint8_t *aaguid;
     CtapMakeCredentialWorkspace *workspace;
-    size_t length;
+    size_t length, capacity;
     uint8_t status;
 } RegistrationResponse;
 
-static AuthStatus prepare_response(void *context, const AuthCredential *credential, const uint8_t public_key[65])
+static AuthStatus prepare_response_id(void *context, const AuthCredential *credential,
+    const uint8_t *id,size_t id_length,const uint8_t public_key[65])
 {
     RegistrationResponse *response = context;
     AuthCredentialService *service = response->service;
@@ -42,12 +43,17 @@ static AuthStatus prepare_response(void *context, const AuthCredential *credenti
         if (response->status != CTAP_STATUS_OK) return AUTH_CRYPTO_ERROR;
     }
     response->status = CTAP_STATUS_OTHER;
-    if (!ctap_attestation_encode(service, credential, public_key, prepared->client_data_hash, response->aaguid,
+    if (!ctap_attestation_encode_id(service, credential, id, id_length, public_key, prepared->client_data_hash, response->aaguid,
         prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL,
         prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
         response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length)) return AUTH_CRYPTO_ERROR;
+    if (response->length > response->capacity) return AUTH_CAPACITY;
     response->status = CTAP_STATUS_OK;
     return AUTH_OK;
+}
+static AuthStatus prepare_response(void *context,const AuthCredential *credential,const uint8_t public_key[65])
+{
+    return prepare_response_id(context,credential,credential->credential_id,AUTH_CREDENTIAL_ID_SIZE,public_key);
 }
 
 static uint8_t finish_at(AuthCredentialService *service,
@@ -79,10 +85,14 @@ static uint8_t finish_at(AuthCredentialService *service,
     AuthCredential *credential = &workspace->scratch.finish.credential;
     uint8_t *public_key = workspace->scratch.finish.public_key;
     AuthStatus status;
-    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, CTAP_STATUS_OK};
+    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, capacity, CTAP_STATUS_OK};
     if (prepared->discoverable) {
         status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
             prepare_response, &response, credential, public_key);
+    } else if(auth_credentials_nonresident_supported(service)) {
+        status=auth_credentials_create_nonresident_prepared(service,prepared->rp_id_hash,
+            prepared->cred_protect==0U ? 1U : prepared->cred_protect,prepare_response_id,&response,
+            credential,workspace->scratch.finish.wire_id,&workspace->scratch.finish.wire_id_length,public_key);
     } else {
         status = auth_credentials_create_protected(service, prepared->rp_id_hash,
             prepared->user_id, prepared->user_id_length, false,
@@ -114,5 +124,6 @@ uint8_t ctap_make_credential_finish_at(AuthCredentialService *service,
      * complete scratch on every exit. A nested call must leave it intact. */
     auth_secure_zero(&workspace->scratch, sizeof workspace->scratch);
     workspace->busy = false;
+    auth_credentials_release_nonresident(service);
     return status;
 }

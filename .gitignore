@@ -1,6 +1,20 @@
 # Executable and build directories
 /build/
 /out/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeUserPresets.json
+# Local assistant notes are kept outside the public codebase.
+/AGENTS.md
+/development/ai/
+/development/
+/tests/
+/diagnostics/
+/.codex/
+/.claude/
+/CLAUDE.md
 # Ignored local tooling remnants are not dependencies of the portable build.
 /.venv/
 __pycache__/
@@ -14,6 +28,20 @@ __pycache__/
 *.so.*
 *.dll
 *.exe
+*.elf
+*.uf2
+*.bin
+*.hex
+*.map
+*.dis
+*.su
+
+# Local device captures and private provisioning/release material.
+/device-dumps/
+/secrets/
+/releases/
+*.pem
+*.key
 
 # Debugging and profiling output
 /core

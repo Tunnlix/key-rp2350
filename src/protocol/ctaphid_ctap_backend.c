@@ -14,6 +14,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.hmac_secret = false;
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
     backend->profile.resident_credentials = false;
+    backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
     return true;
 }
@@ -26,6 +27,8 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     backend->credentials = service;
     backend->profile.make_credential = true;
     backend->profile.hmac_secret = auth_secret_crypto_valid(&service->secrets);
+    backend->profile.max_credential_id_length = auth_credentials_nonresident_supported(service) ?
+        AUTH_CREDENTIAL_ID_MAX_SIZE : AUTH_CREDENTIAL_ID_SIZE;
     return true;
 }
 
@@ -51,9 +54,10 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
 }
 
 /* Clears one operation's inputs and wait flags, preserving continuations.
- * No provider work here: cleanup cannot repeat a committed side effect. */
+ * Only RAM cleanup here: never repeat a committed provider side effect. */
 static void clear_pending(CtaphidCtapBackend *backend)
 {
+    auth_credentials_release_nonresident(backend->credentials);
     backend->pending = false;
     backend->awaiting_next_assertion = backend->awaiting_management = false;
     backend->awaiting_pin = backend->awaiting_get_info = false;
@@ -278,6 +282,17 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
     }
     if (backend->awaiting_get_info) {
         uint8_t status = ctap_client_pin_status(backend->pin, &backend->profile.pin_set);
+        if (status == CTAP_STATUS_OK && backend->profile.resident_credentials) {
+            size_t total = 0U;
+            const AuthStorage *storage = &backend->credentials->storage;
+            if (storage->count(storage->context, &total) != AUTH_OK ||
+                total > storage->capacity || storage->capacity - total > UINT32_MAX) {
+                status = CTAP_STATUS_OTHER;
+            } else {
+                /* Non-discoverable records share this pool and consume slots too. */
+                backend->profile.remaining_credentials = (uint32_t)(storage->capacity - total);
+            }
+        }
         size_t encoded_length = 0U;
         if (status == CTAP_STATUS_OK && !ctap_get_info_encode(&backend->profile, backend->response + 1U,
             sizeof backend->response - 1U, &encoded_length)) status = CTAP_STATUS_OTHER;
