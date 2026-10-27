@@ -43,6 +43,7 @@ void rp2350_firmware_update_start(Rp2350Application *a, uint64_t operation, cons
         response[0]=parse(request,n,&command);
         /* A vendor operation interrupts continuation/UV state just like an
          * unrelated CTAP operation; no flash mutations are involved. */
+        ctap_large_blobs_clear(&a->backend.blobs);
         ctap_assertion_sequence_clear(&a->backend.assertion_sequence);
         ctap_credential_management_clear(&a->backend.management);
         auth_credentials_release_nonresident(&a->service);

@@ -357,12 +357,24 @@ static AuthStatus credential_mac(void *ctx,const AuthKeyHandle *h,bool uv,const 
     if(status!=AUTH_OK && out) auth_secure_zero(out,32);
     return finish(p,status,status!=AUTH_NOT_FOUND);
 }
+static AuthStatus large_blob_key(void *ctx,const AuthKeyHandle *h,uint8_t out[32]) {
+    Rp2350StoreProvider *p=ctx;
+    if(!out) return AUTH_INVALID_ARGUMENT;
+    if(!begin(p)) { auth_secure_zero(out,32); return AUTH_IO_ERROR; }
+    AuthStatus status=load_key(p,h);
+    if(status==AUTH_OK) {
+        AuthSecretCrypto secrets=rp2350_secret_interface(p->crypto);
+        status=secrets.large_blob_key(secrets.context,h,out);
+    }
+    if(status!=AUTH_OK) auth_secure_zero(out,32);
+    return finish(p,status,status!=AUTH_NOT_FOUND);
+}
 static AuthStatus regenerate(void *ctx) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) return AUTH_IO_ERROR;
     AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.regenerate(s.context),true);
 }
 AuthCrypto rp2350_store_provider_crypto_internal(Rp2350StoreProvider *p) { return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign,destroy,generate_ed25519,sign_ed25519}; }
-AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *p) { return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate}; }
+AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *p) { return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate,large_blob_key}; }
 AuthStorage rp2350_store_provider_storage_internal(Rp2350StoreProvider *p) {
     return (AuthStorage){p,AUTH_RESIDENT_MAX_COUNT,read_record,insert,erase_plain,find_rp,count,counter,enumerate,put,erase,update};
 }

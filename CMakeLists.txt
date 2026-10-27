@@ -16,6 +16,8 @@ add_library(ctap_core STATIC
     src/ctap/cbor_writer.c
     src/ctap/ctap.c
     src/ctap/ctap_attestation.c
+    src/ctap/ctap_authenticator_config.c
+    src/ctap/ctap_large_blobs.c
     src/ctap/ctap_client_pin.c
     src/ctap/ctap_credential_management.c
     src/ctap/ctap_entities.c

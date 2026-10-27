@@ -27,6 +27,7 @@ typedef struct {
     uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
     AuthCreationScratch creation_scratch;
     bool creation_busy;
+    bool large_blobs; /* Bound complete large-blob storage service. */
     /* Separate from creation so a preparation callback may read stored records
      * without overwriting the staged credential. Lookup operations cannot nest. */
     AuthCredential lookup_scratch;

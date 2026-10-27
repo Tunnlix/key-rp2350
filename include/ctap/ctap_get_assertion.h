@@ -15,6 +15,7 @@ typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], credential_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
     uint16_t credential_id_length;
     bool user_presence_required;
+    bool cred_blob_requested, large_blob_requested;
     uint8_t extension_status;
     CtapHmacSecret hmac_secret;
     CtapClientPin *pin;
@@ -36,7 +37,7 @@ typedef struct {
         union {
             uint64_t order[AUTH_RESIDENT_MAX_COUNT];
             struct {
-                uint8_t extension_output[80], signed_data[164], digest[32];
+                uint8_t extension_output[80], signed_data[212], digest[32];
                 uint8_t signature[72], encoded[768];
             } finish;
         } phase;

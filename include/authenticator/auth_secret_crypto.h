@@ -33,6 +33,9 @@ typedef struct {
      * ephemeral agreement key atomically; failure must leave it unusable or
      * return an error so the caller can fail closed. Does not alter credentials. */
     AuthStatus (*regenerate)(void *);
+    /* Optional: derive a credential-specific key in a domain inaccessible via
+     * credential_hmac. No derivation from public handles or predictable salts. */
+    AuthStatus (*large_blob_key)(void *, const AuthKeyHandle *, uint8_t result[32]);
 } AuthSecretCrypto;
 
 bool auth_secret_crypto_valid(const AuthSecretCrypto *crypto);

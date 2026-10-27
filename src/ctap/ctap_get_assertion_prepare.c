@@ -53,6 +53,17 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
             if (result->extension_status == CTAP_STATUS_OK && !result->user_presence_required)
                 result->extension_status = CTAP_STATUS_UNSUPPORTED_OPTION;
         }
+        if (auth_credentials_resident_supported(service) && cbor_map_text(&fields[4], "credBlob", &value)) {
+            if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+                result->extension_status = CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+            else result->cred_blob_requested = value.encoded[0] == 0xf5U;
+        }
+        if (service->large_blobs && service->secrets.large_blob_key != NULL && cbor_map_text(&fields[4], "largeBlobKey", &value)) {
+            if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+                result->extension_status = CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+            else if (value.encoded[0] != 0xf5U) result->extension_status = CTAP_STATUS_INVALID_OPTION;
+            else result->large_blob_requested = true;
+        }
         /* Other unsupported extensions and options have no effects/output. */
     }
     if (present[3] && fields[3].major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

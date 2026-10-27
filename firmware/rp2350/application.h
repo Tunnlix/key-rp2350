@@ -3,6 +3,7 @@
 #include "runtime_reset_internal.h"
 #include "presence.h"
 #include "firmware_update.h"
+#include "blob_store.h"
 typedef struct {
     void *context;
     uint32_t (*now_ms)(void *);
@@ -22,6 +23,7 @@ typedef struct Rp2350Application {
     CtaphidDevice device;
     Rp2350Presence presence;
     Rp2350FirmwareUpdate update;
+    Rp2350BlobStore blobs;
     Rp2350Crypto *crypto;
     AuthCrypto base;
     AuthSecretCrypto primitives;
@@ -40,6 +42,7 @@ typedef struct Rp2350Application {
  * Synchronous provider latency/keepalive responsiveness remains unqualified. */
 AuthStatus rp2350_application_init(Rp2350Application *,Rp2350Crypto *,const Rp2350Flash *,
     const Rp2350ApplicationIo *,const uint8_t aaguid[16],uint32_t powered_at_ms);
+AuthStatus rp2350_application_configure_blobs(Rp2350Application *,const Rp2350Flash *);
 bool rp2350_application_ready(const Rp2350Application *);
 CtaphidDeviceResult rp2350_application_receive(Rp2350Application *,const uint8_t *,size_t);
 CtaphidDeviceResult rp2350_application_poll(Rp2350Application *);

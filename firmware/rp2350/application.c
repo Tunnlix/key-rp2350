@@ -57,6 +57,7 @@ bool rp2350_application_disconnect(Rp2350Application *a) {
     ctap_assertion_sequence_clear(&a->backend.assertion_sequence);
     ctap_credential_management_clear(&a->backend.management);
     ctap_client_pin_invalidate(&a->pin);
+    ctap_large_blobs_clear(&a->backend.blobs);
     rp2350_presence_init(&a->presence,a->io.pressed(a->io.context),a->io.now_ms(a->io.context));
     CtaphidDeviceConfig config=a->device.config;
     uint64_t operation=a->device.transaction_id,transfer=a->device.next_transfer_id;
@@ -151,4 +152,29 @@ done:
     if(result!=CTAPHID_DEVICE_OK && result!=CTAPHID_DEVICE_IGNORED)
         rp2350_firmware_update_abort(a,a->update.operation);
     a->busy=false; return result;
+}
+
+static AuthStatus refresh_blobs(Rp2350Application *a) {
+    if(a->blobs.faulted || !a->store.live) return AUTH_IO_ERROR;
+    if(a->blobs.epoch==a->store.cache.global.reset_generation &&
+        memcmp(a->blobs.store_id,a->store.cache.global.device_id,16U)==0) return AUTH_OK;
+    Rp2350Flash flash=a->blobs.flash;
+    return rp2350_blob_store_open(&a->blobs,&flash,a->store.cache.global.reset_generation,a->store.cache.global.device_id);
+}
+static AuthStatus read_blobs(void *ctx,size_t at,uint8_t *out,size_t n,size_t *total) {
+    Rp2350Application *a=ctx; AuthStatus status=refresh_blobs(a);
+    CtapLargeBlobStorage storage=rp2350_blob_store_interface(&a->blobs);
+    return status==AUTH_OK ? storage.read(storage.context,at,out,n,total) : status;
+}
+static AuthStatus commit_blobs(void *ctx,const uint8_t *in,size_t n) {
+    Rp2350Application *a=ctx; AuthStatus status=refresh_blobs(a);
+    CtapLargeBlobStorage storage=rp2350_blob_store_interface(&a->blobs);
+    return status==AUTH_OK ? storage.commit(storage.context,in,n) : status;
+}
+AuthStatus rp2350_application_configure_blobs(Rp2350Application *a,const Rp2350Flash *flash) {
+    if(!rp2350_application_ready(a) || a->busy || a->backend.profile.large_blobs) return AUTH_BUSY;
+    AuthStatus status=rp2350_blob_store_open(&a->blobs,flash,a->store.cache.global.reset_generation,a->store.cache.global.device_id);
+    if(status!=AUTH_OK) return status;
+    CtapLargeBlobStorage storage={a,read_blobs,commit_blobs};
+    return ctaphid_ctap_backend_configure_blobs(&a->backend,&storage) ? AUTH_OK : AUTH_BAD_DATA;
 }

@@ -9,6 +9,8 @@
 #define CTAP_PIN_PERMISSION_MC 0x01U
 #define CTAP_PIN_PERMISSION_GA 0x02U
 #define CTAP_PIN_PERMISSION_CM 0x04U
+#define CTAP_PIN_PERMISSION_LBW 0x10U
+#define CTAP_PIN_PERMISSION_CONFIG 0x20U
 #define CTAP_PIN_INITIAL_TIMEOUT_MS 30000U
 #define CTAP_PIN_MAX_TIMEOUT_MS 600000U
 
@@ -22,6 +24,8 @@ typedef struct {
     uint8_t consecutive_failures;
     bool faulted;
     bool pin_set;
+    uint8_t min_length;
+    bool always_uv, force_change, large_blobs;
     uint8_t token[32], token_rp_hash[32], permissions;
     uint32_t issued_at_ms;
     bool token_active, token_used;
@@ -67,6 +71,11 @@ void ctap_client_pin_poll(CtapClientPin *pin, uint32_t now_ms);
 void ctap_client_pin_invalidate(CtapClientPin *pin);
 uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
+/* Persist policy and retire authorization before exposing changed configuration. */
+uint8_t ctap_client_pin_configure(CtapClientPin *, uint8_t subcommand, uint8_t minimum, bool force_change);
+uint8_t ctap_client_pin_require_uv(CtapClientPin *);
+uint8_t ctap_client_pin_authorize_permission(CtapClientPin *, uint8_t protocol, uint8_t permission,
+    const uint8_t *, size_t, const uint8_t *, uint32_t now_ms);
 uint8_t ctap_pin_auth_parse(CtapClientPin *pin, const CborValue *param,
     const CborValue *protocol, CtapPinAuth *auth);
 /* Legacy tokens bind to the first RP after a valid token MAC, even if later

@@ -4,7 +4,8 @@
  * data and firmware cannot grow into the planned 512 KiB owned partition. */
 MEMORY
 {
-    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 1536K
+    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 1504K
+    CTAP_BLOBS(r) : ORIGIN = 0x10178000, LENGTH = 32K
     CTAP_STORE(r) : ORIGIN = 0x10180000, LENGTH = 512K
 }
 __ctap_store_start = ORIGIN(CTAP_STORE);

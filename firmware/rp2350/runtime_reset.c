@@ -36,6 +36,8 @@ static AuthStatus reinitialize(void *ctx,const Rp2350StoreReplayState *state) {
     if(!auth_credentials_init(r->service,&c,&storage) || !auth_credentials_configure_secrets(r->service,&secrets) ||
         (r->nonresident_enabled && !auth_credentials_configure_nonresident(r->service,&nonresident)) ||
         !ctap_client_pin_init(r->pin,r->service,&pin)) return AUTH_CRYPTO_ERROR;
+    r->service->large_blobs=r->pin->large_blobs=r->backend->profile.large_blobs;
+    ctap_large_blobs_clear(&r->backend->blobs);
     r->backend->profile.pin_set=false; return AUTH_OK;
 }
 static bool reset_callback(void *ctx) {

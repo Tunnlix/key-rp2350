@@ -33,4 +33,14 @@ bool ctap_attestation_encode_id(AuthCredentialService *service,
     const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
     uint8_t *output, size_t capacity, size_t *length);
 
+/* Optional credBlob output is signed; largeBlobKey is a top-level response. */
+bool ctap_attestation_encode_extensions(AuthCredentialService *service,
+    const AuthCredential *credential, const uint8_t *id, size_t id_length,
+    const uint8_t public_key[65], const uint8_t client_data_hash[32],
+    const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
+    bool user_verified, bool cred_protect_requested,
+    const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
+    const bool *cred_blob_stored, const uint8_t *large_blob_key,
+    uint8_t *output, size_t capacity, size_t *length);
+
 #endif

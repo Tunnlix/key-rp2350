@@ -5,13 +5,15 @@
 
 #define AUTH_PIN_MAX_RETRIES 8U
 
-/* Persistent PIN verifier, never plaintext. Code point length is retained for
- * future minimum-length policy. A missing PIN has a zero verifier/length and
+/* Persistent PIN verifier and policy, never plaintext. Code point length
+ * permits raising the minimum and requiring a PIN change. A missing PIN has a zero verifier/length and
  * eight retries. This state is separate from credential metadata and keys. */
 typedef struct {
     bool set;
     uint8_t hash[16];
     uint8_t code_points, retries;
+    uint8_t min_length; /* Zero is the backwards-compatible default of four. */
+    bool always_uv, force_change;
 } AuthPinRecord;
 
 /* Serial, bounded callbacks. read returns a valid empty record for new storage.

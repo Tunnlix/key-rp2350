@@ -79,6 +79,8 @@ typedef struct {
     uint8_t user_name[AUTH_ENTITY_NAME_MAX_SIZE], user_display_name[AUTH_ENTITY_NAME_MAX_SIZE];
     uint16_t rp_id_length;
     uint8_t rp_name_length, user_name_length, user_display_name_length;
+    uint8_t cred_blob[32], cred_blob_length;
+    bool large_blob_key; /* Domain-separated provider derivation enabled at creation. */
     uint64_t creation_order; /* Relative creation order for newest-first discovery. */
 } AuthCredential;
 

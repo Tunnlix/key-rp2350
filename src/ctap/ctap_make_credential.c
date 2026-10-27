@@ -76,6 +76,21 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
 {
     CborValue value;
     uint8_t status;
+    if (auth_credentials_resident_supported(service) && cbor_map_text(extensions, "credBlob", &value)) {
+        if (value.major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        result->cred_blob_requested = true;
+        result->cred_blob_stored = result->discoverable && value.value <= 32U;
+        if (result->cred_blob_stored) {
+            result->metadata.cred_blob_length = (uint8_t)value.value;
+            memcpy(result->metadata.cred_blob, value.data, (size_t)value.value);
+        }
+    }
+    if (service->large_blobs && service->secrets.large_blob_key != NULL && cbor_map_text(extensions, "largeBlobKey", &value)) {
+        if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        if (value.encoded[0] != 0xf5U || !result->discoverable) return CTAP_STATUS_INVALID_OPTION;
+        result->large_blob_requested = result->metadata.large_blob_key = true;
+    }
     if (auth_secret_crypto_valid(&service->secrets) && cbor_map_text(extensions, "hmac-secret", &value)) {
         if (value.major != 7U || (value.encoded[0] != 0xF4U && value.encoded[0] != 0xF5U))
             return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
@@ -86,6 +101,9 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
         status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
         if (status != CTAP_STATUS_OK) return status;
     }
+    if (pin != NULL && cbor_map_text(extensions, "minPinLength", &value) &&
+        (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U)))
+        return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     if (pin != NULL && cbor_map_text(extensions, "credProtect", &value)) {
         if (value.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         if (value.value < 1U || value.value > 3U) return CTAP_STATUS_INVALID_PARAMETER;

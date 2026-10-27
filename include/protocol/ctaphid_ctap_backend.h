@@ -2,6 +2,7 @@
 #define CTAPHID_CTAP_BACKEND_H
 
 #include "ctap/ctap.h"
+#include "ctap/ctap_large_blobs.h"
 #include "ctap/ctap_user_presence.h"
 #include "ctap/ctap_reset.h"
 #include "ctap/ctap_make_credential.h"
@@ -43,7 +44,8 @@ typedef struct {
     CtapAssertionSequence assertion_sequence;
     CtapCredentialManagement management;
     uint32_t assertion_cid, management_cid;
-    bool awaiting_next_assertion, awaiting_management;
+    CtapLargeBlobs blobs;
+    bool awaiting_next_assertion, awaiting_management, awaiting_config, awaiting_blobs;
 } CtaphidCtapBackend;
 
 /* Profile's advertised size must match the coordinator's receive capacity.
@@ -65,12 +67,14 @@ bool ctaphid_ctap_backend_configure_reset(CtaphidCtapBackend *backend,
 bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
     AuthCredentialService *service);
 
-/* Complete protocol 2 PIN/token binding, after credentials/reset. Enables
+/* Complete protocol 1/2 PIN/token binding, after credentials/reset. Enables
  * clientPin, pinUvAuthToken and credProtect; built-in uv remains absent.
  * Complete resident storage also enables rk/credMgmt; configure resync_channel
  * to ctaphid_ctap_backend_resync before accepting requests. The application
  * Reset callback must erase persistent PIN state as well as credentials/keys. */
 bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientPin *pin);
+
+bool ctaphid_ctap_backend_configure_blobs(CtaphidCtapBackend *, const CtapLargeBlobStorage *);
 
 /* Config callbacks: start prepares a reply, abort discards it. Neither callback
  * reenters the coordinator. context must point to an initialized backend.

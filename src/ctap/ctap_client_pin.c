@@ -22,6 +22,8 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     AuthPinRecord record = {0};
     bool valid = storage->read(storage->context, &record) == AUTH_OK && auth_pin_record_valid(&record);
     bool set = record.set;
+    uint8_t minimum = record.min_length;
+    bool always = record.always_uv, force = record.force_change;
     auth_secure_zero(&record, sizeof record);
     if (!valid) return false;
     uint8_t fresh[32] = {0};
@@ -31,6 +33,7 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     AuthPinStorage copied = *storage;
     auth_secure_zero(pin, sizeof *pin);
     pin->service = service; pin->storage = copied; pin->pin_set = set;
+    pin->min_length = minimum ? minimum : 4U; pin->always_uv = always; pin->force_change = force;
     pin->credential_management = auth_credentials_resident_supported(service);
     memcpy(pin->token, fresh, sizeof fresh); auth_secure_zero(fresh, sizeof fresh);
     return true;
@@ -40,6 +43,7 @@ void ctap_client_pin_reset_state(CtapClientPin *pin)
 {
     if (pin != NULL) {
         pin->consecutive_failures = 0U; pin->faulted = false; pin->pin_set = false;
+        pin->min_length = 4U; pin->always_uv = pin->force_change = false;
         (void)reset_token(pin);
     }
 }
@@ -68,7 +72,7 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (command == 9U && (fields[9].value & 3U) != 0U && !present[10]) return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[6].value != 16U + prefix || (command == 9U && fields[9].value == 0U)) return CTAP_STATUS_INVALID_PARAMETER;
         /* Known unavailable permissions are rejected; undefined bits ignored. */
-        if ((fields[9].value & 0x78U) != 0U) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
+        if ((fields[9].value & 0x48U) != 0U) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
         if (present[10] && (fields[10].value == 0U || fields[10].value > sizeof request->rp_id))
             return CTAP_STATUS_INVALID_PARAMETER;
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
@@ -91,7 +95,7 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
     request->subcommand = (uint8_t)command; request->protocol = protocol;
     memcpy(request->peer, peer, sizeof peer);
     if (command == 5U || command == 9U) {
-        request->permissions = command == 5U ? 3U : fields[9].value & 7U;
+        request->permissions = command == 5U ? 3U : fields[9].value & 0x37U;
         request->rp_present = present[10];
         if (present[10]) {
             request->rp_length = (size_t)fields[10].value;
@@ -130,9 +134,10 @@ static uint8_t new_pin(CtapClientPin *pin, const uint8_t keys[64], const uint8_t
         if (plain[i] == 0U) goto done; /* Reject embedded U+0000, as an additional PIN constraint. */
         if ((plain[i] & 0xC0U) != 0x80U) ++points;
     }
-    if (points < 4U) goto done;
+    if (points < (record->min_length ? record->min_length : 4U)) goto done;
     status = CTAP_STATUS_OTHER;
     if (pin->service->crypto.sha256(pin->service->crypto.context, plain, length, digest) != AUTH_OK) goto done;
+    record->force_change = false;
     record->set = true; record->code_points = points; record->retries = AUTH_PIN_MAX_RETRIES;
     memcpy(record->hash, digest, 16U);
     status = CTAP_STATUS_OK;
@@ -148,6 +153,8 @@ static uint8_t check_pin_state(const CtapClientPin *pin, const CtapClientPinRequ
     if (request->subcommand == 3U && record->set) return CTAP_STATUS_PIN_AUTH_INVALID;
     if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_CM) != 0U &&
         !pin->credential_management) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
+    if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_LBW) != 0U && !pin->large_blobs)
+        return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
     if (request->subcommand == 4U || request->subcommand == 5U || request->subcommand == 9U) {
         if (!record->set) return CTAP_STATUS_PIN_NOT_SET;
         if (record->retries == 0U) return CTAP_STATUS_PIN_BLOCKED;
@@ -214,7 +221,7 @@ static uint8_t publish_token(CtapClientPin *pin, const CtapClientPinRequest *req
     uint8_t token[32] = {0}, encrypted[48] = {0}, rp_hash[32] = {0}, encoded[52];
     CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
     uint8_t status = CTAP_STATUS_OTHER;
-    if (request->rp_length > sizeof request->rp_id || (request->permissions & ~7ULL) != 0U ||
+    if (request->rp_length > sizeof request->rp_id || (request->permissions & ~0x37ULL) != 0U ||
         ((request->permissions & 3U) != 0U && !request->rp_present && request->subcommand != 5U) ||
         (request->subcommand == 5U && (request->permissions != 3U || request->rp_present))) goto done;
     if (request->rp_present && pin->service->crypto.sha256(pin->service->crypto.context,
@@ -250,7 +257,7 @@ static uint8_t commit_new_pin(CtapClientPin *pin, const CtapClientPinRequest *re
     if (status != CTAP_STATUS_OK) return status;
     if (!persist(pin, record)) return CTAP_STATUS_OTHER;
     pin->consecutive_failures = 0U;
-    pin->pin_set = true;
+    pin->pin_set = true; pin->force_change = false;
     return reset_token(pin) ? CTAP_STATUS_OK : CTAP_STATUS_OTHER;
 }
 
@@ -291,6 +298,10 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
         if (status != CTAP_STATUS_OK) goto done;
     }
     if (request->subcommand == 5U || request->subcommand == 9U) {
+        if (record.force_change) {
+            status = request->subcommand == 5U ? CTAP_STATUS_PIN_INVALID : CTAP_STATUS_PIN_POLICY_VIOLATION;
+            goto done;
+        }
         status = publish_token(pin, request, keys, output, capacity, length, now_ms);
     } else {
         status = commit_new_pin(pin, request, keys, &record);
@@ -324,7 +335,11 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
     if (pin == NULL || set == NULL || pin->faulted) return CTAP_STATUS_OTHER;
     AuthPinRecord record = {0};
     bool valid = pin->storage.read(pin->storage.context, &record) == AUTH_OK && auth_pin_record_valid(&record);
-    if (valid) { pin->pin_set = record.set; *set = record.set; }
+    if (valid) {
+        pin->pin_set = record.set; *set = record.set;
+        pin->min_length = record.min_length ? record.min_length : 4U;
+        pin->always_uv = record.always_uv; pin->force_change = record.force_change;
+    }
     auth_secure_zero(&record, sizeof record);
     if (!valid) { pin->faulted = true; ctap_client_pin_invalidate(pin); return CTAP_STATUS_OTHER; }
     return CTAP_STATUS_OK;
@@ -358,7 +373,7 @@ uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
     uint32_t now_ms, bool mark_used)
 {
     if (auth == NULL || rp_hash == NULL || client_data_hash == NULL) return CTAP_STATUS_OTHER;
-    if (!auth->present) return pin != NULL && pin->faulted ? CTAP_STATUS_OTHER : CTAP_STATUS_OK;
+    if (!auth->present) return ctap_client_pin_require_uv(pin);
     if (pin == NULL || auth->probe) return CTAP_STATUS_PIN_AUTH_INVALID;
     ctap_client_pin_poll(pin, now_ms);
     if (pin->faulted) return CTAP_STATUS_OTHER;
@@ -386,14 +401,13 @@ uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
     return status;
 }
 
-uint8_t ctap_client_pin_authorize_management_version(CtapClientPin *pin, uint8_t protocol, const uint8_t *rp_hash,
+uint8_t ctap_client_pin_authorize_permission(CtapClientPin *pin, uint8_t protocol, uint8_t permission,
     const uint8_t *message, size_t message_length, const uint8_t *mac, uint32_t now_ms)
 {
     if (pin == NULL || mac == NULL || message == NULL) return CTAP_STATUS_PIN_AUTH_INVALID;
     ctap_client_pin_poll(pin, now_ms);
     if (pin->faulted) return CTAP_STATUS_OTHER;
-    if (!pin->token_active || (pin->permissions & CTAP_PIN_PERMISSION_CM) == 0U ||
-        (pin->token_rp_bound && (rp_hash == NULL || !ctap_pin_equal(pin->token_rp_hash, rp_hash, 32U))))
+    if (!pin->token_active || (pin->permissions & permission) == 0U)
         return CTAP_STATUS_PIN_AUTH_INVALID;
     uint8_t keys[64] = {0}; memcpy(keys, pin->token, 32U);
     uint8_t status = ctap_pin_protocol_verify_version(&pin->service->secrets, protocol, keys,
@@ -402,6 +416,50 @@ uint8_t ctap_client_pin_authorize_management_version(CtapClientPin *pin, uint8_t
     if (status != CTAP_STATUS_OK) return CTAP_STATUS_PIN_AUTH_INVALID; /* §6.8 verification failure. */
     pin->token_used = true;
     return CTAP_STATUS_OK;
+}
+
+uint8_t ctap_client_pin_authorize_management_version(CtapClientPin *pin, uint8_t protocol, const uint8_t *rp_hash,
+    const uint8_t *message, size_t length, const uint8_t *mac, uint32_t now_ms)
+{
+    if (pin != NULL && pin->token_rp_bound &&
+        (rp_hash == NULL || !ctap_pin_equal(pin->token_rp_hash, rp_hash, 32U))) return CTAP_STATUS_PIN_AUTH_INVALID;
+    return ctap_client_pin_authorize_permission(pin, protocol, CTAP_PIN_PERMISSION_CM, message, length, mac, now_ms);
+}
+
+uint8_t ctap_client_pin_require_uv(CtapClientPin *pin)
+{
+    if (pin == NULL) return CTAP_STATUS_OK;
+    bool set;
+    uint8_t status = ctap_client_pin_status(pin, &set);
+    if (status != CTAP_STATUS_OK) return status;
+    return !pin->always_uv ? CTAP_STATUS_OK : (set ? CTAP_STATUS_PUAT_REQUIRED : CTAP_STATUS_OPERATION_DENIED);
+}
+
+uint8_t ctap_client_pin_configure(CtapClientPin *pin, uint8_t command, uint8_t minimum, bool force)
+{
+    if (pin == NULL || pin->faulted) return CTAP_STATUS_OTHER;
+    AuthPinRecord record = {0};
+    uint8_t status = CTAP_STATUS_OTHER;
+    if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
+        pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
+    }
+    if (command == 2U) record.always_uv = !record.always_uv;
+    else if (command == 3U) {
+        uint8_t old = record.min_length ? record.min_length : 4U;
+        if (minimum == 0U) minimum = old;
+        if (minimum < old || minimum > 63U) { status = CTAP_STATUS_PIN_POLICY_VIOLATION; goto done; }
+        if (force && !record.set) { status = CTAP_STATUS_PIN_NOT_SET; goto done; }
+        record.min_length = minimum;
+        record.force_change = record.force_change || force || (record.set && record.code_points < minimum);
+    } else { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
+    if (!persist(pin, &record)) goto done;
+    pin->min_length = record.min_length ? record.min_length : 4U;
+    pin->always_uv = record.always_uv; pin->force_change = record.force_change;
+    ctap_client_pin_invalidate(pin);
+    status = CTAP_STATUS_OK;
+done:
+    auth_secure_zero(&record, sizeof record);
+    return status;
 }
 
 uint8_t ctap_client_pin_authorize_management(CtapClientPin *pin, const uint8_t *rp_hash,

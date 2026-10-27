@@ -50,12 +50,16 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     uint8_t *signature = workspace->scratch.phase.finish.signature;
     memcpy(signed_data, prepared->rp_id_hash, 32U);
     signed_data[32] = (prepared->user_presence_required ? 1U : 0U) | (prepared->user_verified ? 4U : 0U) |
-        (extension_length != 0U ? 0x80U : 0U);
+        ((extension_length != 0U || prepared->cred_blob_requested) ? 0x80U : 0U);
     size_t data_length = 37U;
-    if (extension_length != 0U) {
+    if (extension_length != 0U || prepared->cred_blob_requested) {
         CborWriter extension; cbor_writer_init(&extension, signed_data + data_length, sizeof workspace->scratch.phase.finish.signed_data - data_length - 32U);
-        if (!cbor_write_map(&extension, 1U) || !cbor_write_text(&extension, "hmac-secret") ||
-            !cbor_write_bytes(&extension, extension_output, extension_length)) return CTAP_STATUS_OTHER;
+        bool ok = cbor_write_map(&extension, (prepared->cred_blob_requested ? 1U : 0U) + (extension_length != 0U ? 1U : 0U));
+        if (prepared->cred_blob_requested) ok = ok && cbor_write_text(&extension, "credBlob") &&
+            cbor_write_bytes(&extension, credential->cred_blob, credential->cred_blob_length);
+        if (extension_length != 0U) ok = ok && cbor_write_text(&extension, "hmac-secret") &&
+            cbor_write_bytes(&extension, extension_output, extension_length);
+        if (!ok) return CTAP_STATUS_OTHER;
         data_length += extension.length;
     }
     uint32_t counter;
@@ -73,9 +77,10 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     /* Canonical response. Resident user handles are included; identifying
      * names require UV and multi-account discovery. Only the first discovery
      * reply includes account count. */
+    bool include_blob_key = prepared->large_blob_requested && credential->large_blob_key;
     bool include_user = credential->discoverable;
     bool include_count = prepared->discovery && prepared->credential_count > 1U && !continuation;
-    bool ok = cbor_write_map(&writer, 3U + (include_user ? 1U : 0U) + (include_count ? 1U : 0U)) &&
+    bool ok = cbor_write_map(&writer, 3U + (include_user ? 1U : 0U) + (include_count ? 1U : 0U) + (include_blob_key ? 1U : 0U)) &&
         cbor_write_uint(&writer, 1U) && cbor_write_map(&writer, 2U) &&
         cbor_write_text(&writer, "id") && cbor_write_bytes(&writer, prepared->credential_id, prepared->credential_id_length) &&
         cbor_write_text(&writer, "type") && cbor_write_text(&writer, "public-key") &&
@@ -84,6 +89,15 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     if (include_user) ok = ok && cbor_write_uint(&writer, 4U) && ctap_user_entity_write(&writer, credential,
         prepared->user_verified && prepared->discovery && prepared->credential_count > 1U);
     if (include_count) ok = ok && cbor_write_uint(&writer, 5U) && cbor_write_uint(&writer, prepared->credential_count);
+    if (include_blob_key) {
+        uint8_t blob_key[32] = {0};
+        if (service->secrets.large_blob_key == NULL ||
+            service->secrets.large_blob_key(service->secrets.context, &credential->key, blob_key) != AUTH_OK) {
+            auth_secure_zero(blob_key, sizeof blob_key); return CTAP_STATUS_OTHER;
+        }
+        ok = ok && cbor_write_uint(&writer, 7U) && cbor_write_bytes(&writer, blob_key, 32U);
+        auth_secure_zero(blob_key, sizeof blob_key);
+    }
     if (!ok || writer.length > capacity) return CTAP_STATUS_OTHER;
     memcpy(output, encoded, writer.length);
     *length = writer.length;

@@ -20,6 +20,7 @@ typedef struct {
     bool user_verified, cred_protect_requested;
     uint8_t cred_protect;
     uint8_t extension_status; /* Deferred until after authorization/exclusion/UP. */
+    bool cred_blob_requested, cred_blob_stored, large_blob_requested;
     bool discoverable;
     AuthCredential metadata;
 } CtapMakeCredential;
@@ -31,7 +32,7 @@ typedef struct {
     union {
         struct {
             AuthCredential credential;
-            uint8_t public_key[65], encoded[512U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
+            uint8_t public_key[65], encoded[576U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
             uint8_t wire_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
             size_t wire_id_length;
         } finish;

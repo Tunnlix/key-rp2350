@@ -43,10 +43,19 @@ static AuthStatus prepare_response_id(void *context, const AuthCredential *crede
         if (response->status != CTAP_STATUS_OK) return AUTH_CRYPTO_ERROR;
     }
     response->status = CTAP_STATUS_OTHER;
-    if (!ctap_attestation_encode_id(service, credential, id, id_length, public_key, prepared->client_data_hash, response->aaguid,
+    uint8_t blob_key[32] = {0};
+    if (prepared->large_blob_requested && (service->secrets.large_blob_key == NULL ||
+        service->secrets.large_blob_key(service->secrets.context, &credential->key, blob_key) != AUTH_OK)) {
+        auth_secure_zero(blob_key, sizeof blob_key); return AUTH_CRYPTO_ERROR;
+    }
+    bool encoded = ctap_attestation_encode_extensions(service, credential, id, id_length, public_key, prepared->client_data_hash, response->aaguid,
         prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL,
         prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
-        response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length)) return AUTH_CRYPTO_ERROR;
+        prepared->cred_blob_requested ? &prepared->cred_blob_stored : NULL,
+        prepared->large_blob_requested ? blob_key : NULL,
+        response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length);
+    auth_secure_zero(blob_key, sizeof blob_key);
+    if (!encoded) return AUTH_CRYPTO_ERROR;
     if (response->length > response->capacity) return AUTH_CAPACITY;
     response->status = CTAP_STATUS_OK;
     return AUTH_OK;

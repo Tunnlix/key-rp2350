@@ -27,8 +27,8 @@ Mbed TLS 3.6.7 and verifies its pinned SHA-256; a reviewed offline source tree
 can be selected with `RP2350_MBEDTLS_PATH`. The `rp2350-lto` preset is an
 optional mixed-LTO build. See [dependency pins and licenses](third-party-notices.md).
 
-The default build contains only the authenticator. It preserves the 512 KiB
-credential partition and never automatically formats blank or corrupt storage.
+The default build contains only the authenticator. It reserves a separate 32 KiB
+blob partition and preserves the 512 KiB credential partition and never automatically formats blank or corrupt storage.
 Wire a normally open button between D0 (GPIO26) and GND. The firmware enables
 the internal pull-up; no voltage source is needed on the button.
 
@@ -73,8 +73,10 @@ then release when the fast indication begins. This enters ROM update mode.
 The firmware also supports a PC-requested vendor command over FIDO HID,
 confirmed by a fresh press within 30 seconds. Its desktop client is separate.
 
-Current numeric INIT/GetInfo fields report 1.1.0; USB bcdDevice reports 1.10.
-ELF/UF2 metadata includes the `-rc.1` suffix; numeric fields cannot distinguish a candidate from stable.
+Current source identifies itself as **1.2.0-dev**: numeric INIT/GetInfo fields report
+1.2.0 and USB bcdDevice reports 1.20. ELF metadata includes the `-dev` suffix;
+numeric fields cannot distinguish development firmware from stable. Building
+this source does not imply release or completed hardware acceptance.
 The USB product and update-information name are **Key**, with manufacturer
 **Tunnlix**. Build and generated firmware files belong in ignored build directories.
 
@@ -83,8 +85,9 @@ The USB product and update-information name are **Key**, with manufacturer
 The source supports ES256/P-256 and Ed25519 credentials, plus PIN protocols 1
 and 2 and legacy `getPinToken` for older clients. Ed25519 uses RFC 8032 message
 signing, including for OpenSSH `ed25519-sk`; P-256 remains available for
-`ecdsa-sk` and PIN key agreement. Actual iPhone and SSH hardware acceptance is
-still pending for this candidate; advertising protocol versions does not claim
+`ecdsa-sk` and PIN key agreement. Initial iPhone use of the 1.1 candidate has
+been reported working; the complete acceptance matrix and SSH hardware checks
+remain pending. Advertising protocol versions does not claim
 FIDO certification or completed conformance testing.
 
 Existing 1.0 P-256 records, counters and PIN data remain readable. Ed25519 fits
@@ -93,3 +96,25 @@ Ed25519 records exist, older firmware that only understands P-256 cannot read
 the mixed store and can fail recovery. Do not downgrade such a device unless
 you intentionally reset/re-enroll it or use firmware that understands both
 algorithms. Renaming the product does not change storage derivation labels.
+
+## Windows SSH resident recovery
+
+The original 1.1.0-rc.1 candidate incorrectly rejects RP-scoped credential-
+management tokens when enumerating credentials for that RP. The source fix
+accepts matching scopes for both the first and subsequent credential responses;
+global inventory still requires an unscoped token. Independent libfido2 1.16.0
+checks pass against an isolated patched 1.1 native build for mixed P-256/Ed25519
+SSH credentials. The native reproduction accepts a correct PIN before failing
+credential listing, while an empty inventory skips that failing call. A reported
+Keyroost timeout remains unconfirmed: current upstream uses an unscoped CM token
+and distinguishes authentication errors from its two-second HID silence timeout.
+The scoped-token fix therefore does not establish the cause of that separate
+report. Windows hardware
+recovery and SSH signing remain pending.
+
+A [separate Windows OpenSSH report](https://github.com/PowerShell/Win32-OpenSSH/issues/2427)
+describes the same visible recovery error with YubiKeys, including a reported
+administrator-session workaround. That does not establish the cause on this
+device. After loading a fixed candidate, retry recovery into a fresh directory;
+if it still fails, compare normal and elevated sessions using the same OpenSSH
+installation. Existing local key files should not be overwritten for this check.

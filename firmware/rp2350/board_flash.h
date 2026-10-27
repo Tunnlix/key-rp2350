@@ -3,7 +3,7 @@
 #include "flash_guard.h"
 #include "flash_geometry.h"
 typedef struct {
-    Rp2350FlashGuard guard;
+    Rp2350FlashGuard guard, blob_guard;
     Rp2350FlashDiagnostic identity;
     uint64_t max_program_us,max_erase_us;
     uint32_t programs,erases;
@@ -19,4 +19,5 @@ typedef struct {
  * a watchdog covering ROM calls (no local timeout in SDK flash operations).
  * No production-provider binding. State is zero-initialized static SRAM. */
 AuthStatus rp2350_board_flash_open(Rp2350BoardFlash *,uint32_t write_offset,uint32_t write_bytes);
+Rp2350Flash rp2350_board_blob_flash(Rp2350BoardFlash *);
 #endif

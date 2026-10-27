@@ -1,4 +1,5 @@
 #include "protocol/ctaphid_ctap_backend.h"
+#include "ctap/ctap_authenticator_config.h"
 
 #include <string.h>
 
@@ -14,7 +15,9 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.hmac_secret = false;
     backend->profile.ed25519 = false;
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
-    backend->profile.resident_credentials = false;
+    backend->profile.resident_credentials = backend->profile.large_blobs = false;
+    backend->profile.always_uv = backend->profile.force_pin_change = false;
+    backend->profile.min_pin_length = 4U;
     backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
     return true;
@@ -51,6 +54,8 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
     backend->pin = pin;
     backend->profile.pin_uv_auth = true;
     backend->profile.pin_set = pin->pin_set;
+    backend->profile.min_pin_length = pin->min_length;
+    backend->profile.always_uv = pin->always_uv; backend->profile.force_pin_change = pin->force_change;
     backend->profile.resident_credentials = auth_credentials_resident_supported(backend->credentials);
     return true;
 }
@@ -62,7 +67,7 @@ static void clear_pending(CtaphidCtapBackend *backend)
     auth_credentials_release_nonresident(backend->credentials);
     backend->pending = false;
     backend->awaiting_next_assertion = backend->awaiting_management = false;
-    backend->awaiting_pin = backend->awaiting_get_info = false;
+    backend->awaiting_pin = backend->awaiting_get_info = backend->awaiting_config = backend->awaiting_blobs = false;
     backend->awaiting_credential_prepare = false;
     backend->credential_request_length = 0U;
     auth_secure_zero(backend->credential_request, sizeof backend->credential_request);
@@ -94,6 +99,17 @@ static void prepare_command(CtaphidCtapBackend *backend, const uint8_t *request,
             backend->awaiting_next_assertion = next; backend->awaiting_management = management;
             memcpy(backend->credential_request, request + 1U, request_length - 1U);
             backend->credential_request_length = request_length - 1U; backend->response_length = 0U;
+        }
+        return;
+    }
+    if (request != NULL && request_length != 0U && (request[0] == CTAP_COMMAND_AUTHENTICATOR_CONFIG || (request[0] == CTAP_COMMAND_LARGE_BLOBS && backend->profile.large_blobs)) && backend->pin != NULL) {
+        if (request_length - 1U > sizeof backend->credential_request) {
+            backend->response[0] = CTAP_STATUS_INVALID_LENGTH; backend->response_length = 1U;
+        } else {
+            memcpy(backend->credential_request, request + 1U, request_length - 1U);
+            backend->credential_request_length = request_length - 1U;
+            backend->awaiting_config = request[0] == CTAP_COMMAND_AUTHENTICATOR_CONFIG; backend->awaiting_blobs = request[0] == CTAP_COMMAND_LARGE_BLOBS;
+            backend->response_length = 0U;
         }
         return;
     }
@@ -167,6 +183,7 @@ void ctaphid_ctap_backend_start(void *context, uint64_t operation_id,
     bool next = request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_GET_NEXT_ASSERTION;
     bool management = request != NULL && request_length != 0U && request[0] == CTAP_COMMAND_CREDENTIAL_MANAGEMENT;
     clear_pending(backend);
+    if (request == NULL || request_length == 0U || request[0] != CTAP_COMMAND_LARGE_BLOBS) ctap_large_blobs_clear(&backend->blobs);
     if (!next) ctap_assertion_sequence_clear(&backend->assertion_sequence);
     if (!management) ctap_credential_management_clear(&backend->management);
     backend->operation_id = operation_id;
@@ -179,6 +196,7 @@ void ctaphid_ctap_backend_abort(void *context, uint64_t operation_id)
     CtaphidCtapBackend *backend = context;
     if (backend->pending && backend->operation_id == operation_id) {
         clear_pending(backend);
+        ctap_large_blobs_clear(&backend->blobs);
         clear_continuations(backend);
     }
 }
@@ -244,6 +262,18 @@ static void finish_presence(CtaphidCtapBackend *backend, CtapPresenceResult pres
 
 static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *device, uint32_t now_ms)
 {
+    if (backend->awaiting_blobs) {
+        size_t length = 0U;
+        uint8_t status = ctap_large_blobs_execute(&backend->blobs, backend->pin, device->active_channel_id,
+            backend->credential_request, backend->credential_request_length, backend->response + 1U,
+            sizeof backend->response - 1U, &length, now_ms);
+        backend->response[0] = status; backend->response_length = status == CTAP_STATUS_OK ? length + 1U : 1U;
+    }
+    if (backend->awaiting_config) {
+        backend->response[0] = ctap_authenticator_config_execute(backend->pin, backend->credential_request,
+            backend->credential_request_length, now_ms);
+        backend->response_length = 1U;
+    }
     if (backend->awaiting_pin) {
         size_t encoded_length = 0U;
         uint8_t status = ctap_client_pin_execute(backend->pin, &backend->pin_request,
@@ -284,6 +314,9 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
     }
     if (backend->awaiting_get_info) {
         uint8_t status = ctap_client_pin_status(backend->pin, &backend->profile.pin_set);
+        backend->profile.min_pin_length = backend->pin->min_length;
+        backend->profile.always_uv = backend->pin->always_uv;
+        backend->profile.force_pin_change = backend->pin->force_change;
         if (status == CTAP_STATUS_OK && backend->profile.resident_credentials) {
             size_t total = 0U;
             const AuthStorage *storage = &backend->credentials->storage;
@@ -323,6 +356,8 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
          backend->management.token_generation != backend->pin->token_generation ||
          (uint32_t)(now_ms - backend->management.last_call_ms) > 30000U))
         ctap_credential_management_clear(&backend->management);
+    if (backend->blobs.expected_length && (uint32_t)(now_ms - backend->blobs.last_call_ms) > 30000U)
+        ctap_large_blobs_clear(&backend->blobs);
     if (!backend->pending) {
         ctap_reset_poll(&backend->reset, now_ms);
         return CTAPHID_DEVICE_OK;
@@ -375,6 +410,18 @@ void ctaphid_ctap_backend_resync(void *context, uint32_t cid)
 {
     CtaphidCtapBackend *backend = context;
     if (backend == NULL) return;
+    if (backend->blobs.channel == cid) ctap_large_blobs_clear(&backend->blobs);
     if (backend->assertion_cid == cid) ctap_assertion_sequence_clear(&backend->assertion_sequence);
     if (backend->management_cid == cid) ctap_credential_management_clear(&backend->management);
+}
+
+bool ctaphid_ctap_backend_configure_blobs(CtaphidCtapBackend *backend, const CtapLargeBlobStorage *storage)
+{
+    if (backend == NULL || storage == NULL || storage->read == NULL || storage->commit == NULL ||
+        backend->pin == NULL || backend->pending || backend->profile.large_blobs ||
+        !backend->profile.resident_credentials || backend->credentials->secrets.large_blob_key == NULL) return false;
+    backend->blobs.storage = *storage;
+    backend->profile.large_blobs = backend->credentials->large_blobs = true;
+    backend->pin->large_blobs = true;
+    return true;
 }

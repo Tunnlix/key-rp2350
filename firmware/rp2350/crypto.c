@@ -193,6 +193,14 @@ static AuthStatus credential_mac(void *ctx,const AuthKeyHandle *h,bool uv,const 
     if (!k) { auth_secure_zero(out,32); return AUTH_NOT_FOUND; }
     return mac(ctx,k->randoms[uv ? 1 : 0],32,salt,32,out);
 }
+static AuthStatus large_blob_key(void *ctx,const AuthKeyHandle *handle,uint8_t out[32]) {
+    if (!out) return AUTH_INVALID_ARGUMENT;
+    Rp2350Key *key=find(ctx,handle);
+    if (!key) { auth_secure_zero(out,32); return AUTH_NOT_FOUND; }
+    /* Neither hmac-secret branch uses the scalar/seed as its HMAC key. */
+    static const uint8_t domain[]="Tunnlix Key largeBlobKey v1";
+    return mac(ctx,key->scalar,32,domain,sizeof(domain)-1U,out);
+}
 static AuthStatus regenerate(void *ctx) {
     Rp2350Crypto *p=ctx;
     if (!ready(p) || p->keys_locked) return AUTH_CRYPTO_ERROR;
@@ -292,5 +300,5 @@ AuthCrypto rp2350_crypto_interface(Rp2350Crypto *p) {
     return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign_digest,destroy,generate_ed25519,sign_ed25519};
 }
 AuthSecretCrypto rp2350_secret_interface(Rp2350Crypto *p) {
-    return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate};
+    return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate,large_blob_key};
 }

@@ -3,6 +3,8 @@ SECTIONS
 {
     /* Address bounds for the existing guarded flash adapter, not sections
      * included in this SRAM image. */
+    __ctap_blob_start = 0x10178000;
+    __ctap_blob_end = 0x10180000;
     __ctap_store_start = 0x10180000;
     __ctap_store_end = 0x10200000;
     __StackTop = ORIGIN(CTAP_STACK) + LENGTH(CTAP_STACK);

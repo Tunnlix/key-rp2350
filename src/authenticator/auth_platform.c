@@ -32,6 +32,8 @@ bool auth_credential_valid(const AuthCredential *credential)
 {
     return credential != NULL && auth_algorithm_valid(credential->algorithm) &&
         credential->user_id_length <= AUTH_USER_ID_MAX_SIZE &&
+        credential->cred_blob_length <= sizeof credential->cred_blob &&
+        (credential->discoverable || (credential->cred_blob_length == 0U && !credential->large_blob_key)) &&
         credential->rp_id_length <= AUTH_RP_ID_MAX_SIZE &&
         credential->rp_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&
         credential->user_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&

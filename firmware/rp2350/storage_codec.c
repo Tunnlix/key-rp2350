@@ -23,15 +23,17 @@ AuthStatus rp2350_store_metadata_encode(const AuthCredential *c,Rp2350StoreHash 
     if (!c || !out || !length) return AUTH_INVALID_ARGUMENT;
     AuthStatus status=metadata_valid(c,hash,ctx); if(status!=AUTH_OK) return status;
     size_t sizes[]={c->user_id_length,c->rp_id_length,c->rp_name_length,c->user_name_length,c->user_display_name_length};
-    size_t total=128; for(size_t i=0;i<5;i++) total+=sizes[i];
+    size_t total=128+c->cred_blob_length; for(size_t i=0;i<5;i++) total+=sizes[i];
     if(capacity<total) return AUTH_CAPACITY;
-    memset(out,0,128); store_put16(out,1); out[2]=c->discoverable ? 1U : 0U; out[3]=c->cred_protect;
+    memset(out,0,128); store_put16(out,(c->cred_blob_length || c->large_blob_key) ? 2U : 1U);
+    out[2]=(c->discoverable ? 1U : 0U) | (c->large_blob_key ? 2U : 0U); out[22]=c->cred_blob_length; out[3]=c->cred_protect;
     store_put32(out+4,(uint32_t)c->algorithm); store_put32(out+8,c->signature_count);
     for(size_t i=0;i<5;i++) store_put16(out+12+2*i,(uint16_t)sizes[i]);
     store_put64(out+24,c->creation_order); memcpy(out+32,c->credential_id,32);
     memcpy(out+64,c->rp_id_hash,32); memcpy(out+96,c->key.bytes,32);
     const uint8_t *fields[]={c->user_id,c->rp_id,c->rp_name,c->user_name,c->user_display_name};
     size_t offset=128; for(size_t i=0;i<5;i++) { memcpy(out+offset,fields[i],sizes[i]); offset+=sizes[i]; }
+    memcpy(out+offset,c->cred_blob,c->cred_blob_length);
     *length=total; return AUTH_OK;
 }
 AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHash hash,void *ctx,AuthCredential *c) {
@@ -39,18 +41,20 @@ AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHa
     auth_secure_zero(c,sizeof(*c));
     if (!in) return AUTH_INVALID_ARGUMENT;
     if(!supported()) return AUTH_UNSUPPORTED;
-    if(n<128 || n>RP2350_STORE_METADATA_MAX || store_u16(in)!=1 || in[2]>1 ||
-        store_u16(in+22) || (store_u32(in+4)!=UINT32_C(0xfffffff9) && store_u32(in+4)!=UINT32_C(0xfffffff8))) return AUTH_BAD_DATA;
-    size_t limits[]={64,AUTH_RP_ID_MAX_SIZE,64,64,64}, sizes[5],total=128;
+    if(n<128 || n>RP2350_STORE_METADATA_MAX || (store_u16(in)!=1 && store_u16(in)!=2) || (in[2]&~3U) ||
+        in[22]>32 || in[23] || (store_u16(in)==1 && ((in[2]&2U) || in[22])) || (store_u32(in+4)!=UINT32_C(0xfffffff9) && store_u32(in+4)!=UINT32_C(0xfffffff8))) return AUTH_BAD_DATA;
+    size_t limits[]={64,AUTH_RP_ID_MAX_SIZE,64,64,64}, sizes[5],total=128+in[22];
     for(size_t i=0;i<5;i++) { sizes[i]=store_u16(in+12+2*i); if(sizes[i]>limits[i]) return AUTH_BAD_DATA; total+=sizes[i]; }
     if(total!=n) return AUTH_BAD_DATA;
-    c->discoverable=in[2]!=0; c->cred_protect=in[3]; c->algorithm=store_u32(in+4)==UINT32_C(0xfffffff9) ? AUTH_COSE_ALG_ES256 : AUTH_COSE_ALG_EDDSA;
+    c->cred_blob_length=in[22]; c->large_blob_key=(in[2]&2U)!=0;
+    c->discoverable=(in[2]&1U)!=0; c->cred_protect=in[3]; c->algorithm=store_u32(in+4)==UINT32_C(0xfffffff9) ? AUTH_COSE_ALG_ES256 : AUTH_COSE_ALG_EDDSA;
     c->signature_count=store_u32(in+8); c->creation_order=store_u64(in+24);
     c->user_id_length=(uint8_t)sizes[0]; c->rp_id_length=(uint16_t)sizes[1];
     c->rp_name_length=(uint8_t)sizes[2]; c->user_name_length=(uint8_t)sizes[3]; c->user_display_name_length=(uint8_t)sizes[4];
     memcpy(c->credential_id,in+32,32); memcpy(c->rp_id_hash,in+64,32); memcpy(c->key.bytes,in+96,32);
     uint8_t *fields[]={c->user_id,c->rp_id,c->rp_name,c->user_name,c->user_display_name};
     size_t offset=128; for(size_t i=0;i<5;i++) { memcpy(fields[i],in+offset,sizes[i]); offset+=sizes[i]; }
+    memcpy(c->cred_blob,in+offset,c->cred_blob_length);
     AuthStatus status=metadata_valid(c,hash,ctx);
     if(status!=AUTH_OK) auth_secure_zero(c,sizeof(*c));
     return status;
@@ -59,13 +63,15 @@ AuthStatus rp2350_store_pin_encode(const AuthPinRecord *p,uint8_t out[24]) {
     if(!p || !out) return AUTH_INVALID_ARGUMENT;
     if(!auth_pin_record_valid(p)) return AUTH_BAD_DATA;
     memset(out,0,24); store_put16(out,1); out[2]=p->set ? 1U : 0U; out[3]=p->code_points; out[4]=p->retries;
+    out[5]=p->min_length; out[6]=(p->always_uv ? 1U : 0U) | (p->force_change ? 2U : 0U);
     memcpy(out+8,p->hash,16); return AUTH_OK;
 }
 AuthStatus rp2350_store_pin_decode(const uint8_t *in,size_t n,AuthPinRecord *p) {
     if(!p) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(p,sizeof(*p));
     if(!in) return AUTH_INVALID_ARGUMENT;
-    if(n!=24 || store_u16(in)!=1 || in[2]>1 || !store_zero(in+5,3)) return AUTH_BAD_DATA;
+    if(n!=24 || store_u16(in)!=1 || in[2]>1 || (in[6]&~3U) || in[7]) return AUTH_BAD_DATA;
+    p->min_length=in[5]; p->always_uv=(in[6]&1U)!=0; p->force_change=(in[6]&2U)!=0;
     p->set=in[2]!=0; p->code_points=in[3]; p->retries=in[4]; memcpy(p->hash,in+8,16);
     if(!auth_pin_record_valid(p)) { auth_secure_zero(p,sizeof(*p)); return AUTH_BAD_DATA; }
     return AUTH_OK;

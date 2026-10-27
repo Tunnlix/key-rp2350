@@ -99,9 +99,13 @@ static AuthStatus start_application(void) {
         .submit = rp2350_usb_submit,
         .usb_transport = true
     };
-    static const uint8_t development_aaguid[16] = {0};
+    /* Key onboard model: fa024a59-a2a6-41d9-bd40-ed6a78915bca. Stable across firmware revisions. */
+    static const uint8_t model_aaguid[16] = {0xfa, 0x02, 0x4a, 0x59, 0xa2, 0xa6, 0x41, 0xd9, 0xbd, 0x40, 0xed, 0x6a, 0x78, 0x91, 0x5b, 0xca};
     status = rp2350_application_init(&app.application, &app.crypto, &flash, &io,
-        development_aaguid, 0); /* Actual power-on time; USB reset never renews it. */
+        model_aaguid, 0); /* Actual power-on time; USB reset never renews it. */
+    if(status != AUTH_OK) return status;
+    Rp2350Flash blobs = rp2350_board_blob_flash(&app.flash);
+    status = rp2350_application_configure_blobs(&app.application, &blobs);
     if(status != AUTH_OK) return status;
     return rp2350_usb_init() ? AUTH_OK : AUTH_IO_ERROR;
 }
@@ -113,14 +117,17 @@ static AuthStatus poll_application(void) {
 }
 
 static void update_status_led(AuthStatus status) {
-    uint32_t phase = now_ms(NULL) % 3000U;
+    uint32_t phase = now_ms(NULL);
     bool on;
     if(status != AUTH_OK) {
         on = phase % 100U < 50U; /* Fault: rapid flicker. */
-    } else if(app.application.backend.awaiting_presence || app.application.update.waiting) {
+    } else if(app.application.update.waiting) {
+        uint32_t update_phase = phase % 1500U;
+        on = update_phase < 100U || (update_phase >= 250U && update_phase < 350U);
+    } else if(app.application.backend.awaiting_presence) {
         on = phase % 400U < 200U; /* Waiting for a fresh button press. */
     } else {
-        on = phase < 100U; /* Idle: one brief flash every three seconds. */
+        on = phase % 3000U < 100U; /* Idle: one brief flash every three seconds. */
     }
     gpio_put(PICO_DEFAULT_LED_PIN, !on); /* Onboard LED is active-low. */
 }
