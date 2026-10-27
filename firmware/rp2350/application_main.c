@@ -3,6 +3,7 @@
 #include "board_flash.h"
 #include "board_entropy.h"
 #include "stack_probe.h"
+#include "status_led.h"
 #include "usb_transport.h"
 #include "ctap_device_version.h"
 #include "pico/binary_info.h"
@@ -28,6 +29,9 @@ static struct {
 #define STACK_USE_LIMIT_BYTES 14336U
 #define STACK_CHECK_INTERVAL_MS 50U
 
+static uint64_t presence_operation;
+static void update_status_led(AuthStatus status);
+
 static uint32_t now_ms(void *context) {
     (void)context;
     return to_ms_since_boot(get_absolute_time());
@@ -42,11 +46,11 @@ static void flash_progress(void *context) {
     (void)context;
     watchdog_update();
     rp2350_usb_service(&app.application);
+    update_status_led(AUTH_OK);
 }
 
 static void configure_pins(void) {
-    gpio_init(PICO_DEFAULT_LED_PIN);
-    gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+    rp2350_status_led_init();
     gpio_init(RP2350_BUTTON_GPIO);
     gpio_set_dir(RP2350_BUTTON_GPIO, GPIO_IN);
     gpio_pull_up(RP2350_BUTTON_GPIO);
@@ -66,7 +70,7 @@ static void __attribute__((noreturn)) enter_bootloader(void) {
     auth_secure_zero(&app,sizeof(app));
     clear_startup_marker();
     watchdog_disable();
-    gpio_put(PICO_DEFAULT_LED_PIN,1);
+    rp2350_status_led_close();
     rom_reset_usb_boot(0,0);
 }
 
@@ -78,11 +82,26 @@ static void startup_update_gesture(void) {
         Rp2350BootGestureResult result=rp2350_boot_gesture_sample(&gesture,button_pressed(NULL),now);
         if(result==RP2350_BOOT_NORMAL) return;
         if(result==RP2350_BOOT_ENTER) enter_bootloader();
-        /* Slow pulse while counting; fast pulse means release to enter. */
-        bool on=result==RP2350_BOOT_RELEASE ? now%200U<80U : now%1000U<150U;
-        gpio_put(PICO_DEFAULT_LED_PIN,!on);
+        rp2350_status_led_poll(result == RP2350_BOOT_RELEASE ?
+            RP2350_LED_RECOVERY_RELEASE : RP2350_LED_RECOVERY_HOLD, now);
         sleep_ms(1);
     }
+}
+
+static bool submit_report(void *context, const uint8_t report[64], uint64_t transfer) {
+    const CtaphidDevice *device = &app.application.device;
+    const CtaphidQueuedReport *first = &device->response[0];
+    bool success = presence_operation != 0 && device->flight_id == transfer &&
+        device->flight.final_response && device->flight.owner == presence_operation &&
+        device->response_count != 0 && first->owner == presence_operation &&
+        first->bytes[4] == (0x80U | CTAPHID_COMMAND_CBOR) &&
+        (first->bytes[5] != 0 || first->bytes[6] != 0) && first->bytes[7] == CTAP_STATUS_OK;
+    bool sent = rp2350_usb_submit(context, report, transfer);
+    if(sent && success) {
+        rp2350_status_led_success(now_ms(NULL));
+        presence_operation = 0;
+    }
+    return sent;
 }
 
 static AuthStatus start_application(void) {
@@ -98,7 +117,7 @@ static AuthStatus start_application(void) {
     Rp2350ApplicationIo io = {
         .now_ms = now_ms,
         .pressed = button_pressed,
-        .submit = rp2350_usb_submit,
+        .submit = submit_report,
         .usb_transport = true,
         .cancel_requested = rp2350_usb_cancel_requested
     };
@@ -114,25 +133,30 @@ static AuthStatus start_application(void) {
 }
 
 static AuthStatus poll_application(void) {
+    if(app.application.backend.pending && app.application.backend.awaiting_presence)
+        presence_operation = app.application.backend.operation_id;
+    else if(app.application.device.phase == CTAPHID_DEVICE_IDLE ||
+        presence_operation != app.application.device.transaction_id)
+        presence_operation = 0;
     CtaphidDeviceResult result = rp2350_usb_poll(&app.application);
     if(result != CTAPHID_DEVICE_OK && result != CTAPHID_DEVICE_IGNORED) return AUTH_IO_ERROR;
     return rp2350_application_ready(&app.application) ? AUTH_OK : AUTH_IO_ERROR;
 }
 
 static void update_status_led(AuthStatus status) {
-    uint32_t phase = now_ms(NULL);
-    bool on;
+    Rp2350LedState state;
     if(status != AUTH_OK) {
-        on = phase % 100U < 50U; /* Fault: rapid flicker. */
+        state = RP2350_LED_FAULT;
+    } else if(!app.application.initialized) {
+        state = RP2350_LED_STARTING;
     } else if(app.application.update.waiting) {
-        uint32_t update_phase = phase % 1500U;
-        on = update_phase < 100U || (update_phase >= 250U && update_phase < 350U);
+        state = RP2350_LED_UPDATE;
     } else if(app.application.backend.awaiting_presence) {
-        on = phase % 400U < 200U; /* Waiting for a fresh button press. */
+        state = RP2350_LED_TOUCH;
     } else {
-        on = phase % 3000U < 100U; /* Idle: one brief flash every three seconds. */
+        state = RP2350_LED_IDLE;
     }
-    gpio_put(PICO_DEFAULT_LED_PIN, !on); /* Onboard LED is active-low. */
+    rp2350_status_led_poll(state, now_ms(NULL));
 }
 
 int main(void) {

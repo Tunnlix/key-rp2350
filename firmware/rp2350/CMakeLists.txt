@@ -63,14 +63,17 @@ function(rp2350_configure_image image)
     pico_add_extra_outputs(${image})
 endfunction()
 
-add_executable(rp2350_application application_main.c usb_transport.c
+add_executable(rp2350_application application_main.c status_led.c usb_transport.c
     usb_descriptors.c presence.c entropy.c board_entropy.c stack_probe.c)
 target_link_libraries(rp2350_application PRIVATE rp2350_storage_codec
-    rp2350_board_flash hardware_watchdog tinyusb_device pico_unique_id pico_bootrom)
+    rp2350_board_flash hardware_watchdog tinyusb_device pico_unique_id pico_bootrom pico_status_led)
+target_compile_definitions(rp2350_application PRIVATE
+    PICO_COLORED_STATUS_LED_USE_DEFAULT_ALARM_POOL=0
+    PICO_COLORED_STATUS_LED_RESET_DELAY_US=300)
 target_include_directories(rp2350_application SYSTEM PRIVATE "${PICO_TINYUSB_PATH}/src")
 pico_set_program_name(rp2350_application "Key")
 rp2350_configure_image(rp2350_application)
-set_source_files_properties(application_main.c usb_transport.c usb_descriptors.c
+set_source_files_properties(application_main.c status_led.c usb_transport.c usb_descriptors.c
     presence.c entropy.c board_entropy.c stack_probe.c board_flash.c flash_geometry.c flash_guard.c
     PROPERTIES COMPILE_OPTIONS "-std=c17;-Wall;-Wextra;-Wpedantic;-Werror")
 
