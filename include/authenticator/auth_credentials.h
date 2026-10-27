@@ -103,6 +103,9 @@ AuthStatus auth_credentials_create_resident_prepared(AuthCredentialService *serv
     const AuthCredential *metadata, AuthCredentialPrepare prepare, void *context,
     AuthCredential *credential, uint8_t public_key[65]);
 AuthStatus auth_credentials_enumerate(AuthCredentialService *service, size_t index, AuthCredential *credential);
+/* Enumerate only discoverable credentials for this RP, in backend order. */
+AuthStatus auth_credentials_find_discoverable(AuthCredentialService *service,
+    const uint8_t rp_hash[32], size_t index, AuthCredential *credential);
 AuthStatus auth_credentials_update_user(AuthCredentialService *service,
     const AuthCredential *credential);
 

@@ -61,4 +61,6 @@ Thumbs.db
 # Keep .vscode configuration tracked for shared build/debug setup.
 
 # Keep mutable project planning outside the public repository.
-/docs/roadmap.md
+/docs/*
+!/docs/third-party-notices.md
+!/docs/building.md

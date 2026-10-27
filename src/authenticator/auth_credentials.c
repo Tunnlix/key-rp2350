@@ -244,6 +244,21 @@ AuthStatus auth_credentials_enumerate(AuthCredentialService *service, size_t ind
     return lookup_end(service, status);
 }
 
+AuthStatus auth_credentials_find_discoverable(AuthCredentialService *service,
+    const uint8_t rp_hash[32], size_t index, AuthCredential *credential)
+{
+    if (service == NULL || rp_hash == NULL || credential == NULL || service->storage.find_rp == NULL || !lookup_begin(service))
+        return AUTH_INVALID_ARGUMENT;
+    AuthCredential *found = &service->lookup_scratch;
+    AuthStatus status = service->storage.find_rp(service->storage.context, rp_hash, true, index, found);
+    if (status == AUTH_OK) {
+        if (!auth_credential_valid(found) || !found->discoverable || memcmp(found->rp_id_hash, rp_hash, 32U) != 0)
+            status = AUTH_BAD_DATA;
+        else *credential = *found;
+    }
+    return lookup_end(service, status);
+}
+
 AuthStatus auth_credentials_update_user(AuthCredentialService *service, const AuthCredential *credential)
 {
     if (!auth_credentials_resident_supported(service) || service->creation_busy ||

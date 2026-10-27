@@ -195,7 +195,12 @@ static uint8_t begin_enumeration(AuthCredentialService *service, CtapClientPin *
     size_t resident_count = 0U;
     uint8_t (*rp_hashes)[32] = state->scratch.rp_hashes;
     for (size_t i = 0U; i < service->storage.capacity; ++i) {
-        AuthCredential *found = &state->scratch.record; AuthStatus lookup = auth_credentials_enumerate(service, i, found);
+        AuthCredential *found = &state->scratch.record;
+        /* Use the RP index rather than rereading every other site's metadata
+         * for each RP in a manager's unlock/inventory sequence. */
+        AuthStatus lookup = command == CM_ENUMERATE_CREDENTIALS_BEGIN ?
+            auth_credentials_find_discoverable(service, request->rp_hash, i, found) :
+            auth_credentials_enumerate(service, i, found);
         if (lookup == AUTH_NOT_FOUND) break;
         if (lookup != AUTH_OK) { ctap_credential_management_clear(state); return CTAP_STATUS_OTHER; }
         if (!found->discoverable) continue;

@@ -49,6 +49,20 @@ static AuthStatus refresh(Rp2350StoreProvider *p,bool exact) {
     if(exact && !same_version(&v,&p->version)) return AUTH_BAD_DATA;
     p->cache=w->source.records; p->version=v; p->journal_end=w->source.journal_end; return AUTH_OK;
 }
+/* Recovery authenticates the compact index once. While this provider is the
+ * sole writer, reads need fresh authority and the selected authenticated frame,
+ * not a replay of every other credential. Scratch (including seal keys) is
+ * still wiped at callback exit. A changed authority requires fresh recovery. */
+static AuthStatus authority(Rp2350StoreProvider *p,Rp2350StoreBootResult *source,Rp2350StoreBootWorkspace *w) {
+    AuthStatus status=rp2350_store_root_pair_open_internal(&source->root,&p->flash,&p->config.policy,
+        p->config.resolve,p->config.root_context,&w->io.roots);
+    if(status==AUTH_OK) status=rp2350_store_select_internal(&source->selection,&p->flash,&source->root,&w->io.selectors);
+    if(status==AUTH_OK && (source->root.root.serial!=p->version.root_serial ||
+        source->selection.selector.serial!=p->version.selector_serial || source->selection.selector.state!=1 ||
+        source->selection.selector.generation!=p->version.generation ||
+        !store_equal(source->root.root.epoch,p->version.epoch,16))) status=AUTH_BAD_DATA;
+    return status==AUTH_NOT_FOUND ? AUTH_IO_ERROR : status;
+}
 static bool pending_key(const Rp2350StoreProvider *p) {
     for(size_t k=0;k<p->cache.key_count;k++) {
         if(p->cache.keys[k].retired) continue;
@@ -90,12 +104,31 @@ static AuthStatus commit(Rp2350StoreProvider *p,const Rp2350StoreTransaction *tx
     Rp2350StoreTransaction pending;
     if(status==AUTH_OK) status=rp2350_store_transaction_decode(1,p->workspace->pending,length,&pending);
     if(status!=AUTH_OK) return status;
-    Rp2350StoreMutationReceipt receipt;
-    status=rp2350_store_mutation_commit_internal(&p->writer,&receipt,&p->flash,&p->config,&p->version,&pending,&p->workspace->phase.mutation);
+    Rp2350StoreMutationWorkspace *w=&p->workspace->phase.mutation;
+    p->writer.locked=true;
+    status=authority(p,&w->source,&w->boot);
+    if(status==AUTH_OK && p->cache.logical_sequence!=p->version.logical_sequence) status=AUTH_BAD_DATA;
+    if(status==AUTH_OK) status=rp2350_store_recovery_begin(&w->boot.recovery,&p->cache,p->version.generation,
+        p->version.epoch,p->config.hash,p->config.key_inspect,p->config.records_context);
+    Rp2350StoreIdentity id={.class_id=1,.sequence=p->cache.last_sequence+1U,.generation=p->version.generation,
+        .offset=w->source.selection.arena_base+p->journal_end};
+    memcpy(id.epoch,p->version.epoch,16);
+    if(status==AUTH_OK) status=rp2350_store_recovery_apply(&w->boot.recovery,&id,&pending);
+    if(status!=AUTH_OK) return status;
+    /* The cursor and index came from full recovery or our last verified append.
+     * Append still authenticates the entire existing log, rejects holes/stale
+     * cursors and verifies every programmed page plus the new frame before ACK.
+     * Publish the staged index only after that durable verification succeeds. */
+    w->log=(Rp2350StoreLog){.flash=p->flash,.crypto=&w->source.root.seal,
+        .base=w->source.selection.arena_base,.size=RP2350_STORE_ARENA_SIZE,.end=p->journal_end,
+        .generation=p->version.generation,.next_sequence=id.sequence,.initialized=true};
+    memcpy(w->log.epoch,p->version.epoch,16);
+    status=rp2350_store_log_append_internal(&w->log,1,p->workspace->pending,length,&w->boot.io.log);
     if(status==AUTH_OK) {
-        p->version=receipt.version; status=refresh(p,true);
+        p->cache=w->boot.recovery.staged; p->version.logical_sequence=p->cache.logical_sequence;
+        p->journal_end=w->log.end; p->writer.locked=false;
     }
-    auth_secure_zero(&receipt,sizeof(receipt)); return status;
+    return status;
 }
 static AuthStatus maintenance(Rp2350StoreProvider *p) {
     Rp2350StoreMaintenance receipt;
@@ -132,11 +165,10 @@ static size_t index_of(const Rp2350StoreProvider *p,const uint8_t id[32]) {
     return p->cache.metadata_count;
 }
 static AuthStatus load_metadata(Rp2350StoreProvider *p,size_t index,AuthCredential *out) {
-    AuthStatus status=refresh(p,true);
-    if(status!=AUTH_OK) return status;
     if(index>=p->cache.metadata_count) return AUTH_BAD_DATA;
     Rp2350StoreCheckpointWorkspace *w=&p->workspace->phase.recovery;
-    status=rp2350_store_record_read_internal(&w->reader,&p->flash,&p->config,&w->source.root.seal,
+    AuthStatus status=authority(p,&w->source,&w->boot);
+    if(status==AUTH_OK) status=rp2350_store_record_read_internal(&w->reader,&p->flash,&p->config,&w->source.root.seal,
         &w->source.selection,&p->cache.metadata[index],NULL,&w->boot.io.log);
     if(status==AUTH_OK) *out=w->reader.credential;
     return status;
@@ -146,11 +178,9 @@ static AuthStatus load_key(Rp2350StoreProvider *p,const AuthKeyHandle *handle) {
     size_t k=0; while(k<p->cache.key_count && !store_equal(p->cache.keys[k].handle.bytes,handle->bytes,32)) k++;
     if(k==p->cache.key_count) return load_nonresident_key(p,handle);
     if(p->cache.keys[k].retired) return AUTH_NOT_FOUND;
-    AuthStatus status=refresh(p,true);
-    if(status!=AUTH_OK) return status;
-    if(k>=p->cache.key_count || !store_equal(p->cache.keys[k].handle.bytes,handle->bytes,32) || p->cache.keys[k].retired) return AUTH_BAD_DATA;
     Rp2350StoreCheckpointWorkspace *w=&p->workspace->phase.recovery;
-    status=rp2350_store_record_read_internal(&w->reader,&p->flash,&p->config,&w->source.root.seal,
+    AuthStatus status=authority(p,&w->source,&w->boot);
+    if(status==AUTH_OK) status=rp2350_store_record_read_internal(&w->reader,&p->flash,&p->config,&w->source.root.seal,
         &w->source.selection,NULL,&p->cache.keys[k],&w->boot.io.log);
     if(status==AUTH_OK) status=rp2350_crypto_load_record_internal(p->crypto,w->reader.key);
     if(status==AUTH_OK) {

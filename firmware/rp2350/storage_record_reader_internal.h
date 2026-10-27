@@ -7,7 +7,9 @@ typedef struct {
     uint8_t key[136],canonical[RP2350_STORE_METADATA_MAX];
 } Rp2350StoreRecordWorkspace;
 /* Read one record selected by an authenticated recovered index. Caller first
- * authenticates current authority/full replay and freezes mutations. Verify
+ * authenticates current authority and freezes mutations. The index comes from
+ * full recovery and subsequent verified appends by the sole serialized writer.
+ * Verify
  * physical offset, generation, sequence, class, authentication and content digest
  * before publishing scratch. No unverified pointer becomes a record lookup.
  * No raw offset or unauthenticated entry may select credential material.

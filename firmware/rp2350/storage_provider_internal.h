@@ -46,7 +46,11 @@ typedef struct {
  * live service and clear keys/cache. Cached metadata is valid only while this is
  * the sole serialized owner; external writes require close + fresh recover.
  * Key allocation commits the private record and handle high-water before output.
- * Metadata/PIN/counter mutations use the version-checked full-replay writer.
+ * Reads reauthenticate root/selector authority and the selected frame against
+ * the recovered index. Mutations stage typed semantics against that index;
+ * append authenticates the existing journal/cursor and verifies the durable
+ * new frame before publishing the staged index. Full replay remains mandatory
+ * at recovery and after compaction, not for every record read or PIN write.
  * Preflight compacts before journal exhaustion, reserving two maximum frames
  * for a serialized creation. A durable unreferenced staging key prevents
  * compaction until its metadata is committed or the key is retired. Pending
