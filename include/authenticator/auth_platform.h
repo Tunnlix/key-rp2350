@@ -17,6 +17,7 @@
 #define AUTH_P256_PUBLIC_KEY_SIZE 65U /* SEC1 uncompressed: 04 || X[32] || Y[32]. */
 #define AUTH_ES256_DER_MAX_SIZE 72U
 #define AUTH_COSE_ALG_ES256 (-7)
+#define AUTH_COSE_ALG_EDDSA (-8)
 
 typedef enum {
     AUTH_OK = 0,
@@ -55,6 +56,13 @@ typedef struct {
     AuthStatus (*sign_p256_digest)(void *, const AuthKeyHandle *, const uint8_t digest[32],
         uint8_t signature[AUTH_ES256_DER_MAX_SIZE], size_t *signature_length);
     AuthStatus (*destroy_key)(void *, const AuthKeyHandle *);
+    /* Optional complete Ed25519 pair. Public-key transport uses the existing
+     * 65-byte buffer: Ed25519 occupies the first 32 bytes, with 33 zero bytes.
+     * Sign the original message (PureEd25519), never a SHA-256 digest or Ed25519ph.
+     * Existing public_key/destroy_key callbacks must handle both key kinds. */
+    AuthStatus (*generate_ed25519)(void *, AuthKeyHandle *, uint8_t public_key[65]);
+    AuthStatus (*sign_ed25519)(void *, const AuthKeyHandle *, const uint8_t *, size_t,
+        uint8_t signature[64]);
 } AuthCrypto;
 
 typedef struct {
@@ -102,6 +110,9 @@ typedef struct {
     AuthStatus (*update_user)(void *, const AuthCredential *, const uint8_t state[16]);
 } AuthStorage;
 
+bool auth_algorithm_valid(int32_t algorithm);
+/* Encoding/container checks; the provider is responsible for curve validity. */
+bool auth_public_key_valid(int32_t algorithm, const uint8_t public_key[65]);
 bool auth_credential_valid(const AuthCredential *credential);
 bool auth_key_handle_valid(const AuthKeyHandle *key);
 bool auth_text_valid(const uint8_t *data, size_t length);

@@ -46,3 +46,13 @@ target_include_directories(rp2350_ctaes PUBLIC "${crypto_dir}/vendor/ctaes")
 target_compile_options(rp2350_ctaes PRIVATE -Wall -Wextra -Wpedantic -Werror
     -fstack-usage -ffunction-sections -fdata-sections)
 target_link_libraries(rp2350_crypto PRIVATE rp2350_ctaes)
+
+# PureEd25519 only; no alternate RNG, heap or key storage is introduced.
+add_library(rp2350_monocypher STATIC
+    "${crypto_dir}/vendor/monocypher/monocypher.c"
+    "${crypto_dir}/vendor/monocypher/monocypher-ed25519.c")
+set_target_properties(rp2350_monocypher PROPERTIES C_STANDARD 17 C_EXTENSIONS OFF)
+target_include_directories(rp2350_monocypher PUBLIC "${crypto_dir}/vendor/monocypher")
+target_compile_options(rp2350_monocypher PRIVATE -Wall -Wextra -Wpedantic -Werror
+    -fstack-usage -ffunction-sections -fdata-sections)
+target_link_libraries(rp2350_crypto PRIVATE rp2350_monocypher)

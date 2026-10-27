@@ -87,3 +87,56 @@ uint8_t ctap_pin_protocol_verify(const AuthSecretCrypto *crypto, const uint8_t k
     auth_secure_zero(expected, sizeof expected);
     return status;
 }
+
+size_t ctap_pin_protocol_prefix(uint8_t protocol) { return protocol == 1U ? 0U : 16U; }
+size_t ctap_pin_protocol_auth_length(uint8_t protocol) { return protocol == 1U ? 16U : 32U; }
+
+uint8_t ctap_pin_protocol_shared_version(const AuthCrypto *base, const AuthSecretCrypto *crypto,
+    uint8_t protocol, const uint8_t peer[65], uint8_t keys[64])
+{
+    if (protocol == 0U || protocol == 2U) return ctap_pin_protocol_shared(crypto, peer, keys);
+    if (protocol != 1U || base == NULL || base->sha256 == NULL) return CTAP_STATUS_INVALID_PARAMETER;
+    uint8_t z[32] = {0};
+    AuthStatus agreement = crypto->ecdh(crypto->context, peer, z);
+    uint8_t status = CTAP_STATUS_OTHER;
+    if (agreement == AUTH_BAD_DATA || agreement == AUTH_INVALID_ARGUMENT) status = CTAP_STATUS_INVALID_PARAMETER;
+    else if (agreement == AUTH_OK && base->sha256(base->context, z, sizeof z, keys) == AUTH_OK) {
+        memcpy(keys + 32U, keys, 32U); status = CTAP_STATUS_OK;
+    }
+    auth_secure_zero(z, sizeof z); return status;
+}
+
+uint8_t ctap_pin_protocol_verify_version(const AuthSecretCrypto *crypto, uint8_t protocol,
+    const uint8_t keys[64], const uint8_t *message, size_t length, const uint8_t *mac, size_t n)
+{
+    if (protocol == 0U || protocol == 2U) return ctap_pin_protocol_verify(crypto, keys, message, length, mac, n);
+    if (protocol != 1U || n != 16U) return CTAP_STATUS_PIN_AUTH_INVALID;
+    uint8_t expected[32] = {0}; uint8_t status = CTAP_STATUS_OTHER;
+    if (crypto->hmac_sha256(crypto->context, keys, 32U, message, length, expected) == AUTH_OK)
+        status = ctap_pin_equal(expected, mac, n) ? CTAP_STATUS_OK : CTAP_STATUS_PIN_AUTH_INVALID;
+    auth_secure_zero(expected, sizeof expected); return status;
+}
+
+uint8_t ctap_pin_protocol_decrypt(const AuthSecretCrypto *crypto, uint8_t protocol,
+    const uint8_t keys[64], const uint8_t *input, size_t length, uint8_t *out)
+{
+    if (protocol > 2U) return CTAP_STATUS_INVALID_PARAMETER;
+    size_t prefix = ctap_pin_protocol_prefix(protocol);
+    if (!input || !out || length <= prefix) return CTAP_STATUS_INVALID_PARAMETER;
+    size_t plain = length - prefix;
+    if (plain != 16U && plain != 32U && plain != 64U) return CTAP_STATUS_INVALID_PARAMETER;
+    uint8_t iv[16] = {0};
+    return crypto->aes256_cbc(crypto->context, false, keys + 32U, prefix ? input : iv,
+        input + prefix, plain, out) == AUTH_OK ? CTAP_STATUS_OK : CTAP_STATUS_INVALID_PARAMETER;
+}
+
+uint8_t ctap_pin_protocol_encrypt(const AuthCrypto *base, const AuthSecretCrypto *crypto, uint8_t protocol,
+    const uint8_t keys[64], const uint8_t *input, size_t length, uint8_t *out)
+{
+    if (protocol > 2U || !base || !input || !out || (length != 16U && length != 32U && length != 64U))
+        return CTAP_STATUS_INVALID_PARAMETER;
+    uint8_t iv[16] = {0}; size_t prefix = ctap_pin_protocol_prefix(protocol);
+    if (prefix && base->random(base->context, out, prefix) != AUTH_OK) return CTAP_STATUS_OTHER;
+    return crypto->aes256_cbc(crypto->context, true, keys + 32U, prefix ? out : iv,
+        input, length, out + prefix) == AUTH_OK ? CTAP_STATUS_OK : CTAP_STATUS_OTHER;
+}

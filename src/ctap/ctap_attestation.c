@@ -27,10 +27,10 @@ bool ctap_attestation_encode_id(AuthCredentialService *service,
     uint8_t *output, size_t capacity, size_t *length)
 {
     if (service == NULL || !auth_credential_valid(credential) || public_key == NULL ||
-        public_key[0] != 4U || client_data_hash == NULL || aaguid == NULL || output == NULL || length == NULL ||
+        !auth_public_key_valid(credential->algorithm, public_key) || client_data_hash == NULL || aaguid == NULL || output == NULL || length == NULL ||
         id == NULL || !auth_credential_id_length_valid(id_length)) return false;
     if (hmac_secret_mc_length != 0U && (hmac_secret_mc == NULL ||
-        (hmac_secret_mc_length != 48U && hmac_secret_mc_length != 80U))) return false;
+        (hmac_secret_mc_length != 32U && hmac_secret_mc_length != 48U && hmac_secret_mc_length != 64U && hmac_secret_mc_length != 80U))) return false;
     bool extensions = hmac_secret != NULL || cred_protect_requested || hmac_secret_mc_length != 0U;
     /* Fixed portion, extensions, and trailing clientDataHash for signing. */
     uint8_t data[336U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE] = {0};
@@ -44,7 +44,7 @@ bool ctap_attestation_encode_id(AuthCredentialService *service,
     memcpy(data + 55U, id, id_length);
     CborWriter cose;
     cbor_writer_init(&cose, data + 55U + id_length, 77U);
-    bool ok = ctap_public_key_write(&cose, public_key);
+    bool ok = ctap_public_key_write_algorithm(&cose, credential->algorithm, public_key);
     if (!ok) return false;
     size_t data_length = 55U + id_length + cose.length;
     if (extensions) {
@@ -61,13 +61,11 @@ bool ctap_attestation_encode_id(AuthCredentialService *service,
         if (!extensions_ok) return false;
         data_length += extension.length;
     }
-    uint8_t signature[72], digest[32];
+    uint8_t signature[72];
     size_t signature_length = 0U;
     if (!omit) {
         memcpy(data + data_length, client_data_hash, 32U);
-        if (service->crypto.sha256(service->crypto.context, data, data_length + 32U, digest) != AUTH_OK ||
-            service->crypto.sign_p256_digest(service->crypto.context, &credential->key,
-                digest, signature, &signature_length) != AUTH_OK ||
+        if (auth_credentials_sign_key(service, credential, data, data_length + 32U, signature, &signature_length) != AUTH_OK ||
             signature_length == 0U || signature_length > sizeof signature) return false;
     }
     uint8_t encoded[512U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
@@ -77,7 +75,7 @@ bool ctap_attestation_encode_id(AuthCredentialService *service,
         cbor_write_uint(&writer, 1U) && cbor_write_text(&writer, omit ? "none" : "packed") &&
         cbor_write_uint(&writer, 2U) && cbor_write_bytes(&writer, data, data_length) &&
         cbor_write_uint(&writer, 3U) && cbor_write_map(&writer, omit ? 0U : 2U);
-    if (!omit) ok = ok && cbor_write_text(&writer, "alg") && cbor_write_int(&writer, -7) &&
+    if (!omit) ok = ok && cbor_write_text(&writer, "alg") && cbor_write_int(&writer, credential->algorithm) &&
         cbor_write_text(&writer, "sig") && cbor_write_bytes(&writer, signature, signature_length);
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);

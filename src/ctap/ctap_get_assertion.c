@@ -47,7 +47,6 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
      * Optional encrypted extension map is between counter and clientDataHash.
      * UV reflects authorization; no AT/backup flags for these local credentials. */
     uint8_t *signed_data = workspace->scratch.phase.finish.signed_data;
-    uint8_t *digest = workspace->scratch.phase.finish.digest;
     uint8_t *signature = workspace->scratch.phase.finish.signature;
     memcpy(signed_data, prepared->rp_id_hash, 32U);
     signed_data[32] = (prepared->user_presence_required ? 1U : 0U) | (prepared->user_verified ? 4U : 0U) |
@@ -66,9 +65,8 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     for (size_t i = 0U; i < 4U; ++i) signed_data[33U + i] = (uint8_t)(counter >> (24U - 8U * i));
     memcpy(signed_data + data_length, prepared->client_data_hash, 32U);
     size_t signature_length = 0U;
-    if (service->crypto.sha256(service->crypto.context, signed_data, data_length + 32U, digest) != AUTH_OK ||
-        auth_credentials_sign_digest_id(service, prepared->credential_id, prepared->credential_id_length, prepared->rp_id_hash,
-            digest, signature, &signature_length) != AUTH_OK || signature_length == 0U || signature_length > sizeof workspace->scratch.phase.finish.signature)
+    if (auth_credentials_sign_message_id(service, prepared->credential_id, prepared->credential_id_length, prepared->rp_id_hash,
+            signed_data, data_length + 32U, signature, &signature_length) != AUTH_OK || signature_length == 0U || signature_length > sizeof workspace->scratch.phase.finish.signature)
         return CTAP_STATUS_OTHER;
     uint8_t *encoded = workspace->scratch.phase.finish.encoded;
     CborWriter writer; cbor_writer_init(&writer, encoded, sizeof workspace->scratch.phase.finish.encoded);

@@ -73,11 +73,20 @@ bool ctap_credential_descriptor_write_id(CborWriter *writer, const uint8_t *id, 
         cbor_write_text(writer, "type") && cbor_write_text(writer, "public-key");
 }
 
-bool ctap_public_key_write(CborWriter *writer, const uint8_t key[65])
+bool ctap_public_key_write_algorithm(CborWriter *writer, int32_t algorithm, const uint8_t key[65])
 {
+    if (!auth_public_key_valid(algorithm, key)) return false;
+    if (algorithm == AUTH_COSE_ALG_EDDSA) return cbor_write_map(writer, 4U) &&
+        cbor_write_int(writer, 1) && cbor_write_int(writer, 1) &&
+        cbor_write_int(writer, 3) && cbor_write_int(writer, AUTH_COSE_ALG_EDDSA) &&
+        cbor_write_int(writer, -1) && cbor_write_int(writer, 6) &&
+        cbor_write_int(writer, -2) && cbor_write_bytes(writer, key, 32U);
     return key[0] == 4U && cbor_write_map(writer, 5U) &&
         cbor_write_int(writer, 1) && cbor_write_int(writer, 2) && cbor_write_int(writer, 3) && cbor_write_int(writer, -7) &&
         cbor_write_int(writer, -1) && cbor_write_int(writer, 1) &&
         cbor_write_int(writer, -2) && cbor_write_bytes(writer, key + 1U, 32U) &&
         cbor_write_int(writer, -3) && cbor_write_bytes(writer, key + 33U, 32U);
 }
+
+bool ctap_public_key_write(CborWriter *writer, const uint8_t key[65])
+{ return ctap_public_key_write_algorithm(writer, AUTH_COSE_ALG_ES256, key); }

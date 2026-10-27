@@ -12,7 +12,7 @@
 #define CTAP_PIN_INITIAL_TIMEOUT_MS 30000U
 #define CTAP_PIN_MAX_TIMEOUT_MS 600000U
 
-/* Protocol 2 PINs and volatile permission-scoped tokens. No built-in UV or
+/* Protocol 1/2 PINs and volatile permission-scoped tokens. No built-in UV or
  * persistent tokens. Initialize at real power-on; INIT cannot reset retries.
  * Poll on the injected device clock, including while idle/waiting for touch.
  * USB initial-use limit 30 s, total lifetime 600 s; no cached user presence. */
@@ -31,7 +31,7 @@ typedef struct {
 
 /* Only public/ciphertext data, safe to discard on CANCEL/resynchronization. */
 typedef struct {
-    uint8_t subcommand;
+    uint8_t subcommand, protocol; /* Zero is the former internal protocol-2 default. */
     uint8_t peer[65], new_pin_enc[80], pin_hash_enc[32], auth[32];
     size_t auth_length;
     uint64_t permissions;
@@ -42,6 +42,7 @@ typedef struct {
 
 typedef struct {
     bool present, probe;
+    uint8_t protocol; /* Wire parser sets 1/2; zero preserves internal protocol 2. */
     uint8_t mac[32];
     uint64_t token_generation;
 } CtapPinAuth;
@@ -68,7 +69,8 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
 uint8_t ctap_pin_auth_parse(CtapClientPin *pin, const CborValue *param,
     const CborValue *protocol, CtapPinAuth *auth);
-/* mark_used only after the entire request is validated. Revalidate the same
+/* Legacy tokens bind to the first RP after a valid token MAC, even if later
+ * credential lookup fails. mark_used only after the entire request is validated. Revalidate the same
  * token generation after waiting for UP, before key/counter/signing effects. */
 uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
     const uint8_t rp_hash[32], const uint8_t client_data_hash[32], uint8_t permission,
@@ -76,6 +78,8 @@ uint8_t ctap_client_pin_authorize(CtapClientPin *pin, CtapPinAuth *auth,
 /* CM MACs cover subcommand || exact canonical parameters. NULL rp_hash means
  * an unscoped token is required. Scope is checked again against delete/update
  * targets. Does not consume permissions: CM never collects cached/fresh UP. */
+uint8_t ctap_client_pin_authorize_management_version(CtapClientPin *, uint8_t protocol, const uint8_t *rp_hash,
+    const uint8_t *, size_t, const uint8_t *, uint32_t now_ms);
 uint8_t ctap_client_pin_authorize_management(CtapClientPin *pin, const uint8_t *rp_hash,
     const uint8_t *message, size_t message_length, const uint8_t mac[32], uint32_t now_ms);
 

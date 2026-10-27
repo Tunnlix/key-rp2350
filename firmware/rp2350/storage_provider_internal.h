@@ -40,7 +40,7 @@ typedef struct {
  * Recover validates roots/selector/full log, performs authenticated compaction
  * maintenance, checks the entire inactive bank and builds a compact authenticated
  * index. Full metadata and private records are loaded by selected frame only
- * when requested. Private points are recomputed with blinding before use; working
+ * when requested. Public keys are recomputed before use (P-256 uses blinding); working
  * keys and scratch are wiped at every callback exit. No repair
  * or provisioning of LOCKED/blank/RESETTING storage. All mutation errors revoke
  * live service and clear keys/cache. Cached metadata is valid only while this is

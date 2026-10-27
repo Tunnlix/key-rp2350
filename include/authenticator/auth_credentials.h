@@ -45,6 +45,16 @@ bool auth_credentials_configure_nonresident(AuthCredentialService *,const AuthNo
 bool auth_credentials_nonresident_supported(const AuthCredentialService *);
 void auth_credentials_release_nonresident(AuthCredentialService *);
 
+bool auth_credentials_algorithm_supported(const AuthCredentialService *, int32_t);
+AuthStatus auth_credentials_generate_key(AuthCredentialService *, int32_t, AuthKeyHandle *, uint8_t public_key[65]);
+/* Sign original authenticatorData || clientDataHash. ES256 hashes with SHA-256;
+ * Ed25519 signs those exact bytes. Never reinterpret one algorithm's key. */
+AuthStatus auth_credentials_sign_key(AuthCredentialService *, const AuthCredential *,
+    const uint8_t *, size_t, uint8_t signature[72], size_t *);
+AuthStatus auth_credentials_sign_message_id(AuthCredentialService *, const uint8_t *, size_t,
+    const uint8_t rp_hash[32], const uint8_t *, size_t, uint8_t signature[72], size_t *);
+
+
 /* Store a new non-discoverable credential with a random ID and P-256 key.
  * discoverable must be false; resident creation requires the metadata-aware
  * create_resident APIs below, including atomic overwrite/store-state handling.
@@ -63,8 +73,10 @@ AuthStatus auth_credentials_create(AuthCredentialService *service,
 AuthStatus auth_credentials_create_protected(AuthCredentialService *service,
     const uint8_t rp_id_hash[32], const uint8_t *user_id, size_t user_id_length,
     bool discoverable, uint8_t cred_protect, AuthCredential *credential, uint8_t public_key[65]);
+AuthStatus auth_credentials_create_protected_algorithm(AuthCredentialService *, int32_t,
+    const uint8_t rp_hash[32], const uint8_t *, size_t, bool, uint8_t, AuthCredential *, uint8_t public_key[65]);
 bool auth_credentials_resident_supported(const AuthCredentialService *service);
-/* Metadata template contains only RP/user fields and policy. Replaces a
+/* Metadata template contains RP/user fields, policy and algorithm (zero defaults to ES256). Replaces a
  * discoverable credential for the same RP hash and user ID atomically, retaining
  * the old credential on any pre-commit failure. Cleanup failure returns IO_ERROR.
  * Never publishes a successful CTAP reply on cleanup failure. */
@@ -80,6 +92,9 @@ typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential 
     const uint8_t public_key[65]);
 typedef AuthStatus (*AuthCredentialPrepareId)(void *,const AuthCredential *,
     const uint8_t *,size_t,const uint8_t public_key[65]);
+AuthStatus auth_credentials_create_nonresident_algorithm(AuthCredentialService *, int32_t,
+    const uint8_t rp_hash[32], uint8_t, AuthCredentialPrepareId, void *, AuthCredential *,
+    uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE], size_t *, uint8_t public_key[65]);
 AuthStatus auth_credentials_create_nonresident_prepared(AuthCredentialService *,
     const uint8_t rp_hash[32],uint8_t cred_protect,AuthCredentialPrepareId,void *,
     AuthCredential *,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *,uint8_t public_key[65]);

@@ -1,5 +1,6 @@
 #include "ctap/ctap_credential_management.h"
 #include "ctap/ctap_entities.h"
+#include "ctap/ctap_pin_protocol.h"
 #include "ctap/ctap_request.h"
 #include <string.h>
 
@@ -57,7 +58,7 @@ static uint8_t entry(AuthCredentialService *service, CtapCredentialManagement *s
         ok = cbor_write_map(&writer, first ? 5U : 4U) && cbor_write_uint(&writer, 6U) &&
             ctap_user_entity_write(&writer, credential, true) && cbor_write_uint(&writer, 7U) &&
             ctap_credential_descriptor_write(&writer, credential->credential_id) && cbor_write_uint(&writer, 8U) &&
-            ctap_public_key_write(&writer, key);
+            ctap_public_key_write_algorithm(&writer, credential->algorithm, key);
         if (first) ok = ok && cbor_write_uint(&writer, 9U) && cbor_write_uint(&writer, state->count);
         ok = ok && cbor_write_uint(&writer, 10U) && cbor_write_uint(&writer, credential->cred_protect);
     }
@@ -115,8 +116,8 @@ static uint8_t parse_parameters(ManagementRequest *request, CtapCredentialManage
     if ((command == CM_ENUMERATE_CREDENTIALS_BEGIN && !supplied[1]) ||
         (mutation(command) && !supplied[2]) || (command == CM_UPDATE_USER && !supplied[3]))
         return CTAP_STATUS_MISSING_PARAMETER;
-    if (request->fields[3].value != 2U) return CTAP_STATUS_INVALID_PARAMETER;
-    if (request->fields[4].value != 32U) return CTAP_STATUS_PIN_AUTH_INVALID;
+    if ((request->fields[3].value != 1U && request->fields[3].value != 2U)) return CTAP_STATUS_INVALID_PARAMETER;
+    if (request->fields[4].value != ctap_pin_protocol_auth_length((uint8_t)request->fields[3].value)) return CTAP_STATUS_PIN_AUTH_INVALID;
     if (command == CM_ENUMERATE_CREDENTIALS_BEGIN) {
         if (params[1].major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         if (params[1].value != 32U) return CTAP_STATUS_INVALID_PARAMETER;
@@ -149,7 +150,7 @@ static uint8_t authorize_request(CtapClientPin *pin, CtapCredentialManagement *s
         memcpy(message + 1U, request->fields[2].encoded, request->fields[2].encoded_length); message_length += request->fields[2].encoded_length;
     }
     const uint8_t *scope = mutation(command) && pin->token_rp_bound ? pin->token_rp_hash : NULL;
-    return ctap_client_pin_authorize_management(pin, scope, message, message_length, request->fields[4].data, now_ms);
+    return ctap_client_pin_authorize_management_version(pin, (uint8_t)request->fields[3].value, scope, message, message_length, request->fields[4].data, now_ms);
 }
 
 /* Requires successful authorization; no mutation precedes availability,

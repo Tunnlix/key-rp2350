@@ -69,7 +69,7 @@ static AuthStatus state_valid(const Rp2350StoreReplayState *s,Rp2350StoreHash ha
     for(size_t i=0;i<s->metadata_count;i++) {
         const Rp2350StoreMetadataIndex *c=&s->metadata[i];
         size_t k=key_index(s,&c->key);
-        if(!auth_key_handle_valid(&c->key) || c->algorithm!=-7 || c->cred_protect<1 || c->cred_protect>3 ||
+        if(!auth_key_handle_valid(&c->key) || !auth_algorithm_valid(c->algorithm) || c->cred_protect<1 || c->cred_protect>3 ||
             c->user_id_length>AUTH_USER_ID_MAX_SIZE || c->rp_id_length>AUTH_RP_ID_MAX_SIZE ||
             c->user_name_length>AUTH_ENTITY_NAME_MAX_SIZE || c->user_display_name_length>AUTH_ENTITY_NAME_MAX_SIZE ||
             !store_nonzero(c->credential_id,32) || k==s->key_count || s->keys[k].retired ||

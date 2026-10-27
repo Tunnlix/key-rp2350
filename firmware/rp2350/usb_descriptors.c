@@ -65,7 +65,7 @@ const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t language) {
         return descriptor;
     }
     if(index == 1) value = "Tunnlix";
-    else if(index == 2) value = "TunnlixKey";
+    else if(index == 2) value = "Key";
     else if(index == 3) {
         pico_get_unique_board_id_string(serial, sizeof(serial));
         value = serial;

@@ -6,6 +6,7 @@ their own licenses and copyright notices.
 | Component | Reviewed source | License material |
 | --- | --- | --- |
 | ctaes | `3b10b89b05ca1ef5fff33316777249df25c8b930` | [Vendored MIT notice](../firmware/rp2350/vendor/ctaes/COPYING) and [source hashes](../firmware/rp2350/vendor/ctaes/UPSTREAM.md) |
+| Monocypher | 4.0.3, commit `ab2b16dd619ad5f6979a4fbe69cfa324a6fcc35f` | [License text](../licenses/monocypher-LICENCE.md), selected BSD-2-Clause, and [source hashes](../firmware/rp2350/vendor/monocypher/UPSTREAM.md) |
 | Mbed TLS | 3.6.7 | [Dual-license text](../licenses/mbedtls.txt); this integration selects Apache-2.0 |
 | Pico SDK | 2.3.1, commit `079c6f39023649b154152db30f1d781e884879bc` | [BSD license](../licenses/pico-sdk.txt), [selected source attributions](../licenses/pico-sdk-attributions.txt) |
 | TinyUSB | `86ad6e56c1700e85f1c5678607a762cfe3aa2f47` | [MIT notice](../licenses/tinyusb.txt) |

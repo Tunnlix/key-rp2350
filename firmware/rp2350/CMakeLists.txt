@@ -58,7 +58,7 @@ add_executable(rp2350_application application_main.c usb_transport.c
 target_link_libraries(rp2350_application PRIVATE rp2350_storage_codec
     rp2350_board_flash hardware_watchdog tinyusb_device pico_unique_id pico_bootrom)
 target_include_directories(rp2350_application SYSTEM PRIVATE "${PICO_TINYUSB_PATH}/src")
-pico_set_program_name(rp2350_application "TunnlixKey")
+pico_set_program_name(rp2350_application "Key")
 rp2350_configure_image(rp2350_application)
 set_source_files_properties(application_main.c usb_transport.c usb_descriptors.c
     presence.c entropy.c board_entropy.c stack_probe.c board_flash.c flash_geometry.c flash_guard.c
@@ -70,7 +70,7 @@ if(RP2350_CORE_LTO)
     if(NOT ipo_available)
         message(FATAL_ERROR "Core/provider LTO unavailable: ${ipo_reason}")
     endif()
-    set_target_properties(ctap_core rp2350_crypto rp2350_mbedcrypto rp2350_ctaes
+    set_target_properties(ctap_core rp2350_crypto rp2350_mbedcrypto rp2350_ctaes rp2350_monocypher
         PROPERTIES INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 

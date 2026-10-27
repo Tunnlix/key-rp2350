@@ -153,6 +153,13 @@ static AuthStatus load_key(Rp2350StoreProvider *p,const AuthKeyHandle *handle) {
     status=rp2350_store_record_read_internal(&w->reader,&p->flash,&p->config,&w->source.root.seal,
         &w->source.selection,NULL,&p->cache.keys[k],&w->boot.io.log);
     if(status==AUTH_OK) status=rp2350_crypto_load_record_internal(p->crypto,w->reader.key);
+    if(status==AUTH_OK) {
+        /* Metadata and its authenticated private record must agree on the
+         * algorithm. Unreferenced staging keys have no metadata yet. */
+        for(size_t i=0;i<p->cache.metadata_count;i++)
+            if(store_equal(p->cache.metadata[i].key.bytes,handle->bytes,32) &&
+                p->cache.metadata[i].algorithm!=p->crypto->keys[0].algorithm) return AUTH_BAD_DATA;
+    }
     return status;
 }
 static AuthStatus read_record(void *ctx,const uint8_t id[32],AuthCredential *out) {
@@ -255,11 +262,12 @@ static AuthStatus hash(void *ctx,const uint8_t *in,size_t n,uint8_t out[32]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,32); return AUTH_IO_ERROR; }
     AuthCrypto c=rp2350_crypto_interface(p->crypto); return finish(p,c.sha256(c.context,in,n,out),true);
 }
-static AuthStatus generate(void *ctx,AuthKeyHandle *out,uint8_t pub[65]) {
+static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *out,uint8_t pub[65]) {
     Rp2350StoreProvider *p=ctx; if(!out || !pub) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(out,sizeof(*out)); auth_secure_zero(pub,65); if(!begin(p)) return AUTH_IO_ERROR;
     AuthCrypto c=rp2350_crypto_interface(p->crypto); AuthKeyHandle handle={0}; uint8_t public_key[65]={0};
-    AuthStatus status=c.generate_p256(c.context,&handle,public_key);
+    AuthStatus status=algorithm==AUTH_COSE_ALG_ES256 ? c.generate_p256(c.context,&handle,public_key) :
+        c.generate_ed25519(c.context,&handle,public_key);
     if(status==AUTH_OK) {
         Rp2350Key *key=NULL;
         for(size_t i=0;i<RP2350_KEY_SLOTS;i++) if(p->crypto->keys[i].used && store_equal(handle.bytes,p->crypto->keys[i].handle.bytes,32)) key=&p->crypto->keys[i];
@@ -274,6 +282,22 @@ static AuthStatus generate(void *ctx,AuthKeyHandle *out,uint8_t pub[65]) {
     if(status==AUTH_OK) { *out=handle; memcpy(pub,public_key,65); }
     auth_secure_zero(&handle,sizeof(handle)); auth_secure_zero(public_key,sizeof(public_key)); auth_secure_zero(&global,sizeof(global));
     return finish(p,status,true);
+}
+static AuthStatus generate(void *ctx,AuthKeyHandle *out,uint8_t pub[65]) {
+    return generate_algorithm(ctx,AUTH_COSE_ALG_ES256,out,pub);
+}
+static AuthStatus generate_ed25519(void *ctx,AuthKeyHandle *out,uint8_t pub[65]) {
+    return generate_algorithm(ctx,AUTH_COSE_ALG_EDDSA,out,pub);
+}
+static AuthStatus sign_ed25519(void *ctx,const AuthKeyHandle *h,const uint8_t *message,size_t length,uint8_t out[64]) {
+    Rp2350StoreProvider *p=ctx;
+    if(!out || (!message && length)) return AUTH_INVALID_ARGUMENT;
+    auth_secure_zero(out,64);
+    if(!begin(p)) return AUTH_IO_ERROR;
+    AuthStatus status=load_key(p,h);
+    if(status==AUTH_OK) { AuthCrypto c=rp2350_crypto_interface(p->crypto); status=c.sign_ed25519(c.context,h,message,length,out); }
+    if(status!=AUTH_OK) auth_secure_zero(out,64);
+    return finish(p,status,status!=AUTH_NOT_FOUND);
 }
 static AuthStatus public_key(void *ctx,const AuthKeyHandle *h,uint8_t out[65]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,65); return AUTH_IO_ERROR; }
@@ -337,7 +361,7 @@ static AuthStatus regenerate(void *ctx) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) return AUTH_IO_ERROR;
     AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.regenerate(s.context),true);
 }
-AuthCrypto rp2350_store_provider_crypto_internal(Rp2350StoreProvider *p) { return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign,destroy}; }
+AuthCrypto rp2350_store_provider_crypto_internal(Rp2350StoreProvider *p) { return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign,destroy,generate_ed25519,sign_ed25519}; }
 AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *p) { return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate}; }
 AuthStorage rp2350_store_provider_storage_internal(Rp2350StoreProvider *p) {
     return (AuthStorage){p,AUTH_RESIDENT_MAX_COUNT,read_record,insert,erase_plain,find_rp,count,counter,enumerate,put,erase,update};
@@ -376,7 +400,7 @@ static AuthStatus nonresident_metadata(Rp2350StoreProvider *p,const uint8_t *id,
     AuthStatus status=c.sha256(c.context,id,length,out->credential_id);
     if(status==AUTH_OK) {
         out->key=p->workspace->nonresident_key.handle; memcpy(out->rp_id_hash,rp,32);
-        out->algorithm=AUTH_COSE_ALG_ES256; out->cred_protect=policy;
+        out->algorithm=p->workspace->nonresident_key.algorithm; out->cred_protect=policy;
         out->signature_count=p->cache.global.nonresident_counter;
         if(!auth_credential_valid(out)) status=AUTH_BAD_DATA;
     }
@@ -418,7 +442,7 @@ static AuthStatus reserve_nonresident(void *ctx,uint64_t *serial) {
     if(status==AUTH_OK) *serial=p->cache.global.nonresident_issued;
     auth_secure_zero(&g,sizeof(g)); return status;
 }
-static AuthStatus create_nonresident(void *ctx,const uint8_t rp[32],uint8_t policy,
+static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const uint8_t rp[32],uint8_t policy,
         AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
     Rp2350StoreProvider *p=ctx;
     if(!p || !rp || !out || !id || !length || !pub || policy<1 || policy>3) return AUTH_INVALID_ARGUMENT;
@@ -432,7 +456,8 @@ static AuthStatus create_nonresident(void *ctx,const uint8_t rp[32],uint8_t poli
         return finish(p,AUTH_CAPACITY,false);
     if(status==AUTH_OK) status=init_nonresident(p);
     AuthCrypto c=rp2350_crypto_interface(p->crypto); AuthKeyHandle handle={0}; uint8_t generated[65]={0};
-    if(status==AUTH_OK) status=c.generate_p256(c.context,&handle,generated);
+    if(status==AUTH_OK) status=algorithm==AUTH_COSE_ALG_ES256 ? c.generate_p256(c.context,&handle,generated) :
+        c.generate_ed25519(c.context,&handle,generated);
     if(status==AUTH_OK) {
         bool found=false;
         for(size_t i=0;i<RP2350_KEY_SLOTS;i++) if(p->crypto->keys[i].used && store_equal(p->crypto->keys[i].handle.bytes,handle.bytes,32)) {
@@ -462,6 +487,14 @@ static AuthStatus counter_nonresident(void *ctx,const uint8_t *id,size_t length,
     if(status==AUTH_OK) status=commit(p,&tx);
     auth_secure_zero(&g,sizeof(g)); return finish(p,status,status!=AUTH_NOT_FOUND);
 }
+static AuthStatus create_nonresident(void *ctx,const uint8_t rp[32],uint8_t policy,
+    AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
+    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_ES256,rp,policy,out,id,length,pub);
+}
+static AuthStatus create_nonresident_ed25519(void *ctx,const uint8_t rp[32],uint8_t policy,
+    AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
+    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_EDDSA,rp,policy,out,id,length,pub);
+}
 AuthNonresidentProvider rp2350_store_provider_nonresident_internal(Rp2350StoreProvider *p) {
-    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident};
+    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident,create_nonresident_ed25519};
 }

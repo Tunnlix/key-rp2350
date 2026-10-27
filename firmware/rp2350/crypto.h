@@ -11,8 +11,10 @@
  * Caller must zero-initialize, serialize calls, and keep storage alive. */
 typedef struct {
     bool used;
+    int32_t algorithm;
     AuthKeyHandle handle;
-    uint8_t scalar[32], public_key[65], randoms[2][32];
+    uint8_t scalar[32]; /* P-256 scalar or Ed25519 seed, selected by algorithm. */
+    uint8_t public_key[65], randoms[2][32];
 } Rp2350Key;
 typedef struct {
     mbedtls_hmac_drbg_context drbg;
@@ -27,7 +29,7 @@ typedef struct {
 AuthStatus rp2350_crypto_init(Rp2350Crypto *, int (*entropy)(void *, unsigned char *, size_t), void *);
 void rp2350_crypto_free(Rp2350Crypto *);
 /* Durable-provider working-key lifetime. Load only an independently
- * authenticated selected record. Recompute its public point with blinding;
+ * authenticated selected record. Recompute its public key (P-256 uses blinding);
  * failure invalidates the provider. Clearing slots preserves session agreement
  * material/epoch/high-water, but never leaves a credential scalar resident. */
 void rp2350_crypto_clear_credentials_internal(Rp2350Crypto *);

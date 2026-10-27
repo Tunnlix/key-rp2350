@@ -1,4 +1,4 @@
-# Local assistant instructions/backlogs do not belong in source distributions.
+# Exclude local tooling and development material from source archives.
 /AGENTS.md export-ignore
 /development/ai export-ignore
 /development export-ignore

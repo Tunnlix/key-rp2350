@@ -43,7 +43,9 @@ static AuthStatus create_resident_prepared(AuthCredentialService *service,
     AuthCredential *created = &scratch->created;
     *created = *metadata;
     created->key = (AuthKeyHandle){0}; memset(created->credential_id, 0, 32U);
-    created->algorithm = AUTH_COSE_ALG_ES256; created->signature_count = 0U;
+    created->algorithm = metadata->algorithm == 0 ? AUTH_COSE_ALG_ES256 : metadata->algorithm;
+    if (!auth_credentials_algorithm_supported(service, created->algorithm)) return AUTH_UNSUPPORTED;
+    created->signature_count = 0U;
     created->discoverable = true; created->creation_order = newest + 1U;
     bool unique = false;
     for (unsigned i = 0U; i < 8U; ++i) {
@@ -58,9 +60,9 @@ static AuthStatus create_resident_prepared(AuthCredentialService *service,
     uint8_t *state = scratch->store_state, *generated = scratch->public_key;
     AuthStatus status = service->crypto.random(service->crypto.context, state, sizeof scratch->store_state);
     if (status != AUTH_OK) return status;
-    status = service->crypto.generate_p256(service->crypto.context, &created->key, generated);
+    status = auth_credentials_generate_key(service, created->algorithm, &created->key, generated);
     if (status != AUTH_OK) return status;
-    if (!auth_key_handle_valid(&created->key) || generated[0] != 4U) {
+    if (!auth_key_handle_valid(&created->key) || !auth_public_key_valid(created->algorithm, generated)) {
         (void)service->crypto.destroy_key(service->crypto.context, &created->key); return AUTH_BAD_DATA;
     }
     if (prepare != NULL) status = prepare(context, created, generated);

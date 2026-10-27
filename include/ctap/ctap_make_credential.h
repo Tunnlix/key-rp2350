@@ -11,6 +11,7 @@
 typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], user_id[64];
     size_t user_id_length;
+    int32_t algorithm;
     bool credential_excluded, omit_attestation;
     bool hmac_secret_requested;
     CtapHmacSecret hmac_secret_mc;
@@ -48,7 +49,7 @@ typedef struct {
  * Prepared output must not alias workspace; prepare and finish share its guard.
  * Extension-value errors are retained for finish, after authorization/exclusion
  * and UP. Invalid/unsupported requests never create keys.
- * Supports ES256; resident creation requires the complete storage/PIN binding.
+ * Supports ES256 and optional Ed25519; resident creation requires the complete storage/PIN binding.
  * Unsupported extensions/options are ignored.
  * This entry point has no PIN binding; the with_pin variant adds protocol 2
  * authorization, credProtect and discoverable credentials. Enterprise attestation

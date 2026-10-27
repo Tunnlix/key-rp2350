@@ -6,7 +6,7 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 CMakeUserPresets.json
-# Local assistant notes are kept outside the public codebase.
+# Local tooling configuration and work notes.
 /AGENTS.md
 /development/ai/
 /development/

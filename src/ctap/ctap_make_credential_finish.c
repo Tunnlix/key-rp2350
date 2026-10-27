@@ -90,11 +90,11 @@ static uint8_t finish_at(AuthCredentialService *service,
         status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
             prepare_response, &response, credential, public_key);
     } else if(auth_credentials_nonresident_supported(service)) {
-        status=auth_credentials_create_nonresident_prepared(service,prepared->rp_id_hash,
+        status=auth_credentials_create_nonresident_algorithm(service,prepared->algorithm,prepared->rp_id_hash,
             prepared->cred_protect==0U ? 1U : prepared->cred_protect,prepare_response_id,&response,
             credential,workspace->scratch.finish.wire_id,&workspace->scratch.finish.wire_id_length,public_key);
     } else {
-        status = auth_credentials_create_protected(service, prepared->rp_id_hash,
+        status = auth_credentials_create_protected_algorithm(service, prepared->algorithm, prepared->rp_id_hash,
             prepared->user_id, prepared->user_id_length, false,
             prepared->cred_protect == 0U ? 1U : prepared->cred_protect, credential, public_key);
         if (status == AUTH_OK && prepare_response(&response, credential, public_key) != AUTH_OK) {

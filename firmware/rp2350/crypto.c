@@ -2,6 +2,7 @@
 #include "crypto_restore_internal.h"
 #include "storage_key_record_internal.h"
 #include "ctaes.h"
+#include "monocypher-ed25519.h"
 #include "mbedtls/ecdsa.h"
 #include "mbedtls/ecdh.h"
 #include "mbedtls/memory_buffer_alloc.h"
@@ -82,7 +83,13 @@ static Rp2350Key *find(Rp2350Crypto *p,const AuthKeyHandle *h) {
         if (p->keys[i].used && memcmp(&p->keys[i].handle,h,sizeof(*h))==0) return &p->keys[i];
     return NULL;
 }
-static AuthStatus generate(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
+static void ed25519_public(const uint8_t seed[32], uint8_t pub[65]) {
+    uint8_t copy[32], secret[64];
+    memcpy(copy,seed,32); memset(pub,0,65);
+    crypto_ed25519_key_pair(secret,pub,copy); /* Wipes its seed input. */
+    auth_secure_zero(secret,sizeof(secret)); auth_secure_zero(copy,sizeof(copy));
+}
+static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *h,uint8_t pub[65]) {
     Rp2350Crypto *p=ctx;
     if (!h || !pub) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(h,sizeof(*h)); auth_secure_zero(pub,65);
@@ -90,7 +97,10 @@ static AuthStatus generate(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
     Rp2350Key *k=NULL;
     for (size_t i=0;i<RP2350_KEY_SLOTS;i++) if (!p->keys[i].used) { k=&p->keys[i]; break; }
     if (!k) return AUTH_CAPACITY;
-    if (keypair(p,k->scalar,k->public_key) || rng(p,(uint8_t *)k->randoms,sizeof(k->randoms))) {
+    k->algorithm=algorithm;
+    int rc=algorithm==AUTH_COSE_ALG_ES256 ? keypair(p,k->scalar,k->public_key) : rng(p,k->scalar,32);
+    if (!rc && algorithm==AUTH_COSE_ALG_EDDSA) ed25519_public(k->scalar,k->public_key);
+    if (rc || rng(p,(uint8_t *)k->randoms,sizeof(k->randoms))) {
         auth_secure_zero(k,sizeof(*k)); return AUTH_CRYPTO_ERROR;
     }
     ++p->next_handle;
@@ -98,6 +108,23 @@ static AuthStatus generate(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
     for (size_t i=0;i<8;i++) k->handle.bytes[24+i]=(uint8_t)(p->next_handle>>(56U-8U*i));
     k->used=true; *h=k->handle; memcpy(pub,k->public_key,65);
     return AUTH_OK;
+}
+static AuthStatus generate(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
+    return generate_algorithm(ctx,AUTH_COSE_ALG_ES256,h,pub);
+}
+static AuthStatus generate_ed25519(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
+    return generate_algorithm(ctx,AUTH_COSE_ALG_EDDSA,h,pub);
+}
+static AuthStatus sign_ed25519(void *ctx,const AuthKeyHandle *h,const uint8_t *message,size_t length,uint8_t out[64]) {
+    if ((!message && length) || !out) return AUTH_INVALID_ARGUMENT;
+    auth_secure_zero(out,64);
+    Rp2350Key *k=find(ctx,h);
+    if (!k) return AUTH_NOT_FOUND;
+    if (k->algorithm!=AUTH_COSE_ALG_EDDSA) return AUTH_UNSUPPORTED;
+    /* Monocypher's private-key representation is seed || public key. */
+    uint8_t secret[64]; memcpy(secret,k->scalar,32); memcpy(secret+32,k->public_key,32);
+    crypto_ed25519_sign(out,secret,message,length);
+    auth_secure_zero(secret,sizeof(secret)); return AUTH_OK;
 }
 static AuthStatus public_key(void *ctx,const AuthKeyHandle *h,uint8_t out[65]) {
     if (!out) return AUTH_INVALID_ARGUMENT;
@@ -120,6 +147,7 @@ static AuthStatus sign_digest(void *ctx,const AuthKeyHandle *h,const uint8_t dig
     *n=0; auth_secure_zero(out,72);
     Rp2350Key *k=find(ctx,h);
     if (!k) return AUTH_NOT_FOUND;
+    if (k->algorithm!=AUTH_COSE_ALG_ES256) return AUTH_UNSUPPORTED;
     mbedtls_ecdsa_context c; uint8_t der[MBEDTLS_ECDSA_MAX_LEN]; size_t len=0;
     mbedtls_ecdsa_init(&c);
     int rc=mbedtls_ecp_group_load(&c.MBEDTLS_PRIVATE(grp),MBEDTLS_ECP_DP_SECP256R1);
@@ -209,6 +237,9 @@ AuthStatus rp2350_crypto_restore_records_internal(Rp2350Crypto *p,const uint8_t 
         uint64_t number=0; for(size_t j=24;j<32;j++) number=(number<<8)|k->handle.bytes[j];
         if(!number || number>p->next_handle || memcmp(k->handle.bytes,p->epoch,24)) { status=AUTH_BAD_DATA; goto failed; }
         for(size_t j=0;j<i;j++) if(!memcmp(k->handle.bytes,p->keys[j].handle.bytes,32)) { status=AUTH_BAD_DATA; goto failed; }
+        if (k->algorithm==AUTH_COSE_ALG_EDDSA) {
+            ed25519_public(k->scalar,k->public_key); k->used=true; continue;
+        }
         mbedtls_ecp_group group; mbedtls_ecp_point point; mbedtls_mpi scalar; size_t n=0;
         mbedtls_ecp_group_init(&group); mbedtls_ecp_point_init(&point); mbedtls_mpi_init(&scalar);
         int rc=mbedtls_ecp_group_load(&group,MBEDTLS_ECP_DP_SECP256R1);
@@ -258,7 +289,7 @@ void rp2350_crypto_free(Rp2350Crypto *p) {
     auth_secure_zero(crypto_pool,sizeof(crypto_pool)); auth_secure_zero(p,sizeof(*p)); owner=NULL;
 }
 AuthCrypto rp2350_crypto_interface(Rp2350Crypto *p) {
-    return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign_digest,destroy};
+    return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign_digest,destroy,generate_ed25519,sign_ed25519};
 }
 AuthSecretCrypto rp2350_secret_interface(Rp2350Crypto *p) {
     return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate};

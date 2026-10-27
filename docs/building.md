@@ -73,6 +73,23 @@ then release when the fast indication begins. This enters ROM update mode.
 The firmware also supports a PC-requested vendor command over FIDO HID,
 confirmed by a fresh press within 30 seconds. Its desktop client is separate.
 
-Current numeric USB/INIT/GetInfo fields report 1.0.0. ELF/UF2 metadata includes
-the `-rc.1` suffix; numeric fields cannot distinguish a candidate from stable.
-Build and generated firmware files belong in ignored build directories.
+Current numeric INIT/GetInfo fields report 1.1.0; USB bcdDevice reports 1.10.
+ELF/UF2 metadata includes the `-rc.1` suffix; numeric fields cannot distinguish a candidate from stable.
+The USB product and update-information name are **Key**, with manufacturer
+**Tunnlix**. Build and generated firmware files belong in ignored build directories.
+
+## 1.1 compatibility
+
+The source supports ES256/P-256 and Ed25519 credentials, plus PIN protocols 1
+and 2 and legacy `getPinToken` for older clients. Ed25519 uses RFC 8032 message
+signing, including for OpenSSH `ed25519-sk`; P-256 remains available for
+`ecdsa-sk` and PIN key agreement. Actual iPhone and SSH hardware acceptance is
+still pending for this candidate; advertising protocol versions does not claim
+FIDO certification or completed conformance testing.
+
+Existing 1.0 P-256 records, counters and PIN data remain readable. Ed25519 fits
+within the existing record sizes and shared 32-slot capacity. Once resident
+Ed25519 records exist, older firmware that only understands P-256 cannot read
+the mixed store and can fail recovery. Do not downgrade such a device unless
+you intentionally reset/re-enroll it or use firmware that understands both
+algorithms. Renaming the product does not change storage derivation labels.

@@ -11,10 +11,7 @@ static uint8_t member(const CborValue *map, const char *name, uint8_t type, bool
     return value->major == type ? CTAP_STATUS_OK : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
 }
 
-static bool es256(const CborValue *algorithm)
-{ return algorithm->major == 1U && algorithm->value == 6U; }
-
-static uint8_t algorithms(const CborValue *array)
+static uint8_t algorithms(AuthCredentialService *service, const CborValue *array, int32_t *selected)
 {
     if (array->major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
     const uint8_t *cursor = array->data, *end = array->encoded + array->encoded_length;
@@ -40,7 +37,12 @@ static uint8_t algorithms(const CborValue *array)
             if (same_algorithm && earlier.value == type.value &&
                 memcmp(earlier.data, type.data, (size_t)type.value) == 0) return CTAP_STATUS_INVALID_PARAMETER;
         }
-        if (cbor_text_equal(&type, "public-key") && es256(&algorithm)) supported = true;
+        if (!supported && cbor_text_equal(&type, "public-key") && algorithm.major == 1U && algorithm.value <= INT32_MAX) {
+            int32_t candidate = -1 - (int32_t)algorithm.value;
+            if (auth_credentials_algorithm_supported(service, candidate)) {
+                *selected = candidate; supported = true;
+            }
+        }
     }
     return supported ? CTAP_STATUS_OK : CTAP_STATUS_UNSUPPORTED_ALGORITHM;
 }
@@ -135,7 +137,7 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
     status = member(&fields[3], "displayName", 3U, false, &value);
     if (status != 0U) return status;
     /* icon is deprecated: intentionally ignored, including its value type. */
-    status = algorithms(&fields[4]);
+    status = algorithms(service, &fields[4], &result->algorithm);
     if (status != 0U) return status;
     if (present[7]) {
         status = ctap_request_text_map(&fields[7]);
@@ -185,6 +187,7 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
         if (status != CTAP_STATUS_OK) return status;
         memcpy(result->metadata.rp_id_hash, result->rp_id_hash, 32U);
         result->metadata.cred_protect = result->cred_protect;
+        result->metadata.algorithm = result->algorithm;
     }
     if (present[5]) {
         status = exclusions(service, &fields[5], result, &workspace->scratch.prepare.excluded);

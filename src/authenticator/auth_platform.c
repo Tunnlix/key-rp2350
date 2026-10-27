@@ -17,9 +17,20 @@ bool auth_key_handle_valid(const AuthKeyHandle *key)
     return key != NULL && nonzero(key->bytes, sizeof key->bytes);
 }
 
+bool auth_algorithm_valid(int32_t algorithm)
+{ return algorithm == AUTH_COSE_ALG_ES256 || algorithm == AUTH_COSE_ALG_EDDSA; }
+
+bool auth_public_key_valid(int32_t algorithm, const uint8_t key[65])
+{
+    if (key == NULL) return false;
+    if (algorithm == AUTH_COSE_ALG_ES256) return key[0] == 4U;
+    if (algorithm != AUTH_COSE_ALG_EDDSA || !nonzero(key, 32U)) return false;
+    return !nonzero(key + 32U, 33U);
+}
+
 bool auth_credential_valid(const AuthCredential *credential)
 {
-    return credential != NULL && credential->algorithm == AUTH_COSE_ALG_ES256 &&
+    return credential != NULL && auth_algorithm_valid(credential->algorithm) &&
         credential->user_id_length <= AUTH_USER_ID_MAX_SIZE &&
         credential->rp_id_length <= AUTH_RP_ID_MAX_SIZE &&
         credential->rp_name_length <= AUTH_ENTITY_NAME_MAX_SIZE &&

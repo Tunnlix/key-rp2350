@@ -1,10 +1,12 @@
 # Security scope and reporting
 
-The current firmware is 1.0.0-rc.1, a release candidate. FIDO certification and
-complete conformance have not been established. Basic browser registration,
-PIN-backed login, reconnect, sleep/wake, presence and update entry have been
-checked. Full workload resource margins and physical interrupted-write/Reset
-qualification remain incomplete.
+The current source is 1.1.0-rc.1, a release candidate awaiting hardware acceptance
+for its new PIN compatibility and Ed25519 paths. FIDO certification and complete
+conformance have not been established. The previous 1.0.0 candidate passed basic
+browser registration, PIN-backed login, reconnect, sleep/wake, presence and update
+entry checks; that evidence does not qualify the new features. Full target
+workload resource margins and physical interrupted-write/Reset qualification
+remain incomplete.
 
 The onboard configuration does not claim resistance to physical theft, flash
 reads, executable replacement or restoration of old flash snapshots. Its

@@ -56,7 +56,7 @@ void rp2350_firmware_update_start(Rp2350Application *a, uint64_t operation, cons
         }
         if(response[0]==CTAP_STATUS_OK) {
             CborWriter w; cbor_writer_init(&w,response+1,sizeof(response)-1);
-            bool ok=cbor_write_map(&w,4) && cbor_write_uint(&w,1) && cbor_write_text(&w,"TunnlixKey") &&
+            bool ok=cbor_write_map(&w,4) && cbor_write_uint(&w,1) && cbor_write_text(&w,"Key") &&
                 cbor_write_uint(&w,2) && cbor_write_uint(&w,RP2350_UPDATE_PROTOCOL) &&
                 cbor_write_uint(&w,3) && cbor_write_uint(&w,RP2350_UPDATE_TOUCH_TIMEOUT_MS) &&
                 cbor_write_uint(&w,4) && cbor_write_uint(&w,RP2350_UPDATE_HOLD_MS);

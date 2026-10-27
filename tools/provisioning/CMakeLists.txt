@@ -13,7 +13,7 @@ pico_add_linker_script_override_path(rp2350_factory_provision "${CMAKE_CURRENT_S
 pico_add_linker_script_override_path(rp2350_factory_provision "${firmware_dir}/linker"
     FILES memory_ram.incl sections_stack.incl)
 target_link_options(rp2350_factory_provision PRIVATE -Wl,--print-memory-usage)
-pico_set_program_name(rp2350_factory_provision "TunnlixKey factory provisioning (RAM only)")
+pico_set_program_name(rp2350_factory_provision "Key factory provisioning (RAM only)")
 pico_set_binary_type(rp2350_factory_provision no_flash)
 pico_add_extra_outputs(rp2350_factory_provision)
 set_source_files_properties(main.c provisioning.c PROPERTIES

@@ -10,11 +10,12 @@
 /* Only public/ciphertext request data is retained while waiting for UP. */
 typedef struct {
     bool requested;
+    uint8_t protocol; /* Parsed 1/2; zero retains the former internal protocol-2 default. */
     uint8_t peer_public[65], salt_enc[80], salt_auth[32];
     size_t salt_enc_length, salt_auth_length;
 } CtapHmacSecret;
 
-/* Structural validation only. Supports protocol 2 (explicit field 4 required).
+/* Structural validation only. Protocol 1 is the wire default when field 4 is absent.
  * Crypto authentication/decryption/evaluation is deferred until fresh UP. */
 uint8_t ctap_hmac_secret_parse(const CborValue *input, CtapHmacSecret *request);
 

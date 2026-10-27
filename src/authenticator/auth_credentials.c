@@ -10,6 +10,7 @@ bool auth_credentials_init(AuthCredentialService *service,
         crypto->public_key == NULL || crypto->sign_p256_digest == NULL || crypto->destroy_key == NULL ||
         storage->read == NULL || storage->insert == NULL || storage->erase == NULL ||
         storage->find_rp == NULL || storage->count == NULL || storage->update_counter == NULL) return false;
+    if ((crypto->generate_ed25519 == NULL) != (crypto->sign_ed25519 == NULL)) return false;
     service->crypto = *crypto;
     service->storage = *storage;
     memset(&service->secrets, 0, sizeof service->secrets);
@@ -20,6 +21,47 @@ bool auth_credentials_init(AuthCredentialService *service,
     memset(&service->lookup_scratch, 0, sizeof service->lookup_scratch);
     service->lookup_busy = false;
     return true;
+}
+
+bool auth_credentials_algorithm_supported(const AuthCredentialService *s, int32_t algorithm)
+{
+    if (s == NULL) return false;
+    if (algorithm == AUTH_COSE_ALG_ES256) return true;
+    return algorithm == AUTH_COSE_ALG_EDDSA && s->crypto.generate_ed25519 != NULL &&
+        s->crypto.sign_ed25519 != NULL && (!auth_credentials_nonresident_supported(s) ||
+        s->nonresident.create_ed25519 != NULL);
+}
+
+AuthStatus auth_credentials_generate_key(AuthCredentialService *s, int32_t algorithm,
+    AuthKeyHandle *key, uint8_t public_key[65])
+{
+    if (!auth_credentials_algorithm_supported(s, algorithm)) return AUTH_UNSUPPORTED;
+    return algorithm == AUTH_COSE_ALG_ES256 ? s->crypto.generate_p256(s->crypto.context, key, public_key) :
+        s->crypto.generate_ed25519(s->crypto.context, key, public_key);
+}
+
+AuthStatus auth_credentials_sign_key(AuthCredentialService *s, const AuthCredential *credential,
+    const uint8_t *message, size_t length, uint8_t signature[72], size_t *n)
+{
+    if (s == NULL || !auth_credential_valid(credential) || (!message && length) || !signature || !n)
+        return AUTH_INVALID_ARGUMENT;
+    *n = 0U; auth_secure_zero(signature, 72U);
+    AuthStatus status = AUTH_UNSUPPORTED;
+    if (credential->algorithm == AUTH_COSE_ALG_ES256) {
+        uint8_t digest[32] = {0};
+        status = s->crypto.sha256(s->crypto.context, message, length, digest);
+        if (status == AUTH_OK) status = s->crypto.sign_p256_digest(s->crypto.context,
+            &credential->key, digest, signature, n);
+        auth_secure_zero(digest, sizeof digest);
+    } else if (s->crypto.sign_ed25519 != NULL) {
+        status = s->crypto.sign_ed25519(s->crypto.context, &credential->key, message, length, signature);
+        if (status == AUTH_OK) *n = 64U;
+    }
+    if (status != AUTH_OK || *n == 0U || *n > 72U) {
+        auth_secure_zero(signature, 72U); *n = 0U;
+        return status == AUTH_OK ? AUTH_BAD_DATA : status;
+    }
+    return AUTH_OK;
 }
 
 bool auth_credentials_nonresident_supported(const AuthCredentialService *s)
@@ -103,6 +145,15 @@ AuthStatus auth_credentials_get_id(AuthCredentialService *service,
     return lookup_end(service, status);
 }
 
+AuthStatus auth_credentials_sign_message_id(AuthCredentialService *s, const uint8_t *id, size_t id_length,
+    const uint8_t rp_hash[32], const uint8_t *message, size_t length, uint8_t signature[72], size_t *n)
+{
+    if (!id || !rp_hash || (!message && length) || !signature || !n || !lookup_begin(s)) return AUTH_INVALID_ARGUMENT;
+    AuthStatus status = lookup_record(s, id, id_length, rp_hash);
+    if (status == AUTH_OK) status = auth_credentials_sign_key(s, &s->lookup_scratch, message, length, signature, n);
+    return lookup_end(s, status);
+}
+
 AuthStatus auth_credentials_sign_digest(AuthCredentialService *service,
     const uint8_t id[32], const uint8_t rp_hash[32], const uint8_t digest[32],
     uint8_t signature[72], size_t *signature_length)
@@ -118,6 +169,7 @@ AuthStatus auth_credentials_sign_digest_id(AuthCredentialService *service,
     if (id == NULL || rp_hash == NULL || digest == NULL || signature == NULL || signature_length == NULL ||
         !lookup_begin(service)) return AUTH_INVALID_ARGUMENT;
     AuthStatus status = lookup_record(service, id, id_length, rp_hash);
+    if (status == AUTH_OK && service->lookup_scratch.algorithm != AUTH_COSE_ALG_ES256) status = AUTH_UNSUPPORTED;
     if (status == AUTH_OK)
         status = service->crypto.sign_p256_digest(service->crypto.context, &service->lookup_scratch.key,
             digest, signature, signature_length);

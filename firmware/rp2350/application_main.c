@@ -14,7 +14,7 @@
 /* Match USB/INIT/GetInfo in offline UF2/ELF inspection too. */
 bi_decl(bi_program_version_string(CTAP_DEVICE_VERSION_STRING))
 
-/* Normal TunnlixKey entry point. Recover existing authenticated storage, then
+/* Normal Key entry point. Recover existing authenticated storage, then
  * serve USB requests with real GPIO26 presence. Never format storage here. */
 static struct {
     Rp2350Application application;

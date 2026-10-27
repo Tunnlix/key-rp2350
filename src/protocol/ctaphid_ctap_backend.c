@@ -12,6 +12,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile = copied;
     backend->profile.make_credential = false; /* Only binding enables this claim. */
     backend->profile.hmac_secret = false;
+    backend->profile.ed25519 = false;
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
     backend->profile.resident_credentials = false;
     backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
@@ -26,6 +27,7 @@ bool ctaphid_ctap_backend_configure_credentials(CtaphidCtapBackend *backend,
         !backend->profile.user_presence) return false;
     backend->credentials = service;
     backend->profile.make_credential = true;
+    backend->profile.ed25519 = auth_credentials_algorithm_supported(service, AUTH_COSE_ALG_EDDSA);
     backend->profile.hmac_secret = auth_secret_crypto_valid(&service->secrets);
     backend->profile.max_credential_id_length = auth_credentials_nonresident_supported(service) ?
         AUTH_CREDENTIAL_ID_MAX_SIZE : AUTH_CREDENTIAL_ID_SIZE;
