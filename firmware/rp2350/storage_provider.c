@@ -3,51 +3,64 @@
 #include "storage_bytes_internal.h"
 #include <string.h>
 static AuthStatus load_nonresident_key(Rp2350StoreProvider *,const AuthKeyHandle *);
+static void clear_selection(Rp2350StoreProvider *p) {
+    auth_secure_zero(p->selected_id,sizeof(p->selected_id));
+    auth_secure_zero(p->selected_rp,sizeof(p->selected_rp));
+    p->selected_nonresident=false;
+}
 static void release_nonresident(void *ctx) {
     Rp2350StoreProvider *p=ctx;
     if(!p || p->busy) return;
-    auth_secure_zero(p->selected_id,sizeof(p->selected_id)); auth_secure_zero(p->selected_rp,sizeof(p->selected_rp));
-    p->selected_nonresident=false; rp2350_crypto_clear_credentials_internal(p->crypto);
+    clear_selection(p);
+    rp2350_crypto_clear_credentials_internal(p->crypto);
 }
 static Rp2350StoreVersion version(const Rp2350StoreBootResult *s) {
     Rp2350StoreVersion v={.root_serial=s->root.root.serial,.selector_serial=s->selection.selector.serial,
         .generation=s->selection.selector.generation,.logical_sequence=s->records.logical_sequence};
     memcpy(v.epoch,s->root.root.epoch,16); return v;
 }
-static bool same_version(const Rp2350StoreVersion *a,const Rp2350StoreVersion *b) {
-    return a->root_serial==b->root_serial && a->selector_serial==b->selector_serial && a->generation==b->generation &&
-        a->logical_sequence==b->logical_sequence && store_equal(a->epoch,b->epoch,16);
-}
 static void fault(Rp2350StoreProvider *p) {
-    p->live=false; p->staged=false; p->writer.locked=true;
+    p->live=false;
+    p->staged=false;
     rp2350_crypto_invalidate_internal(p->crypto);
-    auth_secure_zero(&p->cache,sizeof(p->cache)); auth_secure_zero(&p->version,sizeof(p->version));
+    auth_secure_zero(&p->cache,sizeof(p->cache));
+    auth_secure_zero(&p->version,sizeof(p->version));
     p->journal_end=0;
-    auth_secure_zero(p->selected_id,sizeof(p->selected_id)); auth_secure_zero(p->selected_rp,sizeof(p->selected_rp));
-    p->selected_nonresident=false;
+    clear_selection(p);
 }
 void rp2350_store_provider_close_internal(Rp2350StoreProvider *p) {
     if(!p || p->busy) return;
-    fault(p); if(p->workspace) auth_secure_zero(p->workspace,sizeof(*p->workspace));
+    fault(p);
+    if(p->workspace) auth_secure_zero(p->workspace,sizeof(*p->workspace));
 }
 static bool begin(Rp2350StoreProvider *p) {
     if(!p || !p->live || p->busy || !p->crypto) return false;
-    if(p->crypto->faulted || (p->crypto->keys_locked && !p->staged)) { fault(p); auth_secure_zero(p->workspace,sizeof(*p->workspace)); return false; }
+    if(p->crypto->faulted || (p->crypto->keys_locked && !p->staged)) {
+        fault(p);
+        auth_secure_zero(p->workspace,sizeof(*p->workspace));
+        return false;
+    }
     if(!p->crypto->keys_locked) p->staged=false;
-    p->busy=true; return true;
+    p->busy=true;
+    return true;
 }
 static AuthStatus finish(Rp2350StoreProvider *p,AuthStatus status,bool mutation) {
     if(mutation && status!=AUTH_OK) fault(p);
     rp2350_crypto_clear_credentials_internal(p->crypto);
-    auth_secure_zero(p->workspace,sizeof(*p->workspace)); p->busy=false; return status;
+    auth_secure_zero(p->workspace,sizeof(*p->workspace));
+    p->busy=false;
+    return status;
 }
-static AuthStatus refresh(Rp2350StoreProvider *p,bool exact) {
+static AuthStatus refresh(Rp2350StoreProvider *p) {
     Rp2350StoreCheckpointWorkspace *w=&p->workspace->phase.recovery;
-    AuthStatus status=rp2350_store_boot_internal(&w->source,&p->flash,&p->config,&w->boot); if(status!=AUTH_OK) return status;
+    AuthStatus status=rp2350_store_boot_internal(&w->source,&p->flash,&p->config,&w->boot);
+    if(status!=AUTH_OK) return status;
     if(w->source.state!=RP2350_STORE_RECOVERED && w->source.state!=RP2350_STORE_MAINTENANCE) return AUTH_BUSY;
     Rp2350StoreVersion v=version(&w->source);
-    if(exact && !same_version(&v,&p->version)) return AUTH_BAD_DATA;
-    p->cache=w->source.records; p->version=v; p->journal_end=w->source.journal_end; return AUTH_OK;
+    p->cache=w->source.records;
+    p->version=v;
+    p->journal_end=w->source.journal_end;
+    return AUTH_OK;
 }
 /* Recovery authenticates the compact index once. While this provider is the
  * sole writer, reads need fresh authority and the selected authenticated frame,
@@ -86,7 +99,7 @@ static AuthStatus space_for_commit(Rp2350StoreProvider *p,size_t extent) {
         AuthStatus status=rp2350_store_compact_internal(&receipt,&p->flash,&p->config,&p->workspace->phase.compaction);
         if(status==AUTH_OK && !receipt.clean) status=AUTH_BAD_DATA;
         auth_secure_zero(&receipt,sizeof(receipt));
-        if(status==AUTH_OK) status=refresh(p,false);
+        if(status==AUTH_OK) status=refresh(p);
         if(status!=AUTH_OK) return status;
         if(p->journal_end>RP2350_STORE_ARENA_SIZE) return AUTH_BAD_DATA;
         available=RP2350_STORE_ARENA_SIZE-p->journal_end;
@@ -104,8 +117,7 @@ static AuthStatus commit(Rp2350StoreProvider *p,const Rp2350StoreTransaction *tx
     Rp2350StoreTransaction pending;
     if(status==AUTH_OK) status=rp2350_store_transaction_decode(1,p->workspace->pending,length,&pending);
     if(status!=AUTH_OK) return status;
-    Rp2350StoreMutationWorkspace *w=&p->workspace->phase.mutation;
-    p->writer.locked=true;
+    Rp2350StoreCommitWorkspace *w=&p->workspace->phase.mutation;
     status=authority(p,&w->source,&w->boot);
     if(status==AUTH_OK && p->cache.logical_sequence!=p->version.logical_sequence) status=AUTH_BAD_DATA;
     if(status==AUTH_OK) status=rp2350_store_recovery_begin(&w->boot.recovery,&p->cache,p->version.generation,
@@ -123,10 +135,10 @@ static AuthStatus commit(Rp2350StoreProvider *p,const Rp2350StoreTransaction *tx
         .base=w->source.selection.arena_base,.size=RP2350_STORE_ARENA_SIZE,.end=p->journal_end,
         .generation=p->version.generation,.next_sequence=id.sequence,.initialized=true};
     memcpy(w->log.epoch,p->version.epoch,16);
-    status=rp2350_store_log_append_internal(&w->log,1,p->workspace->pending,length,&w->boot.io.log);
+    status=rp2350_store_log_append_verified_internal(&w->log,1,p->workspace->pending,length,&w->boot.io.log);
     if(status==AUTH_OK) {
         p->cache=w->boot.recovery.staged; p->version.logical_sequence=p->cache.logical_sequence;
-        p->journal_end=w->log.end; p->writer.locked=false;
+        p->journal_end=w->log.end;
     }
     return status;
 }
@@ -145,13 +157,13 @@ static AuthStatus recover(Rp2350StoreProvider *p,const Rp2350Flash *flash,const 
     *p=(Rp2350StoreProvider){.crypto=crypto,.flash=*flash,.config=*config,.workspace=w,.busy=true};
     rp2350_crypto_invalidate_internal(crypto);
     AuthStatus status=maintenance(p); if(status!=AUTH_OK) goto done;
-    status=refresh(p,false); if(status!=AUTH_OK) goto done;
+    status=refresh(p); if(status!=AUTH_OK) goto done;
     Rp2350StoreCheckpointWorkspace *capture=&w->phase.recovery;
     if(capture->source.state!=RP2350_STORE_RECOVERED) { status=AUTH_BUSY; goto done; }
     status=rp2350_store_checkpoint_keys_internal(capture,&p->flash,&p->config,&capture->source.selection,false); if(status!=AUTH_OK) goto done;
     status=rp2350_crypto_stage_epoch_internal(crypto,p->cache.global.handle_prefix,p->cache.global.handle_high); if(status!=AUTH_OK) goto done;
     if(activate) { status=rp2350_crypto_activate_internal(crypto); if(status!=AUTH_OK) goto done; }
-    p->writer.locked=false; p->live=true; p->staged=!activate;
+    p->live=true; p->staged=!activate;
 done:
     if(status==AUTH_NOT_FOUND) status=AUTH_IO_ERROR;
     return finish(p,status,true);
@@ -353,7 +365,7 @@ static AuthStatus destroy(void *ctx,const AuthKeyHandle *h) {
         Rp2350StoreTransaction tx={.class_id=1,.count=1,.entries={{5,h->bytes,32}}}; status=commit(p,&tx);
     }
     if(status==AUTH_OK) status=maintenance(p);
-    if(status==AUTH_OK) status=refresh(p,false);
+    if(status==AUTH_OK) status=refresh(p);
     if(status==AUTH_OK) { AuthCrypto c=rp2350_crypto_interface(p->crypto); status=c.destroy_key(c.context,h); if(status==AUTH_NOT_FOUND) status=AUTH_OK; }
     return finish(p,status,true);
 }
@@ -419,11 +431,20 @@ static AuthStatus init_nonresident(Rp2350StoreProvider *p) {
     AuthCrypto c=rp2350_crypto_interface(p->crypto); AuthSecretCrypto s=rp2350_secret_interface(p->crypto);
     return rp2350_nonresident_seal_init_internal(&p->workspace->nonresident_seal,&c,&s,root->descriptor,root->epoch);
 }
-/* Caller owns begin/finish. Freshly authenticate root/global state before
- * decoding, and never resolve a future or non-durable handle/issuance serial. */
+/* The sole serialized writer publishes global state only after a verified
+ * append. Reauthenticate root/selector authority, then use that recovered
+ * index for issuance limits; no resident journal replay is needed here. */
+static AuthStatus nonresident_authority(Rp2350StoreProvider *p) {
+    Rp2350StoreCheckpointWorkspace *w=&p->workspace->phase.recovery;
+    AuthStatus status=authority(p,&w->source,&w->boot);
+    if(status==AUTH_OK && p->cache.logical_sequence!=p->version.logical_sequence) status=AUTH_BAD_DATA;
+    return status;
+}
+/* Caller owns begin/finish. Never resolve a future or non-durable
+ * handle/issuance serial; the wire ID remains authenticated on every decode. */
 static AuthStatus decode_nonresident(Rp2350StoreProvider *p,const uint8_t *id,size_t length,const uint8_t rp[32],uint8_t *policy) {
     if(length!=RP2350_NONRESIDENT_ID_SIZE) return AUTH_NOT_FOUND;
-    AuthStatus status=refresh(p,true);
+    AuthStatus status=nonresident_authority(p);
     if(status==AUTH_OK) status=init_nonresident(p);
     if(status==AUTH_OK) status=rp2350_nonresident_seal_open_internal(&p->workspace->nonresident_seal,
         id,length,rp,&p->workspace->nonresident_key,policy,&p->workspace->nonresident);
@@ -492,7 +513,7 @@ static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const
     auth_secure_zero(out,sizeof(*out)); auth_secure_zero(id,AUTH_CREDENTIAL_ID_MAX_SIZE); auth_secure_zero(pub,65); *length=0;
     release_nonresident(p);
     if(!begin(p)) return AUTH_IO_ERROR;
-    AuthStatus status=refresh(p,true);
+    AuthStatus status=nonresident_authority(p);
     if(status==AUTH_OK && (p->cache.global.nonresident_issued>=UINT32_C(16777215) ||
         p->cache.global.nonresident_counter==UINT32_MAX || p->cache.global.handle_high==UINT64_MAX))
         return finish(p,AUTH_CAPACITY,false);

@@ -25,7 +25,8 @@ typedef struct {
  * erase callbacks. All buffers/contexts disjoint, caller-owned static RAM.
  * Authenticates current boot state, validates referenced encoded key records
  * one at a time, then erases/read-verifies ONLY the opposite arena.
- * Writes a folded checkpoint, verifies full replay and compares canonical
+ * Writes a folded checkpoint with a retained cursor and immediate per-write
+ * verification, then verifies full replay and compares canonical
  * state before returning a proposed SWITCH. Orphan/retired keys are omitted;
  * their old copies remain and deletion/compaction is NOT complete.
  * No selector/root/active-arena write, authority switch or provisioning occurs.

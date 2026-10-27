@@ -17,25 +17,14 @@ typedef struct {
     uint64_t denied_operation,consumed_operation;
     bool nonresident_enabled;
 } Rp2350RuntimeReset;
-/* Development runtime binding for native tests and the board application.
- * The caller supplies USB transport and verified physical flash separately.
- * Static, mutually disjoint objects; provider scratch may either be disjoint
- * or exactly workspace->phase.provider (serialized lifecycle sharing).
- * Initialize provider, service,
- * PIN and backend first, then configure this Reset binding BEFORE backend
- * credentials/PIN binding. powered_at_ms is real power-on and is never reset
- * by this module. Configure device start/abort/resync to the adapters below;
- * call runtime_poll outside device callbacks after device_poll. No direct
- * backend_start/poll bypass while locked. Capacity-specific full RAM/stack
- * qualification is required before any target application instantiation.
- * Callback runs only through the core's consumed-operation/fresh-presence
- * authorization. It clears actual tokens, credential scratch, assertions,
- * management snapshots and provider keys/cache, then runs verified persistent
- * Reset and initializes actual service/PIN callbacks on the new empty epoch.
- * Key service enables only after reinitialization; later backend token-renewal
- * or RNG errors revoke the provider and runtime readiness. No automatic repair
- * or recovery authorization. A LOCKED runtime requires separately authorized
- * physical recovery flow; this module does not invent that consent source. */
+/* Configure after store/service/PIN initialization, before binding backend
+ * credentials/PIN. All calls are serialized; poll runs outside device callbacks.
+ * Provider scratch may be exactly workspace->phase.provider; other contexts
+ * must be disjoint. powered_at_ms is real power-on, not a USB session timestamp.
+ * Reset consumes fresh presence, locks keys, clears session/cache state, commits
+ * persistent reset and reinitializes services before enabling key operations.
+ * A storage, RNG or subsequent token-renewal failure keeps service locked.
+ * Route start/abort/resync through these adapters; never bypass the lock gate. */
 bool rp2350_runtime_reset_configure_internal(Rp2350RuntimeReset *,Rp2350StoreResetFlowWorkspace *,
     Rp2350StoreProvider *,Rp2350StoreProviderWorkspace *,Rp2350Crypto *,AuthCredentialService *,
     CtapClientPin *,CtaphidCtapBackend *,uint32_t powered_at_ms);

@@ -41,7 +41,7 @@ static AuthStatus mac(void *ctx,const uint8_t *key,size_t kn,const uint8_t *in,s
 }
 static AuthStatus aes(void *ctx,bool encrypt,const uint8_t key[32],const uint8_t iv[16],
         const uint8_t *in,size_t n,uint8_t *out) {
-    if (!key || !iv || !in || !out || (n!=16 && n!=32 && n!=64)) return AUTH_INVALID_ARGUMENT;
+    if (!key || !iv || !in || !out || n==0U || n>RP2350_AES_MAX_BYTES || n%16U) return AUTH_INVALID_ARGUMENT;
     if (!ready(ctx)) { auth_secure_zero(out,n); return AUTH_CRYPTO_ERROR; }
     /* Own and wipe CBC intermediates: upstream's CBC helper keeps unwiped
      * plaintext/chaining scratch. Its AES block primitive remains unchanged.

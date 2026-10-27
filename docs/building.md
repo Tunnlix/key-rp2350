@@ -37,8 +37,12 @@ the internal pull-up; no voltage source is needed on the button.
 The optional tool under `tools/provisioning/` initializes a blank board or
 erases an existing store. **It destroys all stored credentials and the PIN.**
 It uses the existing guarded erase/provisioning flow and requires a fresh
-physical button press before destructive IO. It creates no sample credentials
-or default PIN. It is separate from normal firmware and is not built by default.
+physical button press before destructive IO. It creates no sample credentials.
+Factory setup installs the temporary PIN
+`000000`, with a six-character minimum and a mandatory PIN change before
+PIN-based authorization. Change it with a compatible FIDO manager. Standard
+CTAP reset instead clears the PIN and restores the six-character minimum.
+The tool is separate from normal firmware and is not built by default.
 
 ```sh
 cmake -S firmware/rp2350 --preset rp2350-release -DRP2350_BUILD_PROVISIONING=ON
@@ -73,48 +77,41 @@ then release when the fast indication begins. This enters ROM update mode.
 The firmware also supports a PC-requested vendor command over FIDO HID,
 confirmed by a fresh press within 30 seconds. Its desktop client is separate.
 
-Current source identifies itself as **1.2.0-dev**: numeric INIT/GetInfo fields report
-1.2.0 and USB bcdDevice reports 1.20. ELF metadata includes the `-dev` suffix;
-numeric fields cannot distinguish development firmware from stable. Building
-this source does not imply release or completed hardware acceptance.
 The USB product and update-information name are **Key**, with manufacturer
-**Tunnlix**. Build and generated firmware files belong in ignored build directories.
+**Tunnlix**. Firmware identity comes from `include/ctap_device_version.h`;
+numeric USB/CTAP fields cannot distinguish development builds from stable ones.
+Building source does not imply release or completed hardware acceptance.
 
-## 1.1 compatibility
+## Features and storage
 
-The source supports ES256/P-256 and Ed25519 credentials, plus PIN protocols 1
-and 2 and legacy `getPinToken` for older clients. Ed25519 uses RFC 8032 message
-signing, including for OpenSSH `ed25519-sk`; P-256 remains available for
-`ecdsa-sk` and PIN key agreement. Initial iPhone use of the 1.1 candidate has
-been reported working; the complete acceptance matrix and SSH hardware checks
-remain pending. Advertising protocol versions does not claim
-FIDO certification or completed conformance testing.
+ES256/P-256 and Ed25519 work with PIN protocols 1 and 2. Legacy `getPinToken`
+remains available for older clients. OpenSSH uses these through `ecdsa-sk` and
+`ed25519-sk`. CTAP protocol advertising does not claim FIDO certification.
 
-Existing 1.0 P-256 records, counters and PIN data remain readable. Ed25519 fits
-within the existing record sizes and shared 32-slot capacity. Once resident
-Ed25519 records exist, older firmware that only understands P-256 cannot read
-the mixed store and can fail recovery. Do not downgrade such a device unless
-you intentionally reset/re-enroll it or use firmware that understands both
-algorithms. Renaming the product does not change storage derivation labels.
+The device stores 32 discoverable credentials. Sealed non-discoverable credential
+IDs are held by clients and do not consume those slots. Credential management
+supports listing, deletion and editable user names. PIN policy supports always-UV,
+increasing the minimum length, and requiring a PIN change. The factory minimum
+is six Unicode characters; existing stored policies remain unchanged by updates.
 
-## Windows SSH resident recovery
+Resident credentials can carry a 32-byte `credBlob`. Large blobs share a 4 KiB
+client-encrypted array, backed by four rotating banks. Credential-management
+output of `largeBlobKey` is incomplete; full garbage-collection interoperability
+is not yet established.
 
-The original 1.1.0-rc.1 candidate incorrectly rejects RP-scoped credential-
-management tokens when enumerating credentials for that RP. The source fix
-accepts matching scopes for both the first and subsequent credential responses;
-global inventory still requires an unscoped token. Independent libfido2 1.16.0
-checks pass against an isolated patched 1.1 native build for mixed P-256/Ed25519
-SSH credentials. The native reproduction accepts a correct PIN before failing
-credential listing, while an empty inventory skips that failing call. A reported
-Keyroost timeout remains unconfirmed: current upstream uses an unscoped CM token
-and distinguishes authentication errors from its two-second HID silence timeout.
-The scoped-token fix therefore does not establish the cause of that separate
-report. Windows hardware
-recovery and SSH signing remain pending.
+| Region | Flash offsets | Size |
+| --- | --- | --- |
+| Firmware | `0x000000`–`0x177fff` | 1504 KiB |
+| Blob banks | `0x178000`–`0x17ffff` | 32 KiB |
+| Credential store | `0x180000`–`0x1fffff` | 512 KiB |
 
-A [separate Windows OpenSSH report](https://github.com/PowerShell/Win32-OpenSSH/issues/2427)
-describes the same visible recovery error with YubiKeys, including a reported
-administrator-session workaround. That does not establish the cause on this
-device. After loading a fixed candidate, retry recovery into a fresh directory;
-if it still fails, compare normal and elevated sessions using the same OpenSSH
-installation. Existing local key files should not be overwritten for this check.
+Application flashing must preserve everything at or above `0x178000`, including
+both blob and credential storage. Firmware images exclude those regions. ROM
+BOOTSEL does not enforce this application-specific boundary.
+
+Downgrading to firmware that cannot decode stored algorithms, blob metadata or
+PIN policies can prevent recovery. Use compatible firmware or intentionally
+reset and re-enroll. Product renaming does not change storage derivation labels.
+
+See [status indications](indicators.md), [device identity](device-identity.md)
+and [security limitations](../.github/SECURITY.md).

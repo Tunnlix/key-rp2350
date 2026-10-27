@@ -9,7 +9,8 @@
  * it must validate peer coordinates and reject infinity/off-curve points before
  * scalar multiplication, returning AUTH_BAD_DATA or AUTH_INVALID_ARGUMENT.
  * The COSE parser checks encoding only; it cannot establish curve membership.
- * The portable protocol layer applies HKDF. CBC has no padding, lengths 16/32/64.
+ * The portable protocol layer applies HKDF. Protocol CBC uses 16/32/64 bytes
+ * without padding; storage providers may support larger bounded block multiples.
  * Credential randoms are two independent persistent 32-byte values generated
  * with each credential key, even when registration did not request hmac-secret.
  * They remain provider-owned and are erased with key deletion/factory reset.

@@ -6,5 +6,8 @@
 bool rp2350_usb_init(void);
 void rp2350_usb_close(void);
 bool rp2350_usb_submit(void *, const uint8_t report[64], uint64_t transfer);
+/* Bounded transport-only yield from long provider work; never reenters app. */
+void rp2350_usb_service(const Rp2350Application *);
+bool rp2350_usb_cancel_requested(void *, uint64_t operation);
 CtaphidDeviceResult rp2350_usb_poll(Rp2350Application *);
 #endif

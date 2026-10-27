@@ -1,6 +1,7 @@
 #ifndef RP2350_STORAGE_PROVISION_INTERNAL_H
 #define RP2350_STORAGE_PROVISION_INTERNAL_H
 #include "storage_reset_internal.h"
+#define RP2350_DEFAULT_MIN_PIN_LENGTH 6U
 typedef struct { bool verified; } Rp2350StoreProvisioned;
 typedef struct {
     Rp2350StoreRoot root;

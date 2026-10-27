@@ -30,4 +30,17 @@ AuthStatus rp2350_store_log_open_internal(Rp2350StoreLog *,const Rp2350Flash *,R
 AuthStatus rp2350_store_log_open_frames_internal(Rp2350StoreLog *,const Rp2350Flash *,Rp2350StoreSeal *,
     uint32_t,uint32_t,uint64_t,const uint8_t[16],Rp2350StoreFrameReplay,void *,Rp2350StoreLogWorkspace *);
 AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *,uint16_t,const uint8_t *,size_t,Rp2350StoreLogWorkspace *);
+/* Live provider only: the prefix was fully replayed at recovery and each
+ * appended transaction was semantically validated before publication. Recheck
+ * all frame MACs, bindings, sequence/cursor and blank tail without decrypting
+ * old payloads again. New transaction/readback still receives full validation. */
+AuthStatus rp2350_store_log_append_verified_internal(Rp2350StoreLog *,uint16_t,const uint8_t *,size_t,Rp2350StoreLogWorkspace *);
+/* Checkpoint staging ONLY: caller has opened the completely blank inactive
+ * arena and owns this cursor and all writes until staging ends. Accepts only
+ * checkpoint/manifest classes 2/3. Verifies the new extent is erased, every
+ * programmed page and the authenticated frame; does not rescan the prefix.
+ * Caller MUST fully replay/audit the finished bank before publishing a SWITCH.
+ * A failed writer cannot be resumed: erase/rebuild through checkpoint staging.
+ * Normal mutation/selector writers must use the full-scan append above. */
+AuthStatus rp2350_store_log_append_checkpoint_internal(Rp2350StoreLog *,uint16_t,const uint8_t *,size_t,Rp2350StoreLogWorkspace *);
 #endif

@@ -67,6 +67,10 @@ typedef struct {
     /* Valid allocated-CID INIT, including while idle. Clear channel-bound
      * continuation state; uses cbor_context and must not reenter the device. */
     void (*resync_channel)(void *context, uint32_t cid);
+    /* Read-only transport latch, checked at backend execution boundaries.
+     * Allows CANCEL received during provider work to suppress the final reply.
+     * A durable mutation already in progress is completed, never rolled back. */
+    bool (*cancel_requested)(void *context, uint64_t operation_id);
 } CtaphidDeviceConfig;
 
 typedef struct {

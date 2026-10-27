@@ -66,6 +66,7 @@ AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2
     status=blank_range(flash,0,RP2350_STORE_PARTITION_SIZE,w->boot.io.blank); if(status!=AUTH_OK) goto done;
     w->root.profile=1; w->root.descriptor_length=32; w->root.serial=w->root.reset_generation=1;
     w->global.reset_generation=1; w->pin.retries=AUTH_PIN_MAX_RETRIES;
+    w->pin.min_length=RP2350_DEFAULT_MIN_PIN_LENGTH;
     status=fresh(crypto,w->root.descriptor,32); if(status!=AUTH_OK) goto done;
     status=fresh(crypto,w->root.epoch,16); if(status!=AUTH_OK) goto done;
     status=fresh(crypto,w->global.handle_prefix,24); if(status!=AUTH_OK) goto done;

@@ -11,7 +11,7 @@ typedef struct {
     bool initialized,busy;
 } Rp2350NonresidentSeal;
 typedef struct {
-    uint8_t wire[256],plain[176],tag[32],chain[16],next[16];
+    uint8_t wire[256],plain[176],tag[32];
 } Rp2350NonresidentWorkspace;
 /* MUST durably reserve a fresh serial in [1, limit) before returning OK.
  * Never reuse a serial after interruption, even if no ID was published. Caller

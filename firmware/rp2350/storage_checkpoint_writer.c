@@ -10,7 +10,7 @@ static AuthStatus encode_metadata(Rp2350StoreCheckpointWorkspace *w,const Rp2350
 static AuthStatus append(Rp2350StoreCheckpointWorkspace *w,uint16_t class_id,uint16_t kind,size_t n,uint8_t digest[32]) {
     Rp2350StoreTransaction tx={.class_id=class_id,.count=1,.entries={{kind,w->data,n}}}; size_t length=0;
     AuthStatus status=rp2350_store_transaction_encode(&tx,w->plain,sizeof(w->plain),&length);
-    if(status==AUTH_OK) status=rp2350_store_log_append_internal(&w->target,class_id,w->plain,length,&w->boot.io.log);
+    if(status==AUTH_OK) status=rp2350_store_log_append_checkpoint_internal(&w->target,class_id,w->plain,length,&w->boot.io.log);
     auth_secure_zero(w->plain,sizeof(w->plain)); auth_secure_zero(w->data,sizeof(w->data));
     if(status!=AUTH_OK) return status;
     return w->target.flash.read(w->target.flash.context,w->target.base+w->target.end-256U+40U,digest,32);

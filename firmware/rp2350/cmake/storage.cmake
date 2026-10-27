@@ -18,7 +18,6 @@ target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_compaction.c
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_reset.c")
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_provision.c")
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_reset_flow.c")
-target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_mutation.c")
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/storage_provider.c")
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/runtime_reset.c")
 target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/application.c" "${storage_dir}/presence.c")

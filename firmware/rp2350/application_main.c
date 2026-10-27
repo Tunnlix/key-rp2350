@@ -1,4 +1,4 @@
-#include "development_layout.h"
+#include "board_layout.h"
 #include "application.h"
 #include "board_flash.h"
 #include "board_entropy.h"
@@ -26,6 +26,7 @@ static struct {
 #define STARTUP_MARKER UINT32_C(0x41505031)
 #define WATCHDOG_TIMEOUT_MS 6000U
 #define STACK_USE_LIMIT_BYTES 14336U
+#define STACK_CHECK_INTERVAL_MS 50U
 
 static uint32_t now_ms(void *context) {
     (void)context;
@@ -40,6 +41,7 @@ static bool button_pressed(void *context) {
 static void flash_progress(void *context) {
     (void)context;
     watchdog_update();
+    rp2350_usb_service(&app.application);
 }
 
 static void configure_pins(void) {
@@ -97,7 +99,8 @@ static AuthStatus start_application(void) {
         .now_ms = now_ms,
         .pressed = button_pressed,
         .submit = rp2350_usb_submit,
-        .usb_transport = true
+        .usb_transport = true,
+        .cancel_requested = rp2350_usb_cancel_requested
     };
     /* Key onboard model: fa024a59-a2a6-41d9-bd40-ed6a78915bca. Stable across firmware revisions. */
     static const uint8_t model_aaguid[16] = {0xfa, 0x02, 0x4a, 0x59, 0xa2, 0xa6, 0x41, 0xd9, 0xbd, 0x40, 0xed, 0x6a, 0x78, 0x91, 0x5b, 0xca};
@@ -152,11 +155,14 @@ int main(void) {
     if(!interrupted) status = stack_observed ? start_application() : AUTH_CAPACITY;
     clear_startup_marker();
     bool fault_closed = false;
+    uint32_t last_stack_check=now_ms(NULL)-STACK_CHECK_INTERVAL_MS;
 
     while(true) {
         if(status == AUTH_OK) status = poll_application();
         if(status == AUTH_OK && rp2350_firmware_update_ready(&app.application)) enter_bootloader();
-        if(stack_observed) {
+        uint32_t now=now_ms(NULL);
+        if(stack_observed && (uint32_t)(now-last_stack_check)>=STACK_CHECK_INTERVAL_MS) {
+            last_stack_check=now;
             uint32_t used = rp2350_stack_probe_used();
             if(used > STACK_USE_LIMIT_BYTES) status = AUTH_CAPACITY;
         }

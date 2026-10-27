@@ -27,4 +27,8 @@ AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *,const Rp2350StoreIdentit
  * fault. No decryption before both tags and commit/body binding are verified. */
 AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *,const Rp2350StoreIdentity *,uint32_t,
     const uint8_t *,size_t,uint8_t *,size_t,size_t *,Rp2350StoreSealWorkspace *);
+/* Recheck envelope/commit integrity without decrypting a previously replayed
+ * frame. Does not validate plaintext padding or transaction semantics. */
+AuthStatus rp2350_store_verify_internal(Rp2350StoreSeal *,const Rp2350StoreIdentity *,uint32_t,
+    const uint8_t *,size_t,size_t *,Rp2350StoreSealWorkspace *);
 #endif

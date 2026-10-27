@@ -344,6 +344,22 @@ static CtaphidDeviceResult publish_response(CtaphidCtapBackend *backend, Ctaphid
     return result == CTAPHID_DEVICE_INVALID_STATE ? CTAPHID_DEVICE_IGNORED : result;
 }
 
+static bool transport_cancelled(const CtaphidCtapBackend *backend,const CtaphidDevice *device)
+{
+    return device->config.cancel_requested != NULL &&
+        device->config.cancel_requested(device->config.transport_context,backend->operation_id);
+}
+
+static CtaphidDeviceResult publish_cancel(CtaphidCtapBackend *backend,CtaphidDevice *device)
+{
+    clear_continuations(backend);
+    ctap_large_blobs_clear(&backend->blobs);
+    auth_secure_zero(backend->response,sizeof backend->response);
+    backend->response[0]=0x2dU;
+    backend->response_length=1U;
+    return publish_response(backend,device);
+}
+
 CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     CtaphidDevice *device, uint32_t now_ms)
 {
@@ -367,7 +383,9 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
         ctaphid_ctap_backend_abort(backend, backend->operation_id);
         return CTAPHID_DEVICE_IGNORED;
     }
+    if (transport_cancelled(backend,device)) return publish_cancel(backend,device);
     if (backend->awaiting_credential_prepare) prepare_credentials(backend, now_ms);
+    if (transport_cancelled(backend,device)) return publish_cancel(backend,device);
     if (backend->awaiting_reset && !backend->reset_authorized) {
         uint8_t allowed = ctap_reset_authorize(&backend->reset, backend->operation_id,
             device->reassembler.last_activity_time_ms);
@@ -394,8 +412,10 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
             return CTAPHID_DEVICE_OK;
         }
         finish_presence(backend, presence, now_ms);
+        if (transport_cancelled(backend,device)) return publish_cancel(backend,device);
     }
     execute_ready_command(backend, device, now_ms);
+    if (transport_cancelled(backend,device)) return publish_cancel(backend,device);
     return publish_response(backend, device);
 }
 

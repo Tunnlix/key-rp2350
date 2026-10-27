@@ -9,7 +9,7 @@ management, 32 stored discoverable passkeys and sealed non-discoverable credenti
 those slots. An external button connects D0 (GPIO26) to GND.
 
 The code is written in C17, with a portable protocol core and separate RP2350
-hardware providers.FIDO certification is not claimed. Read the [security limitations](.github/SECURITY.md)
+hardware providers. FIDO certification is not claimed. Read the [security limitations](.github/SECURITY.md)
 before using it for important accounts.
 
 [Building and setup](docs/building.md) · [Dependency notices](docs/third-party-notices.md) · [MIT license](LICENSE)

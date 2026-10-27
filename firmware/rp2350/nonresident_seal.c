@@ -38,17 +38,9 @@ static AuthStatus finish(Rp2350NonresidentSeal *s,Rp2350NonresidentWorkspace *w,
     return status;
 }
 static AuthStatus crypt(Rp2350NonresidentSeal *s,Rp2350NonresidentWorkspace *w,bool encrypt) {
-    memcpy(w->chain,w->wire+32,16);
-    for(size_t at=0;at<176;) {
-        size_t remaining=176-at,take=remaining>=64 ? 64 : remaining>=32 ? 32 : 16;
-        uint8_t *in=encrypt ? w->plain+at : w->wire+48+at;
-        uint8_t *out=encrypt ? w->wire+48+at : w->plain+at;
-        if(!encrypt) memcpy(w->next,in+take-16,16);
-        AuthStatus status=s->secrets.aes256_cbc(s->secrets.context,encrypt,s->enc,w->chain,in,take,out);
-        if(status!=AUTH_OK) return status;
-        memcpy(w->chain,encrypt ? out+take-16 : w->next,16); at+=take;
-    }
-    return AUTH_OK;
+    const uint8_t *in=encrypt ? w->plain : w->wire+48;
+    uint8_t *out=encrypt ? w->wire+48 : w->plain;
+    return s->secrets.aes256_cbc(s->secrets.context,encrypt,s->enc,w->wire+32,in,176,out);
 }
 AuthStatus rp2350_nonresident_seal_create_internal(Rp2350NonresidentSeal *s,
         const Rp2350Key *key,const uint8_t rp[32],uint8_t policy,

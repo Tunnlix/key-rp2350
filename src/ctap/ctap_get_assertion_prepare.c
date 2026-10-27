@@ -79,11 +79,10 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapGetAssertion
         if (pin == NULL || !auth_credentials_resident_supported(service)) return CTAP_STATUS_NO_CREDENTIALS;
         uint64_t *order = workspace->scratch.phase.order;
         for (size_t i = 0U; i < service->storage.capacity; ++i) {
-            AuthStatus lookup = auth_credentials_enumerate(service, i, found);
+            AuthStatus lookup = auth_credentials_find_discoverable(service, result->rp_id_hash, i, found);
             if (lookup == AUTH_NOT_FOUND) break;
             if (lookup != AUTH_OK) return CTAP_STATUS_OTHER;
-            if (!found->discoverable || memcmp(found->rp_id_hash, result->rp_id_hash, 32U) != 0 ||
-                (found->cred_protect != 1U && !result->user_verified)) continue;
+            if (found->cred_protect != 1U && !result->user_verified) continue;
             for (size_t j = 0U; j < result->credential_count; ++j)
                 if (memcmp(result->credential_ids[j], found->credential_id, 32U) == 0) return CTAP_STATUS_OTHER;
             size_t slot = result->credential_count++;

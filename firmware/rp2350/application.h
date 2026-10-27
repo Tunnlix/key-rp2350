@@ -12,6 +12,7 @@ typedef struct {
     CtaphidAbortReport abort;
     bool asynchronous;
     bool usb_transport;
+    bool (*cancel_requested)(void *, uint64_t);
 } Rp2350ApplicationIo;
 typedef struct Rp2350Application {
     Rp2350RuntimeReset runtime;

@@ -97,7 +97,7 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
         !ctaphid_ctap_backend_configure_pin(&a->backend,&a->pin)) { status=AUTH_BAD_DATA; goto failed; }
     CtaphidDeviceConfig device={.submit_report=io->submit,.abort_report=io->abort,.transport_context=io->context,
         .asynchronous_transport=io->asynchronous,.start_cbor=start,.abort_cbor=abort_operation,
-        .resync_channel=resync,.cbor_context=a};
+        .resync_channel=resync,.cbor_context=a,.cancel_requested=io->cancel_requested};
     if(ctaphid_device_init(&a->device,&device)!=CTAPHID_DEVICE_OK) { status=AUTH_BAD_DATA; goto failed; }
     uint32_t now=io->now_ms(io->context);
     rp2350_presence_init(&a->presence,io->pressed(io->context),now);

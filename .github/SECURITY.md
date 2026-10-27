@@ -1,12 +1,13 @@
 # Security scope and reporting
 
-The current source is 1.1.0-rc.1, a release candidate awaiting hardware acceptance
-for its new PIN compatibility and Ed25519 paths. FIDO certification and complete
-conformance have not been established. The previous 1.0.0 candidate passed basic
-browser registration, PIN-backed login, reconnect, sleep/wake, presence and update
-entry checks; that evidence does not qualify the new features. Full target
-workload resource margins and physical interrupted-write/Reset qualification
-remain incomplete.
+FIDO certification and complete conformance have not been established. Native
+regression checks do not establish hardware timing, endurance or interrupted-write
+qualification. See the source and build instructions for supported features.
+
+Explicit factory setup installs the temporary PIN `000000` and requires changing
+it before PIN-based authorization. The factory minimum is six Unicode characters.
+CTAP reset clears the PIN and restores that minimum; it does not reinstall a
+shared PIN. Existing PINs and configured policies are not changed by an update.
 
 The onboard configuration does not claim resistance to physical theft, flash
 reads, executable replacement or restoration of old flash snapshots. Its
@@ -19,8 +20,9 @@ The store also claims no enforced storage-encryption lifetime; the encoded
 attempt field is not a durable usage reservation mechanism.
 
 USB VID/PID 1209:0001 is a shared private-test identity. Obtain an allocated
-identity before distributing devices. The all-zero AAGUID is a development
-identifier, not certification metadata.
+identity before distributing devices. The configured model AAGUID is documented
+in the device identity notes and does not imply certification. Attestation `none`
+may expose an all-zero AAGUID by design.
 
 For a suspected vulnerability, use GitHub's Security → Report a vulnerability
 if enabled. Otherwise open an issue asking for a private reporting channel,

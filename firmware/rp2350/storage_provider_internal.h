@@ -1,14 +1,19 @@
 #ifndef RP2350_STORAGE_PROVIDER_INTERNAL_H
 #define RP2350_STORAGE_PROVIDER_INTERNAL_H
-#include "storage_mutation_internal.h"
+#include "storage_version_internal.h"
 #include "storage_compaction_internal.h"
 #include "crypto_restore_internal.h"
 #include "nonresident_seal_internal.h"
 #include "authenticator/auth_nonresident_provider.h"
 typedef struct {
+    Rp2350StoreBootResult source;
+    Rp2350StoreBootWorkspace boot;
+    Rp2350StoreLog log;
+} Rp2350StoreCommitWorkspace;
+typedef struct {
     union {
         Rp2350StoreCheckpointWorkspace recovery;
-        Rp2350StoreMutationWorkspace mutation;
+        Rp2350StoreCommitWorkspace mutation;
         Rp2350StoreCompactionWorkspace compaction;
     } phase;
     uint8_t metadata[RP2350_STORE_METADATA_MAX],global[96],key[136],counter[48];
@@ -22,7 +27,6 @@ typedef struct {
     Rp2350Flash flash;
     Rp2350StoreBootConfig config;
     Rp2350StoreReplayState cache;
-    Rp2350StoreMutationWriter writer;
     Rp2350StoreVersion version;
     Rp2350StoreProviderWorkspace *workspace;
     uint32_t journal_end;
@@ -30,37 +34,18 @@ typedef struct {
     bool selected_nonresident;
     bool live,busy,staged;
 } Rp2350StoreProvider;
-/* Development profile 1/backend 0, used by native models and the board app.
- * Physical IO is injected; it does not provide a protected root, persistent
- * encryption-attempt reservation or production credential protection.
- * Caller owns zero-initialized
- * context/static workspace, one candidate crypto owner, disjoint buffers and
- * base primitive contexts; serialize all application calls. Config resolve/hash/
- * inspect must use BASE crypto, never this provider's gated service interfaces.
- * Recover validates roots/selector/full log, performs authenticated compaction
- * maintenance, checks the entire inactive bank and builds a compact authenticated
- * index. Full metadata and private records are loaded by selected frame only
- * when requested. Public keys are recomputed before use (P-256 uses blinding); working
- * keys and scratch are wiped at every callback exit. No repair
- * or provisioning of LOCKED/blank/RESETTING storage. All mutation errors revoke
- * live service and clear keys/cache. Cached metadata is valid only while this is
- * the sole serialized owner; external writes require close + fresh recover.
- * Key allocation commits the private record and handle high-water before output.
- * Reads reauthenticate root/selector authority and the selected frame against
- * the recovered index. Mutations stage typed semantics against that index;
- * append authenticates the existing journal/cursor and verifies the durable
- * new frame before publishing the staged index. Full replay remains mandatory
- * at recovery and after compaction, not for every record read or PIN write.
- * Preflight compacts before journal exhaustion, reserving two maximum frames
- * for a serialized creation. A durable unreferenced staging key prevents
- * compaction until its metadata is committed or the key is retired. Pending
- * transaction bytes survive phase-union maintenance; no uncertain append retry.
- * Index storage still scales with configured capacity; it is not an unbounded
- * external-storage implementation. Persistent record encodings are unchanged.
- * Key destruction scrubs retired/orphan copies via compaction before success;
- * this expensive path is NOT qualified for target callback timing/endurance.
- * Workspace is wiped after callbacks. API inputs/outputs must not alias provider
- * state/scratch. Core gains no format or private-key import/export API. */
+/* Single serialized writer with caller-owned, disjoint contexts/workspace.
+ * Config primitives must use base crypto, never the gated provider callbacks.
+ * Recovery validates authority and the complete log, cleans orphan/retired keys
+ * and builds a compact index. External writes require close + fresh recovery.
+ * Reads authenticate current authority and the indexed frame. Private working
+ * keys and scratch are wiped on callback exit. Mutations validate typed state,
+ * authenticate the old journal, then verify the new frame before publishing.
+ * Any mutation failure revokes service; never retry an uncertain append.
+ * Creation reserves journal space before staging an unreferenced key. Pending
+ * transaction bytes survive phase-union compaction. Key destruction completes
+ * verified compaction/scrubbing before success. Record encodings are unchanged.
+ * This onboard provider uses the security scope described in SECURITY.md. */
 AuthStatus rp2350_store_provider_recover_internal(Rp2350StoreProvider *,const Rp2350Flash *,
     const Rp2350StoreBootConfig *,Rp2350Crypto *,Rp2350StoreProviderWorkspace *);
 /* Same recovery with key service left locked, for a serialized Reset/startup

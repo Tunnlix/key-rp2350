@@ -6,7 +6,7 @@ static bool geometry(uint32_t base,uint32_t n) {
     return (n==RP2350_STORE_ARENA_SIZE && (base==RP2350_STORE_ARENA_A || base==RP2350_STORE_ARENA_B)) || (base==0 && n==8192);
 }
 static AuthStatus scan(Rp2350StoreLog *j,Rp2350StoreReplay replay,Rp2350StoreFrameReplay frames,void *context,
-        uint32_t *end,uint64_t *next,Rp2350StoreLogWorkspace *w) {
+        uint32_t *end,uint64_t *next,Rp2350StoreLogWorkspace *w,bool verified_prefix) {
     uint32_t at=0; uint64_t sequence=1;
     while(at<j->size) {
         AuthStatus status=j->flash.read(j->flash.context,j->base+at,w->page,256);
@@ -30,13 +30,19 @@ static AuthStatus scan(Rp2350StoreLog *j,Rp2350StoreReplay replay,Rp2350StoreFra
          * adopted generation/sequence from unauthenticated on-flash bytes. */
         Rp2350StoreIdentity expected={.class_id=id.class_id,.sequence=sequence,.generation=j->generation,.offset=j->base+at};
         memcpy(expected.epoch,j->epoch,16); size_t length=0;
-        status=rp2350_store_open_internal(j->crypto,&expected,j->base+at,w->frame,extent,w->plain,sizeof(w->plain),&length,&w->seal);
+        if(verified_prefix) {
+            status=rp2350_store_verify_internal(j->crypto,&expected,j->base+at,w->frame,extent,&length,&w->seal);
+        } else {
+            status=rp2350_store_open_internal(j->crypto,&expected,j->base+at,w->frame,extent,w->plain,sizeof(w->plain),&length,&w->seal);
+        }
         if(status!=AUTH_OK) return status;
-        Rp2350StoreTransaction transaction;
-        status=rp2350_store_transaction_decode(id.class_id,w->plain,length,&transaction);
-        if(status!=AUTH_OK) return status;
-        if(replay) { status=replay(context,&expected,&transaction); if(status!=AUTH_OK) return status; }
-        if(frames) { status=frames(context,&expected,&transaction,w->frame+extent-256U+40U); if(status!=AUTH_OK) return status; }
+        if(!verified_prefix) {
+            Rp2350StoreTransaction transaction;
+            status=rp2350_store_transaction_decode(id.class_id,w->plain,length,&transaction);
+            if(status!=AUTH_OK) return status;
+            if(replay) { status=replay(context,&expected,&transaction); if(status!=AUTH_OK) return status; }
+            if(frames) { status=frames(context,&expected,&transaction,w->frame+extent-256U+40U); if(status!=AUTH_OK) return status; }
+        }
         auth_secure_zero(w->plain,sizeof(w->plain));
         if(sequence==UINT64_MAX) return AUTH_CAPACITY;
         sequence++; at+=(uint32_t)extent;
@@ -52,10 +58,10 @@ static AuthStatus open_log(Rp2350StoreLog *j,const Rp2350Flash *flash,Rp2350Stor
         !geometry(base,size) || !store_nonzero(epoch,16) || !crypto->initialized || crypto->faulted || !store_equal(epoch,crypto->epoch,16)) return AUTH_INVALID_ARGUMENT;
     j->flash=*flash; j->crypto=crypto; j->base=base; j->size=size; j->generation=generation; j->selectors=base==0;
     memcpy(j->epoch,epoch,16);
-    AuthStatus status=scan(j,NULL,NULL,NULL,&j->end,&j->next_sequence,w);
+    AuthStatus status=scan(j,NULL,NULL,NULL,&j->end,&j->next_sequence,w,false);
     if(status==AUTH_OK && (replay || frames) && j->end) {
         uint32_t end=0; uint64_t next=0;
-        status=scan(j,replay,frames,context,&end,&next,w);
+        status=scan(j,replay,frames,context,&end,&next,w,false);
         if(status==AUTH_OK && (end!=j->end || next!=j->next_sequence)) status=AUTH_BAD_DATA;
     }
     if(status==AUTH_OK) j->initialized=true; else j->faulted=true;
@@ -72,11 +78,15 @@ AuthStatus rp2350_store_log_open_frames_internal(Rp2350StoreLog *j,const Rp2350F
         Rp2350StoreFrameReplay replay,void *context,Rp2350StoreLogWorkspace *w) {
     return open_log(j,flash,crypto,base,size,generation,epoch,NULL,replay,context,w);
 }
-AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *plain,size_t n,Rp2350StoreLogWorkspace *w) {
+static AuthStatus append_log(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *plain,size_t n,
+        Rp2350StoreLogWorkspace *w,bool checkpoint,bool verified_prefix) {
     if(!j || !plain || !w) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(w,sizeof(*w));
-    if(!j->initialized || j->faulted || j->crypto->faulted) return AUTH_IO_ERROR;
+    if(!j->initialized || j->faulted || !j->crypto || j->crypto->faulted) return AUTH_IO_ERROR;
     if(!j->flash.program_page) return AUTH_UNSUPPORTED;
+    if(!j->flash.read || !geometry(j->base,j->size) || j->end>j->size || j->end%256U || !j->next_sequence)
+        return AUTH_BAD_DATA;
+    if(checkpoint && (j->selectors || j->base==0 || (class_id!=2 && class_id!=3))) return AUTH_BAD_DATA;
     if(j->next_sequence==UINT64_MAX || (j->selectors ? class_id!=4 : class_id==4)) return AUTH_BAD_DATA;
     Rp2350StoreTransaction transaction;
     AuthStatus status=rp2350_store_transaction_decode(class_id,plain,n,&transaction);
@@ -85,11 +95,22 @@ AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *j,uint16_t class_id,
     status=rp2350_store_frame_extent(n,&extent);
     if(status!=AUTH_OK) return status;
     if(extent>j->size-j->end) return AUTH_CAPACITY;
-    uint32_t checked_end=0; uint64_t checked_next=0;
-    status=scan(j,NULL,NULL,NULL,&checked_end,&checked_next,w);
-    if(status!=AUTH_OK || checked_end!=j->end || checked_next!=j->next_sequence) {
-        if(status==AUTH_OK) status=AUTH_BAD_DATA;
-        goto failed;
+    if(checkpoint) {
+        /* The checkpoint owner opened an entirely blank inactive bank and
+         * retains this cursor until final replay. Check only the new extent
+         * here; never overwrite a programmed page or retry an uncertain write. */
+        for(size_t at=0;at<extent;at+=256U) {
+            status=j->flash.read(j->flash.context,j->base+j->end+(uint32_t)at,w->page,256);
+            if(status!=AUTH_OK) goto failed;
+            if(!erased(w->page,256)) { status=AUTH_BAD_DATA; goto failed; }
+        }
+    } else {
+        uint32_t checked_end=0; uint64_t checked_next=0;
+        status=scan(j,NULL,NULL,NULL,&checked_end,&checked_next,w,verified_prefix);
+        if(status!=AUTH_OK || checked_end!=j->end || checked_next!=j->next_sequence) {
+            if(status==AUTH_OK) status=AUTH_BAD_DATA;
+            goto failed;
+        }
     }
     Rp2350StoreIdentity id={.class_id=class_id,.sequence=j->next_sequence,.generation=j->generation};
     memcpy(id.epoch,j->epoch,16); size_t length=0; uint32_t offset=j->base+j->end;
@@ -113,4 +134,14 @@ AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *j,uint16_t class_id,
     auth_secure_zero(w,sizeof(*w)); return AUTH_OK;
 failed:
     j->faulted=true; auth_secure_zero(w,sizeof(*w)); return status;
+}
+AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *plain,size_t n,Rp2350StoreLogWorkspace *w) {
+    return append_log(j,class_id,plain,n,w,false,false);
+}
+AuthStatus rp2350_store_log_append_checkpoint_internal(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *plain,size_t n,Rp2350StoreLogWorkspace *w) {
+    return append_log(j,class_id,plain,n,w,true,false);
+}
+AuthStatus rp2350_store_log_append_verified_internal(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *plain,size_t n,Rp2350StoreLogWorkspace *w) {
+    if(!j || j->selectors || class_id!=1) return AUTH_INVALID_ARGUMENT;
+    return append_log(j,class_id,plain,n,w,false,true);
 }

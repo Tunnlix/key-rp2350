@@ -1,4 +1,14 @@
 cmake_minimum_required(VERSION 3.21)
+function(rp2350_check_capacity setting minimum maximum)
+    if(DEFINED ${setting} AND NOT "${${setting}}" STREQUAL "")
+        if(NOT "${${setting}}" MATCHES "^[1-9][0-9]*$" OR
+            ${setting} LESS minimum OR ${setting} GREATER maximum)
+            message(FATAL_ERROR "${setting} must be between ${minimum} and ${maximum} for the RP2350 storage provider")
+        endif()
+    endif()
+endfunction()
+rp2350_check_capacity(CTAP_RESIDENT_CAPACITY 1 32)
+rp2350_check_capacity(CTAP_MESSAGE_CAPACITY 1024 2048)
 # Invoke this entry point separately; the portable root never imports the SDK.
 if(NOT PICO_SDK_PATH AND DEFINED ENV{PICO_SDK_PATH})
     set(PICO_SDK_PATH "$ENV{PICO_SDK_PATH}")

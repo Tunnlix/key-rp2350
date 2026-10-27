@@ -3,6 +3,7 @@
 #include "authenticator/auth_secret_crypto.h"
 #include "mbedtls/hmac_drbg.h"
 #define RP2350_CRYPTO_POOL_SIZE 65536U
+#define RP2350_AES_MAX_BYTES 4096U
 /* Bounded working slots, independent of durable credential capacity. */
 #define RP2350_KEY_SLOTS 3U
 /* Development primitive owner; durable restoration is a separate private binding.

@@ -58,15 +58,7 @@ static AuthStatus tag(Rp2350StoreSeal *s,bool commit,uint16_t class_id,uint32_t 
     return s->secrets.hmac_sha256(s->secrets.context,commit ? s->commit : s->mac,32,w->mac_input,prefix+n,out);
 }
 static AuthStatus crypt(Rp2350StoreSeal *s,bool encrypt,const uint8_t iv[16],uint8_t *data,size_t n) {
-    uint8_t chain[16],next[16]={0}; memcpy(chain,iv,16); AuthStatus status=AUTH_OK;
-    for(size_t offset=0;offset<n && status==AUTH_OK;) {
-        size_t remain=n-offset,take=remain>=64 ? 64 : remain>=32 ? 32 : 16;
-        if(!encrypt) memcpy(next,data+offset+take-16U,16);
-        status=s->secrets.aes256_cbc(s->secrets.context,encrypt,s->enc,chain,data+offset,take,data+offset);
-        if(status==AUTH_OK) memcpy(chain,encrypt ? data+offset+take-16U : next,16);
-        offset+=take;
-    }
-    auth_secure_zero(chain,sizeof(chain)); auth_secure_zero(next,sizeof(next)); return status;
+    return s->secrets.aes256_cbc(s->secrets.context,encrypt,s->enc,iv,data,n,data);
 }
 AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *id,uint32_t offset,
         const uint8_t *plain,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w) {
@@ -95,11 +87,11 @@ AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *s,const Rp2350StoreIdenti
 failed:
     s->faulted=true; auth_secure_zero(out,extent); auth_secure_zero(w,sizeof(*w)); return status;
 }
-AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
-        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w) {
+static AuthStatus open_frame(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
+        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w,bool decrypt) {
     if(length) *length=0;
-    if(!out || capacity>RP2350_STORE_PLAIN_MAX) return AUTH_INVALID_ARGUMENT;
-    auth_secure_zero(out,capacity);
+    if(decrypt && (!out || capacity>RP2350_STORE_PLAIN_MAX)) return AUTH_INVALID_ARGUMENT;
+    if(out) auth_secure_zero(out,capacity);
     if(!s || !identity_valid(expected) || !frame || !length || !w) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(w,sizeof(*w));
     if(!s->initialized || s->faulted) return AUTH_CRYPTO_ERROR;
@@ -109,7 +101,7 @@ AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdenti
         !location_valid(offset,n) || actual.class_id!=expected->class_id || actual.sequence!=expected->sequence ||
         actual.generation!=expected->generation || !store_equal(actual.epoch,expected->epoch,16) ||
         !store_equal(actual.epoch,s->epoch,16)) goto failed;
-    if(capacity<plain) return AUTH_CAPACITY;
+    if(decrypt && capacity<plain) return AUTH_CAPACITY;
     size_t cipher=round16(plain),commit=extent-256U; const uint8_t *cp=frame+commit;
     if(memcmp(cp,"CTC2",4) || store_u16(cp+4)!=2 || store_u16(cp+6)!=actual.class_id ||
         store_u64(cp+8)!=actual.sequence || store_u64(cp+16)!=actual.generation || !store_equal(cp+24,actual.epoch,16)) goto failed;
@@ -121,14 +113,24 @@ AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdenti
     if(!store_equal(mac,cp+72,32)) { status=AUTH_BAD_DATA; goto failed; }
     status=s->crypto.sha256(s->crypto.context,frame,64+cipher+32U,digest); if(status!=AUTH_OK) goto failed;
     if(!store_equal(digest,cp+40,32)) { status=AUTH_BAD_DATA; goto failed; }
-    /* Caller may have room for plaintext but not its final padding block. Use
-     * authenticated ciphertext copied to private workspace for decryption. */
-    memcpy(w->mac_input,frame+64,cipher);
-    status=crypt(s,false,frame+48,w->mac_input,cipher); if(status!=AUTH_OK) goto failed;
-    if(!store_zero(w->mac_input+plain,cipher-plain)) { status=AUTH_BAD_DATA; goto failed; }
-    memcpy(out,w->mac_input,plain); *length=plain;
+    if(decrypt) {
+        /* Decrypt privately: caller capacity may exclude the padding block. */
+        memcpy(w->mac_input,frame+64,cipher);
+        status=crypt(s,false,frame+48,w->mac_input,cipher); if(status!=AUTH_OK) goto failed;
+        if(!store_zero(w->mac_input+plain,cipher-plain)) { status=AUTH_BAD_DATA; goto failed; }
+        memcpy(out,w->mac_input,plain);
+    }
+    *length=plain;
     auth_secure_zero(mac,sizeof(mac)); auth_secure_zero(digest,sizeof(digest)); auth_secure_zero(w,sizeof(*w)); return AUTH_OK;
 failed:
-    s->faulted=true; auth_secure_zero(out,capacity); auth_secure_zero(mac,sizeof(mac));
+    s->faulted=true; if(out) auth_secure_zero(out,capacity); auth_secure_zero(mac,sizeof(mac));
     auth_secure_zero(digest,sizeof(digest)); auth_secure_zero(w,sizeof(*w)); return status;
+}
+AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
+        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w) {
+    return open_frame(s,expected,offset,frame,n,out,capacity,length,w,true);
+}
+AuthStatus rp2350_store_verify_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
+        const uint8_t *frame,size_t n,size_t *length,Rp2350StoreSealWorkspace *w) {
+    return open_frame(s,expected,offset,frame,n,NULL,0,length,w,false);
 }

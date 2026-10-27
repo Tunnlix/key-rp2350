@@ -43,7 +43,12 @@ void ctap_client_pin_reset_state(CtapClientPin *pin)
 {
     if (pin != NULL) {
         pin->consecutive_failures = 0U; pin->faulted = false; pin->pin_set = false;
-        pin->min_length = 4U; pin->always_uv = pin->force_change = false;
+        bool set = false;
+        /* Reset storage supplies the product's factory policy, which may
+         * require more than the protocol's four-character baseline. */
+        if (ctap_client_pin_status(pin, &set) != CTAP_STATUS_OK || set) {
+            pin->faulted = true; ctap_client_pin_invalidate(pin); return;
+        }
         (void)reset_token(pin);
     }
 }
