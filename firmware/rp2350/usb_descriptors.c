@@ -34,6 +34,7 @@ static const uint8_t report_descriptor[] = {
     0x95, 0x40,       /* Report Count (64) */
     0x81, 0x02,       /* Input (Data, Variable, Absolute) */
     0x09, 0x21,       /* Usage (Data Out) */
+    0x75, 0x08,       /* Report Size (8), explicit for host parser compatibility */
     0x95, 0x40,       /* Report Count (64) */
     0x91, 0x02,       /* Output (Data, Variable, Absolute) */
     0xc0

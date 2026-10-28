@@ -318,6 +318,11 @@ done:
     return status;
 }
 
+void ctap_client_pin_clear_permissions_except_lbw(CtapClientPin *pin)
+{
+    if (pin != NULL && pin->token_active) pin->permissions &= CTAP_PIN_PERMISSION_LBW;
+}
+
 void ctap_client_pin_invalidate(CtapClientPin *pin)
 {
     if (pin == NULL) return;

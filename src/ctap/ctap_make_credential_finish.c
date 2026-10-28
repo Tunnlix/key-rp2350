@@ -82,10 +82,10 @@ static uint8_t finish_at(AuthCredentialService *service,
         CTAP_PIN_PERMISSION_MC, now_ms, false);
     if (authorized != CTAP_STATUS_OK) return authorized;
     if (prepared->credential_excluded) {
-        ctap_client_pin_invalidate(prepared->pin);
+        ctap_client_pin_clear_permissions_except_lbw(prepared->pin);
         return CTAP_STATUS_CREDENTIAL_EXCLUDED;
     }
-    ctap_client_pin_invalidate(prepared->pin); /* Fresh UP consumes MC/GA and UV state. */
+    ctap_client_pin_clear_permissions_except_lbw(prepared->pin);
     if (prepared->extension_status != CTAP_STATUS_OK) return prepared->extension_status;
     if (prepared->hmac_secret_mc.requested) {
         uint8_t validated = ctap_hmac_secret_validate(service, &prepared->hmac_secret_mc);

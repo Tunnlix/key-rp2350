@@ -65,10 +65,13 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
  * rather than claiming success, even if persistent deletion already committed. */
 void ctap_client_pin_reset_state(CtapClientPin *pin);
 void ctap_client_pin_poll(CtapClientPin *pin, uint32_t now_ms);
-/* MC/GA call after required UP to consume token permissions, even when a later
- * extension/signing stage fails. Silent GA and credential management preserve
- * permissions. Also retires tokens on expiry, replacement and storage failure. */
+/* Retire all token state on expiry, replacement, reset and storage failure. */
 void ctap_client_pin_invalidate(CtapClientPin *pin);
+/* MC/GA call after required UP, even when a later extension/signing stage fails.
+ * CTAP 2.1 clearPinUvAuthTokenPermissionsExceptLbw: retain only Large Blob Write
+ * on an in-use token, preserving its original lifetime and RP binding. Silent
+ * GA and credential management do not consume permissions. No cached UP/UV. */
+void ctap_client_pin_clear_permissions_except_lbw(CtapClientPin *pin);
 uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
 /* Persist policy and retire authorization before exposing changed configuration. */

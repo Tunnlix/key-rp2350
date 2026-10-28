@@ -1,7 +1,7 @@
 # Focused native checks
 
 These exercise the actual production storage and crypto providers for the
-v1.4.0 recovery and performance changes. They never open a USB device. Synthetic
+recovery, performance and protocol changes. They never open a USB device. Synthetic
 entropy belongs only to these executables; it must never be used in firmware.
 
 With a native GCC/Clang compiler, CMake and Ninja:
@@ -34,6 +34,12 @@ checks wrong permissions, token expiry, fragment timeouts, interrupted blob
 commits, three-try power-cycle blocking, durable retry exhaustion and forced PIN
 change. A CM-style benchmark requests public and blob keys for every synthetic
 credential; it is not a measurement of a particular manager's full UI refresh.
+
+The PIN/blob checks also exercise both PIN protocols through assertion and
+registration completion: user presence preserves only Large Blob Write
+permission, including excluded credentials and deferred extension failures.
+Silent assertions preserve permissions. Removed permissions, old tokens, stale
+prepared-token generations and expired tokens are rejected.
 
 `crypto_check` verifies ECDH against a peer, rejects an invalid point, verifies a
 signature and rejects a modified digest. It also verifies automatic reseed

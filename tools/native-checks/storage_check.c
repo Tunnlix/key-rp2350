@@ -117,8 +117,12 @@ static size_t blob_array(uint8_t out[256],unsigned first,unsigned count) {
     uint8_t digest[32]; assert(hash(NULL,out,writer.length,digest)==AUTH_OK);
     memcpy(out+writer.length,digest,16); return writer.length+16;
 }
-static uint8_t pin_token(CtapClientPin *pin,uint8_t protocol,const uint8_t pin_hash[16],uint8_t token[32]) {
-    CtapClientPinRequest request={.protocol=protocol,.subcommand=9,.permissions=CTAP_PIN_PERMISSION_LBW};
+static uint8_t pin_token_permissions(CtapClientPin *pin,uint8_t protocol,const uint8_t pin_hash[16],
+        uint8_t permissions,uint8_t token[32]) {
+    CtapClientPinRequest request={.protocol=protocol,.subcommand=9,.permissions=permissions};
+    if(permissions & (CTAP_PIN_PERMISSION_MC | CTAP_PIN_PERMISSION_GA)) {
+        request.rp_present=true; request.rp_length=13; memcpy(request.rp_id,"audit.invalid",13);
+    }
     memcpy(request.peer,crypto.agreement_public,65);
     uint8_t keys[64],reply[256]; size_t reply_size=0;
     assert(ctap_pin_protocol_shared_version(&base,&secrets,protocol,request.peer,keys)==CTAP_STATUS_OK);
@@ -130,6 +134,79 @@ static uint8_t pin_token(CtapClientPin *pin,uint8_t protocol,const uint8_t pin_h
         assert(ctap_pin_protocol_decrypt(&secrets,protocol,keys,value.data,(size_t)value.value,token)==CTAP_STATUS_OK);
     }
     auth_secure_zero(keys,sizeof(keys)); return status;
+}
+static uint8_t pin_token(CtapClientPin *pin,uint8_t protocol,const uint8_t pin_hash[16],uint8_t token[32]) {
+    return pin_token_permissions(pin,protocol,pin_hash,CTAP_PIN_PERMISSION_LBW,token);
+}
+static void check_up_permissions(AuthCredentialService *service,AuthPinStorage *pins,uint8_t protocol) {
+    static CtapGetAssertionWorkspace ga_workspace;
+    static CtapMakeCredentialWorkspace mc_workspace;
+    static AuthCredential credential;
+    assert(service->storage.enumerate(service->storage.context,0,&credential)==AUTH_OK);
+    uint8_t pin_hash[16],token[32],message[32]={9},mac[32],reply[1024],aaguid[16]={0};
+    memset(pin_hash,42,sizeof(pin_hash));
+    const uint8_t other_permissions=CTAP_PIN_PERMISSION_MC | CTAP_PIN_PERMISSION_GA |
+        CTAP_PIN_PERMISSION_CM | CTAP_PIN_PERMISSION_CONFIG;
+    for(unsigned with_lbw=0;with_lbw<2;with_lbw++) for(unsigned path=0;path<5;path++) {
+        CtapClientPin pin;
+        assert(ctap_client_pin_init(&pin,service,pins)); pin.large_blobs=true;
+        uint8_t permissions=other_permissions | (with_lbw ? CTAP_PIN_PERMISSION_LBW : 0U);
+        assert(pin_token_permissions(&pin,protocol,pin_hash,permissions,token)==CTAP_STATUS_OK);
+        CtapPinAuth auth={.present=true,.protocol=protocol};
+        assert(secrets.hmac_sha256(secrets.context,token,32,message,sizeof(message),auth.mac)==AUTH_OK);
+        /* Prepare-phase authorization snapshots generation before waiting for UP. */
+        uint8_t operation=path<2 || path==4 ? CTAP_PIN_PERMISSION_GA : CTAP_PIN_PERMISSION_MC;
+        assert(ctap_client_pin_authorize(&pin,&auth,credential.rp_id_hash,message,operation,1001,true)==CTAP_STATUS_OK);
+        uint64_t generation=pin.token_generation;
+        size_t reply_size=0;
+        if(operation==CTAP_PIN_PERMISSION_GA) {
+            static CtapGetAssertion request;
+            memset(&request,0,sizeof(request));
+            request.pin=&pin; request.auth=auth; request.user_verified=true;
+            request.user_presence_required=path!=1; request.credential_id_length=AUTH_CREDENTIAL_ID_SIZE;
+            memcpy(request.credential_id,credential.credential_id,AUTH_CREDENTIAL_ID_SIZE);
+            memcpy(request.rp_id_hash,credential.rp_id_hash,32); memcpy(request.client_data_hash,message,32);
+            request.extension_status=path==4 ? CTAP_STATUS_INVALID_OPTION : CTAP_STATUS_OK;
+            assert(ctap_get_assertion_finish_at(service,&ga_workspace,&request,reply,sizeof(reply),&reply_size,1002)==
+                (path==4 ? CTAP_STATUS_INVALID_OPTION : CTAP_STATUS_OK));
+        } else {
+            static CtapMakeCredential request;
+            memset(&request,0,sizeof(request));
+            request.pin=&pin; request.auth=auth; request.user_verified=true;
+            request.credential_excluded=path==2; request.extension_status=CTAP_STATUS_INVALID_OPTION;
+            memcpy(request.rp_id_hash,credential.rp_id_hash,32); memcpy(request.client_data_hash,message,32);
+            assert(ctap_make_credential_finish_at(service,&mc_workspace,&request,aaguid,reply,sizeof(reply),&reply_size,1002)==
+                (path==2 ? CTAP_STATUS_CREDENTIAL_EXCLUDED : CTAP_STATUS_INVALID_OPTION));
+        }
+        assert(pin.permissions==(path==1 ? permissions : with_lbw ? CTAP_PIN_PERMISSION_LBW : 0U));
+        assert(pin.token_active && pin.token_used && pin.token_generation==generation && pin.issued_at_ms==1000);
+        assert(pin.token_rp_bound && !memcmp(pin.token_rp_hash,credential.rp_id_hash,32));
+        assert(!memcmp(pin.token,token,32));
+        assert(secrets.hmac_sha256(secrets.context,token,32,message,sizeof(message),mac)==AUTH_OK);
+        assert(ctap_client_pin_authorize_permission(&pin,protocol,CTAP_PIN_PERMISSION_LBW,message,sizeof(message),mac,1003)==
+            (with_lbw ? CTAP_STATUS_OK : CTAP_STATUS_PIN_AUTH_INVALID));
+        if(path!=1) for(unsigned bit=1;bit<=CTAP_PIN_PERMISSION_CONFIG;bit<<=1) {
+            if(bit==CTAP_PIN_PERMISSION_LBW) continue;
+            assert(ctap_client_pin_authorize_permission(&pin,protocol,(uint8_t)bit,message,sizeof(message),mac,1003)==CTAP_STATUS_PIN_AUTH_INVALID);
+        }
+        /* A replacement never accepts the old token, even with lbw retained. */
+        assert(pin_token_permissions(&pin,protocol,pin_hash,other_permissions | CTAP_PIN_PERMISSION_LBW,token)==CTAP_STATUS_OK);
+        assert(pin.token_generation>generation);
+        assert(ctap_client_pin_authorize_permission(&pin,protocol,CTAP_PIN_PERMISSION_LBW,message,sizeof(message),mac,1003)==CTAP_STATUS_PIN_AUTH_INVALID);
+        CtapPinAuth stale=auth;
+        assert(secrets.hmac_sha256(secrets.context,token,32,message,sizeof(message),stale.mac)==AUTH_OK);
+        assert(ctap_client_pin_authorize(&pin,&stale,credential.rp_id_hash,message,CTAP_PIN_PERMISSION_GA,1003,false)==CTAP_STATUS_PIN_AUTH_INVALID);
+        ctap_client_pin_clear_permissions_except_lbw(&pin);
+        assert(secrets.hmac_sha256(secrets.context,token,32,message,sizeof(message),mac)==AUTH_OK);
+        assert(ctap_client_pin_authorize_permission(&pin,protocol,CTAP_PIN_PERMISSION_LBW,message,sizeof(message),mac,1003)==CTAP_STATUS_OK);
+        assert(ctap_client_pin_authorize_permission(&pin,protocol,CTAP_PIN_PERMISSION_LBW,message,sizeof(message),mac,601000)==CTAP_STATUS_PIN_AUTH_INVALID);
+        assert(!pin.token_active);
+        ctap_client_pin_clear_permissions_except_lbw(&pin);
+        assert(!pin.token_active && pin.permissions==0);
+    }
+    auth_secure_zero(token,sizeof(token));
+    memcpy(media,saved,sizeof(media)); assert(cold_boot()==AUTH_OK);
+    printf("PIN protocol %u: UP preserves only LBW after assertions, excluded/deferred-error registrations; silent GA, replacement/generation and expiry pass\n",protocol);
 }
 static uint8_t blob_fragment(CtapLargeBlobs *blobs,CtapClientPin *pin,uint8_t protocol,const uint8_t token[32],
         uint32_t channel,const uint8_t *data,size_t chunk,size_t offset,size_t total,uint32_t now) {
@@ -346,6 +423,7 @@ int main(int argc,char **argv) {
     memcpy(saved,media,sizeof(media));
     if(policy_only) {
         AuthPinStorage pins=rp2350_store_provider_pin_internal(&provider);
+        check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
         check_blobs(&service,&pins,1); check_blobs(&service,&pins,2);
         check_pin_policy(&service,&pins); rp2350_crypto_free(&crypto); return 0;
     }
@@ -490,6 +568,7 @@ int main(int argc,char **argv) {
     memcpy(media,saved,sizeof(media)); assert(cold_boot()==AUTH_OK);
     assert(pins.read(pins.context,&pin)==AUTH_OK); pin.force_change=false;
     assert(pins.write(pins.context,&pin)==AUTH_OK);
+    check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
     check_blobs(&service,&pins,1);
     check_blobs(&service,&pins,2);
     check_pin_policy(&service,&pins);
