@@ -1,0 +1,31 @@
+{
+  "version": [1, 0],
+  "unpartitioned": {
+    "families": ["absolute"],
+    "permissions": {"secure": "r", "nonsecure": "", "bootloader": "r"}
+  },
+  "partitions": [
+    {
+      "name": "Firmware A", "start": "8K", "size": "748K",
+      "families": ["rp2350-arm-s"],
+      "permissions": {"secure": "rw", "nonsecure": "", "bootloader": "rw"},
+      "ignored_during_riscv_boot": true
+    },
+    {
+      "name": "Firmware B", "start": "756K", "size": "748K",
+      "families": ["rp2350-arm-s"], "link": ["a", 0],
+      "permissions": {"secure": "rw", "nonsecure": "", "bootloader": "rw"},
+      "ignored_during_riscv_boot": true
+    },
+    {
+      "name": "Blobs", "start": "1504K", "size": "32K", "families": [],
+      "permissions": {"secure": "rw", "nonsecure": "", "bootloader": "r"},
+      "ignored_during_arm_boot": true, "ignored_during_riscv_boot": true
+    },
+    {
+      "name": "Credentials", "start": "1536K", "size": "512K", "families": [],
+      "permissions": {"secure": "rw", "nonsecure": "", "bootloader": "r"},
+      "ignored_during_arm_boot": true, "ignored_during_riscv_boot": true
+    }
+  ]
+}

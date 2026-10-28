@@ -11,7 +11,13 @@ shared PIN. Existing PINs and configured policies are not changed by an update.
 
 The onboard configuration does not claim resistance to physical theft, flash
 reads, executable replacement or restoration of old flash snapshots. Its
-storage root is readable from flash and signed boot is not enforced.
+storage root is readable from flash. Default builds do not provision OTP;
+owner-signed boot is enforced only on explicitly provisioned devices. Signed
+boot does not prevent raw storage reads or credential-store snapshot replay.
+
+A/B confirmation covers read-only startup and USB enumeration, not every
+possible runtime failure. Future storage-format changes need a separate
+compatibility strategy: both firmware slots share credential and blob storage.
 
 Hardware entropy remains unqualified. Sustained use has triggered hardware
 health alarms; the firmware stops service until restart rather than returning

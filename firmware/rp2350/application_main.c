@@ -1,4 +1,5 @@
 #include "board_layout.h"
+#include "ab_boot.h"
 #include "application.h"
 #include "board_flash.h"
 #include "board_entropy.h"
@@ -30,6 +31,7 @@ static struct {
 #define STACK_CHECK_INTERVAL_MS 50U
 
 static uint64_t presence_operation;
+static Rp2350AbBoot boot;
 static void update_status_led(AuthStatus status);
 
 static uint32_t now_ms(void *context) {
@@ -44,7 +46,7 @@ static bool button_pressed(void *context) {
 
 static void flash_progress(void *context) {
     (void)context;
-    watchdog_update();
+    if(!boot.pending) watchdog_update();
     rp2350_usb_service(&app.application);
     update_status_led(AUTH_OK);
 }
@@ -61,7 +63,7 @@ static void clear_startup_marker(void) {
     watchdog_hw->scratch[1] = 0;
 }
 
-static void __attribute__((noreturn)) enter_bootloader(void) {
+static void __attribute__((noreturn)) enter_bootloader(bool physical_recovery) {
     /* Called only from this owner loop, outside USB callbacks/provider writes.
      * A PC request reaches here after its final IN completion. */
     rp2350_usb_close();
@@ -71,7 +73,7 @@ static void __attribute__((noreturn)) enter_bootloader(void) {
     clear_startup_marker();
     watchdog_disable();
     rp2350_status_led_close();
-    rom_reset_usb_boot(0,0);
+    rom_reset_usb_boot(0,physical_recovery ? 0U : 1U);
 }
 
 static void startup_update_gesture(void) {
@@ -81,7 +83,7 @@ static void startup_update_gesture(void) {
         uint32_t now=now_ms(NULL);
         Rp2350BootGestureResult result=rp2350_boot_gesture_sample(&gesture,button_pressed(NULL),now);
         if(result==RP2350_BOOT_NORMAL) return;
-        if(result==RP2350_BOOT_ENTER) enter_bootloader();
+        if(result==RP2350_BOOT_ENTER) enter_bootloader(true);
         rp2350_status_led_poll(result == RP2350_BOOT_RELEASE ?
             RP2350_LED_RECOVERY_RELEASE : RP2350_LED_RECOVERY_HOLD, now);
         sleep_ms(1);
@@ -107,6 +109,7 @@ static bool submit_report(void *context, const uint8_t report[64], uint64_t tran
 static AuthStatus start_application(void) {
     AuthStatus status = rp2350_board_flash_open(&app.flash, 0, RP2350_STORE_FLASH_BYTES);
     if(status != AUTH_OK) return status;
+    app.flash.writes_locked = boot.pending;
     app.flash.progress = flash_progress;
 
     if(!rp2350_board_entropy_init(&app.entropy)) return AUTH_CRYPTO_ERROR;
@@ -150,7 +153,8 @@ static void update_status_led(AuthStatus status) {
     } else if(!app.application.initialized) {
         state = RP2350_LED_STARTING;
     } else if(app.application.update.waiting) {
-        state = RP2350_LED_UPDATE;
+        state = app.application.update.gesture.release_ready ?
+            RP2350_LED_RECOVERY_RELEASE : RP2350_LED_UPDATE;
     } else if(app.application.backend.awaiting_presence) {
         state = RP2350_LED_TOUCH;
     } else {
@@ -161,29 +165,45 @@ static void update_status_led(AuthStatus status) {
 
 int main(void) {
     configure_pins();
-    bool interrupted = watchdog_enable_caused_reboot() &&
+    bool boot_valid = rp2350_ab_boot_begin(&boot);
+    bool interrupted = !boot.pending && watchdog_enable_caused_reboot() &&
         watchdog_hw->scratch[0] == STARTUP_MARKER &&
         watchdog_hw->scratch[1] == ~STARTUP_MARKER;
     clear_startup_marker();
-    watchdog_disable();
+    if(!boot.pending) watchdog_disable();
     startup_update_gesture();
     bool stack_observed = rp2350_stack_probe_begin();
 
     /* Do not repeatedly retry a startup that already timed out. */
-    if(!interrupted) {
+    if(!boot.pending && !interrupted) {
         watchdog_hw->scratch[0] = STARTUP_MARKER;
         watchdog_hw->scratch[1] = ~STARTUP_MARKER;
         watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
     }
     AuthStatus status = AUTH_IO_ERROR;
-    if(!interrupted) status = stack_observed ? start_application() : AUTH_CAPACITY;
+    if(boot_valid && !interrupted) status = stack_observed ? start_application() : AUTH_CAPACITY;
     clear_startup_marker();
     bool fault_closed = false;
     uint32_t last_stack_check=now_ms(NULL)-STACK_CHECK_INTERVAL_MS;
 
     while(true) {
-        if(status == AUTH_OK) status = poll_application();
-        if(status == AUTH_OK && rp2350_firmware_update_ready(&app.application)) enter_bootloader();
+        if(status == AUTH_OK && boot.pending) {
+            if(rp2350_usb_startup_ready()) {
+                /* Startup has returned; provider scratch has been wiped and no
+                 * CTAP request has run. Reuse it for ROM's 4 KiB buy buffer. */
+                Rp2350StoreProviderWorkspace *scratch = &app.application.reset_workspace.phase.provider;
+                _Static_assert(sizeof(*scratch) >= 4096 && _Alignof(Rp2350StoreProviderWorkspace) >= 4,
+                    "ROM confirmation requires aligned 4 KiB scratch");
+                if(rp2350_stack_probe_used() > STACK_USE_LIMIT_BYTES ||
+                    !rp2350_application_ready(&app.application) || app.application.store.busy ||
+                    !rp2350_ab_boot_confirm(&boot, scratch, sizeof(*scratch))) status = AUTH_IO_ERROR;
+                else {
+                    app.flash.writes_locked = false;
+                    watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
+                }
+            }
+        } else if(status == AUTH_OK) status = poll_application();
+        if(status == AUTH_OK && rp2350_firmware_update_ready(&app.application)) enter_bootloader(false);
         uint32_t now=now_ms(NULL);
         if(stack_observed && (uint32_t)(now-last_stack_check)>=STACK_CHECK_INTERVAL_MS) {
             last_stack_check=now;
@@ -200,7 +220,9 @@ int main(void) {
             fault_closed = true;
         }
         update_status_led(status);
-        watchdog_update();
+        /* The ROM trial watchdog must expire if startup/USB/confirmation fails.
+         * Never replace it with the normal SDK watchdog before a successful buy. */
+        if(!boot.pending) watchdog_update();
         sleep_ms(1);
     }
 }

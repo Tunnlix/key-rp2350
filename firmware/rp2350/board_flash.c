@@ -28,12 +28,15 @@ static bool physical_span(uint32_t at,size_t n) {
 static AuthStatus read_raw(void *ctx,uint32_t at,uint8_t *out,size_t n) {
     Rp2350BoardFlash *p=ctx;
     if (get_core_num()!=0 || !out || !physical_span(at,n)) return AUTH_INVALID_ARGUMENT;
-    memcpy(out,(const void *)(uintptr_t)(XIP_BASE+at),n);
+    /* The ordinary XIP window is translated to the running A/B slot. Storage
+     * offsets are physical and must bypass that translation and its bounds. */
+    memcpy(out,(const void *)(uintptr_t)(XIP_NOCACHE_NOALLOC_NOTRANSLATE_BASE+at),n);
     if(p->progress) p->progress(p->progress_context);
     return AUTH_OK;
 }
 static AuthStatus program_raw(void *ctx,uint32_t at,const uint8_t page[256]) {
     Rp2350BoardFlash *p=ctx;
+    if(p->writes_locked) return AUTH_BUSY;
     if (get_core_num()!=0 || (page!=p->guard.staged && page!=p->blob_guard.staged) || (at&255U) || !physical_span(at,256)) return AUTH_INVALID_ARGUMENT;
     /* Guard has copied the entire source page into its SRAM staging buffer.
      * SDK routine executes from RAM and restores XIP before returning. */
@@ -48,6 +51,7 @@ static AuthStatus program_raw(void *ctx,uint32_t at,const uint8_t page[256]) {
 }
 static AuthStatus erase_raw(void *ctx,uint32_t at) {
     Rp2350BoardFlash *p=ctx;
+    if(p->writes_locked) return AUTH_BUSY;
     if (get_core_num()!=0 || (at&4095U) || !physical_span(at,4096)) return AUTH_INVALID_ARGUMENT;
     if(p->progress) p->progress(p->progress_context);
     uint64_t begun=time_us_64(); uint32_t saved=save_and_disable_interrupts();

@@ -6,14 +6,28 @@
 /* Target-only vendor CTAP command, carried by the existing FIDO HID interface.
  * No new USB interface or portable-core command is introduced. */
 #define RP2350_UPDATE_COMMAND 0x50U
-#define RP2350_UPDATE_PROTOCOL 1U
+#define RP2350_UPDATE_PROTOCOL 2U
+#define RP2350_UPDATE_PC_HOLD_MS 3000U
 #define RP2350_UPDATE_TOUCH_TIMEOUT_MS 30000U
 #define RP2350_UPDATE_HOLD_MS 5000U
 #define RP2350_UPDATE_STARTUP_TIMEOUT_MS 30000U
 
+typedef enum {
+    RP2350_UPDATE_WAIT,
+    RP2350_UPDATE_RELEASE,
+    RP2350_UPDATE_CONFIRMED,
+    RP2350_UPDATE_EXPIRED
+} Rp2350UpdateGestureResult;
+typedef struct {
+    uint32_t started_ms, changed_ms, held_ms;
+    bool raw_pressed, stable_pressed, armed, holding, release_ready;
+} Rp2350UpdateGesture;
+void rp2350_update_gesture_init(Rp2350UpdateGesture *, bool pressed, uint32_t now_ms);
+Rp2350UpdateGestureResult rp2350_update_gesture_sample(Rp2350UpdateGesture *, bool pressed, uint32_t now_ms);
+
 typedef struct {
     uint64_t operation;
-    uint32_t started_ms;
+    Rp2350UpdateGesture gesture;
     bool waiting, approved;
 } Rp2350FirmwareUpdate;
 

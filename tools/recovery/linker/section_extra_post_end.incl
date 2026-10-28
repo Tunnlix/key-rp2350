@@ -1,0 +1,7 @@
+SECTIONS
+{
+    __StackTop = ORIGIN(CTAP_STACK) + LENGTH(CTAP_STACK);
+    __StackBottom = __StackTop - SIZEOF(.stack_dummy);
+    __stack = __StackTop;
+    ASSERT(SIZEOF(.stack_dummy) == LENGTH(CTAP_STACK), "unexpected recovery stack reservation")
+}

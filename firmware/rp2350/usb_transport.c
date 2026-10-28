@@ -26,6 +26,11 @@ bool rp2350_usb_init(void) {
     usb.enabled = tud_init(0);
     return usb.enabled;
 }
+bool rp2350_usb_startup_ready(void) {
+    if(!usb.enabled || usb.failed || usb.restart) return false;
+    tud_task_ext(0, false);
+    return !usb.failed && !usb.restart && usb.mounted && tud_mounted();
+}
 void rp2350_usb_close(void) {
     if(usb.enabled) (void)tud_deinit(0);
     memset(&usb, 0, sizeof(usb));

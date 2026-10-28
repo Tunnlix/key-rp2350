@@ -7,7 +7,7 @@ SECTIONS
     ASSERT(SIZEOF(.stack_dummy) == LENGTH(CTAP_STACK), "unexpected CTAP stack reservation")
     __ctap_blob_start = ORIGIN(CTAP_BLOBS);
     __ctap_blob_end = ORIGIN(CTAP_BLOBS) + LENGTH(CTAP_BLOBS);
-    ASSERT(ORIGIN(FLASH) + LENGTH(FLASH) == __ctap_blob_start, "firmware/blob layout gap or overlap")
+    ASSERT(LENGTH(FLASH) == 748K, "unexpected A/B slot capacity")
     ASSERT(__ctap_blob_end == __ctap_store_start, "blob/store layout gap or overlap")
-    ASSERT(__flash_binary_end <= __ctap_blob_start, "firmware overlaps development store")
+    ASSERT(__flash_binary_end <= ORIGIN(FLASH) + LENGTH(FLASH), "firmware exceeds A/B slot")
 }

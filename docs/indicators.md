@@ -9,7 +9,8 @@ single-color fallback and also flashes on faults. The charging LED is independen
 | Dim blue flash every three seconds | Ready |
 | Blue blinking, on/off every 200 ms | A fresh press is needed |
 | Brief green | A touch-confirmed operation completed locally and its reply was sent |
-| Amber double flash followed by a pause | A PC firmware-update request needs a fresh press |
+| Amber double flash followed by a pause | Hold a fresh press for three seconds to approve a PC firmware update |
+| Fast amber flashes during an update request | Release to enter ROM update mode |
 | Amber slow flashes while holding at startup, then fast flashes | Release to enter recovery |
 | Rapid red flashing | Fault; normal credential operations are unavailable |
 

@@ -1,10 +1,8 @@
-/* Development layout ONLY: reported/configured 2 MiB is not identified chip
- * geometry. Keep writers unbound until independent geometry qualification.
- * No output section is placed in CTAP_STORE: ordinary UF2s contain no store
- * data and firmware cannot grow into the planned 512 KiB owned partition. */
+/* ROM maps either 748 KiB application slot to 0x10000000. Storage symbols are
+ * physical addresses, read through the untranslated XIP alias by board_flash. */
 MEMORY
 {
-    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 1504K
+    FLASH(rx) : ORIGIN = 0x10000000, LENGTH = 748K
     CTAP_BLOBS(r) : ORIGIN = 0x10178000, LENGTH = 32K
     CTAP_STORE(r) : ORIGIN = 0x10180000, LENGTH = 512K
 }
