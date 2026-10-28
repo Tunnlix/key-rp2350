@@ -28,6 +28,7 @@ AuthStatus rp2350_key_record_decode_internal(const uint8_t *in,size_t n,Rp2350Ke
         !store_nonzero(in+8,32) || (store_u32(in+4)==1 && !scalar_valid(in+40))) return AUTH_BAD_DATA;
     key->algorithm=store_u32(in+4)==1 ? AUTH_COSE_ALG_ES256 : AUTH_COSE_ALG_EDDSA;
     memcpy(key->handle.bytes,in+8,32); memcpy(key->scalar,in+40,32); memcpy(key->randoms,in+72,64);
-    /* Deliberately not used/live: caller must derive and validate public key. */
+    /* Deliberately not used/live: authenticated restoration also validates the
+     * handle/epoch/high-water. Public derivation is deferred until needed. */
     return AUTH_OK;
 }

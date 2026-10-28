@@ -83,6 +83,10 @@ AuthStatus rp2350_store_compaction_resume_internal(Rp2350StoreMaintenance *out,c
     if(!args(out,flash,config,w)) return AUTH_INVALID_ARGUMENT;
     if(!writable(flash,config)) return AUTH_UNSUPPORTED;
     AuthStatus status=audit(&w->audit,flash,config,&w->scratch);
+    if(status==AUTH_OK && w->audit.selection.damaged_mask) {
+        status=rp2350_store_selector_repair_internal(flash,config,&w->scratch);
+        if(status==AUTH_OK) status=audit(&w->audit,flash,config,&w->scratch);
+    }
     if(status==AUTH_OK && w->audit.active_key_cleanup) {
         /* No trusted orphan-cleanup receipt survives a crash: fold the active
          * log afresh and commit a new authority before removing old copies. */

@@ -1,5 +1,6 @@
 #include "storage_selector_internal.h"
 #include "storage_bytes_internal.h"
+#include <string.h>
 static bool erased(const uint8_t *p,size_t n) {
     for(size_t i=0;i<n;i++) if(p[i]!=0xff) return false;
     return true;
@@ -17,6 +18,7 @@ static AuthStatus remember(Rp2350StoreSelectorWorkspace *w,const Rp2350StoreSele
     w->records[at]=*s; w->count++; return AUTH_OK;
 }
 static AuthStatus sector(const Rp2350Flash *flash,Rp2350StoreRootAuthority *root,uint32_t base,Rp2350StoreSelectorWorkspace *w) {
+    w->candidate=root->seal;
     bool hole=false,have_previous=false; uint64_t previous=0;
     for(uint32_t at=base;at<base+4096U;at+=512U) {
         for(size_t page=0;page<512;page+=256) {
@@ -25,18 +27,29 @@ static AuthStatus sector(const Rp2350Flash *flash,Rp2350StoreRootAuthority *root
         }
         if(erased(w->frame,512)) { hole=true; continue; }
         if(hole) return AUTH_BAD_DATA;
+        /* A selector slot has a fixed body/commit boundary, so even a torn
+         * first header can be safely discarded when its commit is erased. */
+        if(erased(w->frame+256,256)) {
+            hole=true;
+            w->used[base/4096U]=8;
+            continue;
+        }
         Rp2350StoreIdentity id; size_t plain=0,extent=0;
         AuthStatus status=rp2350_store_frame_inspect(w->frame,512,&id,&plain,&extent);
         if(status!=AUTH_OK || id.class_id!=4 || plain!=96 || extent!=512 ||
             id.generation!=root->root.serial || !store_equal(id.epoch,root->root.epoch,16) ||
             (have_previous && (previous==UINT64_MAX || id.sequence!=previous+1U))) return AUTH_BAD_DATA;
+        /* A body without its last-written commit never selected a new arena.
+         * Keep prior authenticated selectors, require the remaining slots to
+         * be blank, and retire this sector's append space. The writer will
+         * recycle it only while preserving a current selector elsewhere. */
         /* Only the first anchor serial is a candidate from the header; MAC
          * verification and payload equality must succeed before trusting it. */
         Rp2350StoreIdentity expected={.class_id=4,.sequence=have_previous ? previous+1U : id.sequence,
             .generation=root->root.serial};
         for(size_t i=0;i<16;i++) expected.epoch[i]=root->root.epoch[i];
         size_t length=0;
-        status=rp2350_store_open_internal(&root->seal,&expected,at,w->frame,512,w->plain,96,&length,&w->seal);
+        status=rp2350_store_open_internal(&w->candidate,&expected,at,w->frame,512,w->plain,96,&length,&w->seal);
         if(status!=AUTH_OK) return status;
         Rp2350StoreTransaction tx; Rp2350StoreSelector s;
         status=rp2350_store_transaction_decode(4,w->plain,length,&tx);
@@ -52,6 +65,12 @@ static AuthStatus sector(const Rp2350Flash *flash,Rp2350StoreRootAuthority *root
     }
     return AUTH_OK;
 }
+static void clear_records(Rp2350StoreSelectorWorkspace *w) {
+    auth_secure_zero(w->records,sizeof(w->records));
+    memset(w->used,0,sizeof(w->used));
+    memset(w->last,0,sizeof(w->last));
+    w->count=0;
+}
 AuthStatus rp2350_store_select_internal(Rp2350StoreSelection *out,const Rp2350Flash *flash,
         Rp2350StoreRootAuthority *root,Rp2350StoreSelectorWorkspace *w) {
     if(out) auth_secure_zero(out,sizeof(*out));
@@ -61,8 +80,17 @@ AuthStatus rp2350_store_select_internal(Rp2350StoreSelection *out,const Rp2350Fl
         !root->root.reset_generation || !store_nonzero(root->root.epoch,16) ||
         !store_equal(root->seal.epoch,root->root.epoch,16) || !root->seal.crypto.sha256 ||
         !root->seal.secrets.hmac_sha256 || !root->seal.secrets.aes256_cbc) return AUTH_CRYPTO_ERROR;
-    AuthStatus status=sector(flash,root,0,w);
-    if(status==AUTH_OK) status=sector(flash,root,4096,w);
+    uint8_t damaged=0;
+    AuthStatus first=sector(flash,root,0,w);
+    AuthStatus status=first;
+    if(first==AUTH_BAD_DATA) { damaged=1; clear_records(w); }
+    else if(first!=AUTH_OK) goto done;
+    status=sector(flash,root,4096,w);
+    if(status==AUTH_BAD_DATA && first==AUTH_OK) {
+        damaged=2;
+        clear_records(w);
+        status=sector(flash,root,0,w);
+    }
     if(status!=AUTH_OK) goto done;
     if(!w->count) { status=AUTH_BAD_DATA; goto done; }
     for(size_t i=1;i<w->count;i++) {
@@ -72,7 +100,13 @@ AuthStatus rp2350_store_select_internal(Rp2350StoreSelection *out,const Rp2350Fl
             status=AUTH_BAD_DATA; goto done;
         }
     }
-    out->selector=w->records[w->count-1]; out->validated=true;
+    /* A sector being recycled can be partially erased. Retain only complete
+     * authenticated authority from the other sector. This is NOT permission
+     * to serve: boot must validate its entire selected checkpoint/log. The
+     * exclusive provider erases the old arena before any post-switch request,
+     * so an older selector cannot mount pre-operation PIN/credential state.
+     * Live providers also reject any authority/version change. */
+    out->selector=w->records[w->count-1]; out->validated=true; out->damaged_mask=damaged;
     for(size_t i=0;i<2;i++) { out->used[i]=w->used[i]; if(w->last[i]==out->selector.serial) out->current_mask|=(uint8_t)(1U<<i); }
     if(out->selector.state==1) out->arena_base=out->selector.arena ? RP2350_STORE_ARENA_B : RP2350_STORE_ARENA_A;
 done:

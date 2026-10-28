@@ -30,7 +30,9 @@ AuthStatus rp2350_store_compact_internal(Rp2350StoreMaintenance *,const Rp2350Fl
 /* Re-derive current authority from flash. If active keys need cleanup, restart
  * full compaction; otherwise scrub only the inactive arena. An uncommitted
  * standby may be discarded. Already clean storage needs no writes. Torn
- * root/selector/selected data locks; no automatic repair is attempted. */
+ * roots/marked selected records lock recovery. Uncommitted tails are compacted;
+ * a damaged stale selector sector is repaired only after complete validation
+ * of retained authority and its selected arena. */
 AuthStatus rp2350_store_compaction_resume_internal(Rp2350StoreMaintenance *,const Rp2350Flash *,
     const Rp2350StoreBootConfig *,Rp2350StoreCompactionWorkspace *);
 #endif

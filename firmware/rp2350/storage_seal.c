@@ -3,7 +3,11 @@
 #include <string.h>
 static const uint8_t uuid[16]={0x43,0x54,0x41,0x50,0x53,0x54,0x4f,0x52,0x45,0x2d,0x56,0x32,0,0,0,1};
 static size_t round16(size_t n) { return (n+15U)&~(size_t)15U; }
-static size_t commit_offset(size_t cipher) { return (64U+cipher+32U+255U)&~(size_t)255U; }
+static size_t commit_offset(size_t cipher,bool current) {
+    /* V3 authenticates the body and digest before touching a separate,
+     * one-bit commit page. V2 kept its commit metadata in that last page. */
+    return (64U+cipher+32U+(current ? 64U : 0U)+255U)&~(size_t)255U;
+}
 static bool identity_valid(const Rp2350StoreIdentity *id) {
     return id && id->class_id>=1 && id->class_id<=4 && id->sequence && id->generation && store_nonzero(id->epoch,16);
 }
@@ -13,16 +17,19 @@ static bool location_valid(uint32_t offset,size_t n) {
 AuthStatus rp2350_store_frame_extent(size_t plain,size_t *n) {
     if(!n) return AUTH_INVALID_ARGUMENT;
     *n=0; if(plain<8 || plain>RP2350_STORE_PLAIN_MAX) return AUTH_BAD_DATA;
-    *n=commit_offset(round16(plain))+256U; return AUTH_OK;
+    *n=commit_offset(round16(plain),true)+256U; return AUTH_OK;
 }
 AuthStatus rp2350_store_frame_inspect(const uint8_t *header,size_t n,Rp2350StoreIdentity *id,size_t *plain,size_t *extent) {
     if(id) *id=(Rp2350StoreIdentity){0};
     if(plain) *plain=0;
     if(extent) *extent=0;
     if(!header || !id || !plain || !extent) return AUTH_INVALID_ARGUMENT;
-    if(n<64 || memcmp(header,"CTR2",4) || store_u16(header+4)!=2) return AUTH_BAD_DATA;
+    if(n<64) return AUTH_BAD_DATA;
+    bool current=memcmp(header,"CTR3",4)==0 && store_u16(header+4)==3;
+    if(!current && (memcmp(header,"CTR2",4) || store_u16(header+4)!=2)) return AUTH_BAD_DATA;
     size_t length=store_u32(header+8),size=0;
-    if(rp2350_store_frame_extent(length,&size)!=AUTH_OK || store_u32(header+12)!=round16(length)) return AUTH_BAD_DATA;
+    if(length<8 || length>RP2350_STORE_PLAIN_MAX || store_u32(header+12)!=round16(length)) return AUTH_BAD_DATA;
+    size=commit_offset(round16(length),current)+256U;
     Rp2350StoreIdentity parsed={.class_id=store_u16(header+6),.sequence=store_u64(header+16),.generation=store_u64(header+24)};
     memcpy(parsed.epoch,header+32,16); if(!identity_valid(&parsed)) return AUTH_BAD_DATA;
     *id=parsed; *plain=length; *extent=size; return AUTH_OK;
@@ -70,7 +77,7 @@ AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *s,const Rp2350StoreIdenti
     if(rp2350_store_frame_extent(n,&extent)!=AUTH_OK || !location_valid(offset,extent) || !store_equal(id->epoch,s->epoch,16)) return AUTH_BAD_DATA;
     if(capacity<extent) return AUTH_CAPACITY;
     size_t cipher=round16(n),commit=extent-256U; AuthStatus status;
-    memset(out,0xff,extent); memcpy(out,"CTR2",4); store_put16(out+4,2); store_put16(out+6,id->class_id);
+    memset(out,0xff,extent); memcpy(out,"CTR3",4); store_put16(out+4,3); store_put16(out+6,id->class_id);
     store_put32(out+8,(uint32_t)n); store_put32(out+12,(uint32_t)cipher); store_put64(out+16,id->sequence);
     store_put64(out+24,id->generation); memcpy(out+32,id->epoch,16);
     status=s->crypto.random(s->crypto.context,out+48,16);
@@ -78,19 +85,20 @@ AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *s,const Rp2350StoreIdenti
     memcpy(out+64,plain,n); memset(out+64+n,0,cipher-n);
     status=crypt(s,true,out+48,out+64,cipher); if(status!=AUTH_OK) goto failed;
     status=tag(s,false,id->class_id,offset,out,64+cipher,out+64+cipher,w); if(status!=AUTH_OK) goto failed;
-    uint8_t *cp=out+commit;
-    memcpy(cp,"CTC2",4); store_put16(cp+4,2); store_put16(cp+6,id->class_id); store_put64(cp+8,id->sequence);
-    store_put64(cp+16,id->generation); memcpy(cp+24,id->epoch,16);
-    status=s->crypto.sha256(s->crypto.context,out,64+cipher+32U,cp+40); if(status!=AUTH_OK) goto failed;
-    status=tag(s,true,id->class_id,offset,cp,72,cp+72,w); if(status!=AUTH_OK) goto failed;
+    status=s->crypto.sha256(s->crypto.context,out,64+cipher+32U,out+commit-64U); if(status!=AUTH_OK) goto failed;
+    status=tag(s,true,id->class_id,offset,out,commit-32U,out+commit-32U,w); if(status!=AUTH_OK) goto failed;
+    /* Exactly one erased bit changes on the final page. If power fails during
+     * its program, it is either still erased or the authenticated frame is
+     * committed. No partially programmed multi-byte commit is ambiguous. */
+    out[extent-1U]=0xfe;
     auth_secure_zero(w,sizeof(*w)); *length=extent; return AUTH_OK;
 failed:
     s->faulted=true; auth_secure_zero(out,extent); auth_secure_zero(w,sizeof(*w)); return status;
 }
-static AuthStatus open_frame(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
-        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w,bool decrypt) {
+AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
+        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w) {
     if(length) *length=0;
-    if(decrypt && (!out || capacity>RP2350_STORE_PLAIN_MAX)) return AUTH_INVALID_ARGUMENT;
+    if(!out || capacity>RP2350_STORE_PLAIN_MAX) return AUTH_INVALID_ARGUMENT;
     if(out) auth_secure_zero(out,capacity);
     if(!s || !identity_valid(expected) || !frame || !length || !w) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(w,sizeof(*w));
@@ -101,36 +109,33 @@ static AuthStatus open_frame(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expec
         !location_valid(offset,n) || actual.class_id!=expected->class_id || actual.sequence!=expected->sequence ||
         actual.generation!=expected->generation || !store_equal(actual.epoch,expected->epoch,16) ||
         !store_equal(actual.epoch,s->epoch,16)) goto failed;
-    if(decrypt && capacity<plain) return AUTH_CAPACITY;
+    if(capacity<plain) return AUTH_CAPACITY;
+    bool current=store_u16(frame+4)==3;
     size_t cipher=round16(plain),commit=extent-256U; const uint8_t *cp=frame+commit;
-    if(memcmp(cp,"CTC2",4) || store_u16(cp+4)!=2 || store_u16(cp+6)!=actual.class_id ||
-        store_u64(cp+8)!=actual.sequence || store_u64(cp+16)!=actual.generation || !store_equal(cp+24,actual.epoch,16)) goto failed;
-    for(size_t i=64+cipher+32U;i<commit;i++) if(frame[i]!=0xff) goto failed;
-    for(size_t i=104;i<256;i++) if(cp[i]!=0xff) goto failed;
+    if(current) {
+        for(size_t i=0;i<255;i++) if(cp[i]!=0xff) goto failed;
+        if(cp[255]!=0xfe) goto failed;
+        for(size_t i=64+cipher+32U;i<commit-64U;i++) if(frame[i]!=0xff) goto failed;
+    } else {
+        if(memcmp(cp,"CTC2",4) || store_u16(cp+4)!=2 || store_u16(cp+6)!=actual.class_id ||
+            store_u64(cp+8)!=actual.sequence || store_u64(cp+16)!=actual.generation || !store_equal(cp+24,actual.epoch,16)) goto failed;
+        for(size_t i=64+cipher+32U;i<commit;i++) if(frame[i]!=0xff) goto failed;
+        for(size_t i=104;i<256;i++) if(cp[i]!=0xff) goto failed;
+    }
     status=tag(s,false,actual.class_id,offset,frame,64+cipher,mac,w); if(status!=AUTH_OK) goto failed;
     if(!store_equal(mac,frame+64+cipher,32)) { status=AUTH_BAD_DATA; goto failed; }
-    status=tag(s,true,actual.class_id,offset,cp,72,mac,w); if(status!=AUTH_OK) goto failed;
-    if(!store_equal(mac,cp+72,32)) { status=AUTH_BAD_DATA; goto failed; }
+    status=tag(s,true,actual.class_id,offset,current ? frame : cp,current ? commit-32U : 72U,mac,w); if(status!=AUTH_OK) goto failed;
+    if(!store_equal(mac,current ? frame+commit-32U : cp+72,32)) { status=AUTH_BAD_DATA; goto failed; }
     status=s->crypto.sha256(s->crypto.context,frame,64+cipher+32U,digest); if(status!=AUTH_OK) goto failed;
-    if(!store_equal(digest,cp+40,32)) { status=AUTH_BAD_DATA; goto failed; }
-    if(decrypt) {
-        /* Decrypt privately: caller capacity may exclude the padding block. */
-        memcpy(w->mac_input,frame+64,cipher);
-        status=crypt(s,false,frame+48,w->mac_input,cipher); if(status!=AUTH_OK) goto failed;
-        if(!store_zero(w->mac_input+plain,cipher-plain)) { status=AUTH_BAD_DATA; goto failed; }
-        memcpy(out,w->mac_input,plain);
-    }
+    if(!store_equal(digest,current ? frame+commit-64U : cp+40,32)) { status=AUTH_BAD_DATA; goto failed; }
+    /* Decrypt privately: caller capacity may exclude the padding block. */
+    memcpy(w->mac_input,frame+64,cipher);
+    status=crypt(s,false,frame+48,w->mac_input,cipher); if(status!=AUTH_OK) goto failed;
+    if(!store_zero(w->mac_input+plain,cipher-plain)) { status=AUTH_BAD_DATA; goto failed; }
+    memcpy(out,w->mac_input,plain);
     *length=plain;
     auth_secure_zero(mac,sizeof(mac)); auth_secure_zero(digest,sizeof(digest)); auth_secure_zero(w,sizeof(*w)); return AUTH_OK;
 failed:
     s->faulted=true; if(out) auth_secure_zero(out,capacity); auth_secure_zero(mac,sizeof(mac));
     auth_secure_zero(digest,sizeof(digest)); auth_secure_zero(w,sizeof(*w)); return status;
-}
-AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
-        const uint8_t *frame,size_t n,uint8_t *out,size_t capacity,size_t *length,Rp2350StoreSealWorkspace *w) {
-    return open_frame(s,expected,offset,frame,n,out,capacity,length,w,true);
-}
-AuthStatus rp2350_store_verify_internal(Rp2350StoreSeal *s,const Rp2350StoreIdentity *expected,uint32_t offset,
-        const uint8_t *frame,size_t n,size_t *length,Rp2350StoreSealWorkspace *w) {
-    return open_frame(s,expected,offset,frame,n,NULL,0,length,w,false);
 }

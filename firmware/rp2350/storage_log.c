@@ -6,7 +6,7 @@ static bool geometry(uint32_t base,uint32_t n) {
     return (n==RP2350_STORE_ARENA_SIZE && (base==RP2350_STORE_ARENA_A || base==RP2350_STORE_ARENA_B)) || (base==0 && n==8192);
 }
 static AuthStatus scan(Rp2350StoreLog *j,Rp2350StoreReplay replay,Rp2350StoreFrameReplay frames,void *context,
-        uint32_t *end,uint64_t *next,Rp2350StoreLogWorkspace *w,bool verified_prefix) {
+        uint32_t *end,uint64_t *next,Rp2350StoreLogWorkspace *w) {
     uint32_t at=0; uint64_t sequence=1;
     while(at<j->size) {
         AuthStatus status=j->flash.read(j->flash.context,j->base+at,w->page,256);
@@ -22,27 +22,63 @@ static AuthStatus scan(Rp2350StoreLog *j,Rp2350StoreReplay replay,Rp2350StoreFra
         }
         Rp2350StoreIdentity id; size_t plain=0,extent=0;
         status=rp2350_store_frame_inspect(w->page,256,&id,&plain,&extent);
-        if(status!=AUTH_OK || extent>j->size-at || id.sequence!=sequence || id.generation!=j->generation ||
-            !store_equal(id.epoch,j->epoch,16) || (j->selectors ? id.class_id!=4 : id.class_id==4)) return AUTH_BAD_DATA;
+        bool valid_header=status==AUTH_OK && extent<=j->size-at && id.sequence==sequence && id.generation==j->generation &&
+            store_equal(id.epoch,j->epoch,16) && (j->selectors ? id.class_id==4 : id.class_id!=4);
+        if(!valid_header && !j->selectors) {
+            /* A brownout may tear the first header page itself. This is safe
+             * to abandon only if EVERY later page is erased: a committed
+             * frame necessarily has a non-erased commit page after its body.
+             * Recovery still requires the earlier selected checkpoint. */
+            for(uint32_t tail=at+256U;tail<j->size;tail+=256U) {
+                status=j->flash.read(j->flash.context,j->base+tail,w->page,256);
+                if(status!=AUTH_OK) return status;
+                if(!erased(w->page,256)) return AUTH_BAD_DATA;
+            }
+            j->interrupted=true;
+            *end=at;
+            *next=sequence;
+            return AUTH_OK;
+        }
+        if(!valid_header) return AUTH_BAD_DATA;
         status=j->flash.read(j->flash.context,j->base+at,w->frame,extent);
         if(status!=AUTH_OK) return status;
+        /* The commit page is programmed last. An entirely erased commit on
+         * the final mutation means no operation was acknowledged from it.
+         * In particular, PIN comparison cannot run before its attempt charge
+         * commits. Preserve the verified prefix, but require compaction before
+         * any append: this partially programmed extent must never be reused.
+         * Recovery must still validate the selected checkpoint from committed
+         * frames. A marked but invalid commit remains fatal corruption. */
+        if(!j->selectors && erased(w->frame+extent-256U,256)) {
+            /* A corrupt length must not conceal a real earlier commit inside
+             * the claimed extent. V3's marker has one exact page encoding;
+             * legacy CTC2 commit pages are never payload to discard either. */
+            for(size_t page=256;page<extent-256U;page+=256U) {
+                if((erased(w->frame+page,255) && w->frame[page+255U]==0xfe) ||
+                    memcmp(w->frame+page,"CTC2",4)==0) return AUTH_BAD_DATA;
+            }
+            for(uint32_t tail=at+(uint32_t)extent;tail<j->size;tail+=256U) {
+                status=j->flash.read(j->flash.context,j->base+tail,w->page,256);
+                if(status!=AUTH_OK) return status;
+                if(!erased(w->page,256)) return AUTH_BAD_DATA;
+            }
+            j->interrupted=true;
+            *end=at;
+            *next=sequence;
+            return AUTH_OK;
+        }
         /* Expected fields come from the independently selected region, not
          * adopted generation/sequence from unauthenticated on-flash bytes. */
         Rp2350StoreIdentity expected={.class_id=id.class_id,.sequence=sequence,.generation=j->generation,.offset=j->base+at};
         memcpy(expected.epoch,j->epoch,16); size_t length=0;
-        if(verified_prefix) {
-            status=rp2350_store_verify_internal(j->crypto,&expected,j->base+at,w->frame,extent,&length,&w->seal);
-        } else {
-            status=rp2350_store_open_internal(j->crypto,&expected,j->base+at,w->frame,extent,w->plain,sizeof(w->plain),&length,&w->seal);
-        }
+        status=rp2350_store_open_internal(j->crypto,&expected,j->base+at,w->frame,extent,w->plain,sizeof(w->plain),&length,&w->seal);
         if(status!=AUTH_OK) return status;
-        if(!verified_prefix) {
-            Rp2350StoreTransaction transaction;
-            status=rp2350_store_transaction_decode(id.class_id,w->plain,length,&transaction);
-            if(status!=AUTH_OK) return status;
-            if(replay) { status=replay(context,&expected,&transaction); if(status!=AUTH_OK) return status; }
-            if(frames) { status=frames(context,&expected,&transaction,w->frame+extent-256U+40U); if(status!=AUTH_OK) return status; }
-        }
+        Rp2350StoreTransaction transaction;
+        status=rp2350_store_transaction_decode(id.class_id,w->plain,length,&transaction);
+        if(status!=AUTH_OK) return status;
+        if(replay) { status=replay(context,&expected,&transaction); if(status!=AUTH_OK) return status; }
+        const uint8_t *digest=store_u16(w->frame+4)==3 ? w->frame+extent-320U : w->frame+extent-216U;
+        if(frames) { status=frames(context,&expected,&transaction,digest); if(status!=AUTH_OK) return status; }
         auth_secure_zero(w->plain,sizeof(w->plain));
         if(sequence==UINT64_MAX) return AUTH_CAPACITY;
         sequence++; at+=(uint32_t)extent;
@@ -58,12 +94,11 @@ static AuthStatus open_log(Rp2350StoreLog *j,const Rp2350Flash *flash,Rp2350Stor
         !geometry(base,size) || !store_nonzero(epoch,16) || !crypto->initialized || crypto->faulted || !store_equal(epoch,crypto->epoch,16)) return AUTH_INVALID_ARGUMENT;
     j->flash=*flash; j->crypto=crypto; j->base=base; j->size=size; j->generation=generation; j->selectors=base==0;
     memcpy(j->epoch,epoch,16);
-    AuthStatus status=scan(j,NULL,NULL,NULL,&j->end,&j->next_sequence,w,false);
-    if(status==AUTH_OK && (replay || frames) && j->end) {
-        uint32_t end=0; uint64_t next=0;
-        status=scan(j,replay,frames,context,&end,&next,w,false);
-        if(status==AUTH_OK && (end!=j->end || next!=j->next_sequence)) status=AUTH_BAD_DATA;
-    }
+    /* Replay mutates only the caller's private staging state. Authenticate each
+     * frame before staging it, and publish nothing until the whole log and its
+     * cross-record invariants pass. Recovery aborts and wipes staging on any
+     * later error; a preliminary decrypt-and-discard pass adds no protection. */
+    AuthStatus status=scan(j,replay,frames,context,&j->end,&j->next_sequence,w);
     if(status==AUTH_OK) j->initialized=true; else j->faulted=true;
     auth_secure_zero(w,sizeof(*w));
     return status==AUTH_OK && !j->end ? AUTH_NOT_FOUND : status;
@@ -82,7 +117,7 @@ static AuthStatus append_log(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *
         Rp2350StoreLogWorkspace *w,bool checkpoint,bool verified_prefix) {
     if(!j || !plain || !w) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(w,sizeof(*w));
-    if(!j->initialized || j->faulted || !j->crypto || j->crypto->faulted) return AUTH_IO_ERROR;
+    if(!j->initialized || j->faulted || j->interrupted || !j->crypto || j->crypto->faulted) return AUTH_IO_ERROR;
     if(!j->flash.program_page) return AUTH_UNSUPPORTED;
     if(!j->flash.read || !geometry(j->base,j->size) || j->end>j->size || j->end%256U || !j->next_sequence)
         return AUTH_BAD_DATA;
@@ -95,7 +130,7 @@ static AuthStatus append_log(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *
     status=rp2350_store_frame_extent(n,&extent);
     if(status!=AUTH_OK) return status;
     if(extent>j->size-j->end) return AUTH_CAPACITY;
-    if(checkpoint) {
+    if(checkpoint || verified_prefix) {
         /* The checkpoint owner opened an entirely blank inactive bank and
          * retains this cursor until final replay. Check only the new extent
          * here; never overwrite a programmed page or retry an uncertain write. */
@@ -106,7 +141,7 @@ static AuthStatus append_log(Rp2350StoreLog *j,uint16_t class_id,const uint8_t *
         }
     } else {
         uint32_t checked_end=0; uint64_t checked_next=0;
-        status=scan(j,NULL,NULL,NULL,&checked_end,&checked_next,w,verified_prefix);
+        status=scan(j,NULL,NULL,NULL,&checked_end,&checked_next,w);
         if(status!=AUTH_OK || checked_end!=j->end || checked_next!=j->next_sequence) {
             if(status==AUTH_OK) status=AUTH_BAD_DATA;
             goto failed;

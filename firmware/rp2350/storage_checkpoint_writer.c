@@ -13,7 +13,7 @@ static AuthStatus append(Rp2350StoreCheckpointWorkspace *w,uint16_t class_id,uin
     if(status==AUTH_OK) status=rp2350_store_log_append_checkpoint_internal(&w->target,class_id,w->plain,length,&w->boot.io.log);
     auth_secure_zero(w->plain,sizeof(w->plain)); auth_secure_zero(w->data,sizeof(w->data));
     if(status!=AUTH_OK) return status;
-    return w->target.flash.read(w->target.flash.context,w->target.base+w->target.end-256U+40U,digest,32);
+    return w->target.flash.read(w->target.flash.context,w->target.base+w->target.end-320U,digest,32);
 }
 static AuthStatus item(Rp2350StoreCheckpointWorkspace *w,uint16_t kind,size_t n) {
     if(w->items>=2U*AUTH_RESIDENT_MAX_COUNT+2U) return AUTH_CAPACITY;
@@ -74,7 +74,9 @@ AuthStatus rp2350_store_checkpoint_stage_internal(Rp2350StoreCheckpointCandidate
     status=rp2350_store_checkpoint_keys_internal(w,flash,config,&w->source.selection,false);
     if(status!=AUTH_OK) goto done;
     /* Preflight all sizes/encodings and capture keys before any erase. */
-    size_t needed=1536U+w->source.records.metadata_count*512U;
+    /* V3 fixed records: global/manifest 768 each, PIN 512, keys 768 each.
+     * Metadata extents remain determined from their encoded lengths below. */
+    size_t needed=2048U+w->source.records.metadata_count*768U;
     for(size_t i=0;i<w->source.records.metadata_count;i++) {
         size_t n=0,extent=0;
         status=encode_metadata(w,flash,config,i,&n); if(status!=AUTH_OK) goto done;

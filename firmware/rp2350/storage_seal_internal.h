@@ -22,13 +22,12 @@ AuthStatus rp2350_store_frame_extent(size_t,size_t *);
 AuthStatus rp2350_store_frame_inspect(const uint8_t *,size_t,Rp2350StoreIdentity *,size_t *,size_t *);
 AuthStatus rp2350_store_seal_internal(Rp2350StoreSeal *,const Rp2350StoreIdentity *,uint32_t,
     const uint8_t *,size_t,uint8_t *,size_t,size_t *,Rp2350StoreSealWorkspace *);
-/* Expected identity/physical offset are trusted caller inputs, NOT adopted from
+/* Writes use envelope v3: header/ciphertext/MAC/digest are programmed and read
+ * back before a separate erased page commits exactly one bit (last byte FE).
+ * V2 envelopes remain readable. Roots and typed record encodings stay v2/v1.
+ * Expected identity/physical offset are trusted caller inputs, NOT adopted from
  * the envelope. All errors clear plaintext/length; auth/decode errors latch a
  * fault. No decryption before both tags and commit/body binding are verified. */
 AuthStatus rp2350_store_open_internal(Rp2350StoreSeal *,const Rp2350StoreIdentity *,uint32_t,
     const uint8_t *,size_t,uint8_t *,size_t,size_t *,Rp2350StoreSealWorkspace *);
-/* Recheck envelope/commit integrity without decrypting a previously replayed
- * frame. Does not validate plaintext padding or transaction semantics. */
-AuthStatus rp2350_store_verify_internal(Rp2350StoreSeal *,const Rp2350StoreIdentity *,uint32_t,
-    const uint8_t *,size_t,size_t *,Rp2350StoreSealWorkspace *);
 #endif

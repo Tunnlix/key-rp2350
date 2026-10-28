@@ -41,7 +41,7 @@ AuthStatus rp2350_store_boot_internal(Rp2350StoreBootResult *out,const Rp2350Fla
     if(status!=AUTH_OK) goto done;
     out->root=w->root; out->selection=w->selection;
     out->journal_end=w->log.end;
-    out->state=maintenance ? RP2350_STORE_MAINTENANCE : RP2350_STORE_RECOVERED;
+    out->state=(maintenance || w->log.interrupted) ? RP2350_STORE_MAINTENANCE : RP2350_STORE_RECOVERED;
 done:
     /* A missing selected arena/backend is a fault under an existing root. */
     if(status==AUTH_NOT_FOUND && !virgin) status=AUTH_IO_ERROR;

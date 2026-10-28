@@ -11,15 +11,16 @@ typedef struct {
 typedef struct {
     Rp2350Flash flash; Rp2350StoreSeal *crypto;
     uint32_t base,size,end; uint64_t generation,next_sequence;
-    uint8_t epoch[16]; bool selectors,initialized,faulted;
+    uint8_t epoch[16]; bool selectors,initialized,faulted,interrupted;
 } Rp2350StoreLog;
 typedef AuthStatus (*Rp2350StoreReplay)(void *,const Rp2350StoreIdentity *,const Rp2350StoreTransaction *);
 /* Digest is the authenticated commit's body digest, borrowed only for the
  * callback duration. Never expose an unverified frame digest to recovery. */
 typedef AuthStatus (*Rp2350StoreFrameReplay)(void *,const Rp2350StoreIdentity *,const Rp2350StoreTransaction *,const uint8_t[32]);
-/* Open authenticates/structurally validates the ENTIRE log before replay calls.
- * Replay stages caller-owned state; caller must discard it if any callback
- * fails. Successful open alone is not READY: cross-record semantics, root and
+/* Open authenticates each frame before replay into caller-owned staging.
+ * Callbacks MUST NOT perform IO or publish state. Discard staging if open or
+ * any callback fails, including errors after the last callback. Successful
+ * open alone is not READY: cross-record semantics, root and
  * selector/checkpoint authority are enforced by the next coordinator layer.
  * Blank explicit regions may be appended after open; NOT_FOUND never means a
  * provisioned authenticator has an unset PIN. Open requires only read; append
@@ -30,10 +31,11 @@ AuthStatus rp2350_store_log_open_internal(Rp2350StoreLog *,const Rp2350Flash *,R
 AuthStatus rp2350_store_log_open_frames_internal(Rp2350StoreLog *,const Rp2350Flash *,Rp2350StoreSeal *,
     uint32_t,uint32_t,uint64_t,const uint8_t[16],Rp2350StoreFrameReplay,void *,Rp2350StoreLogWorkspace *);
 AuthStatus rp2350_store_log_append_internal(Rp2350StoreLog *,uint16_t,const uint8_t *,size_t,Rp2350StoreLogWorkspace *);
-/* Live provider only: the prefix was fully replayed at recovery and each
- * appended transaction was semantically validated before publication. Recheck
- * all frame MACs, bindings, sequence/cursor and blank tail without decrypting
- * old payloads again. New transaction/readback still receives full validation. */
+/* Live exclusive provider only: recovery authenticated the entire prefix and
+ * blank tail, and every subsequent append was verified before publication.
+ * Check the new extent is erased rather than rescanning that trusted prefix.
+ * External writes invalidate this ownership: close and recover before use.
+ * The new transaction and its readback still receive full validation. */
 AuthStatus rp2350_store_log_append_verified_internal(Rp2350StoreLog *,uint16_t,const uint8_t *,size_t,Rp2350StoreLogWorkspace *);
 /* Checkpoint staging ONLY: caller has opened the completely blank inactive
  * arena and owns this cursor and all writes until staging ends. Accepts only
