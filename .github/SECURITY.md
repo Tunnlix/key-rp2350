@@ -40,11 +40,7 @@ does not provide a durable reservation of storage-encryption usage.
 
 ## Randomness validation
 
-Hardware entropy qualification is still pending. Hardware health alarms have
-been observed during sustained use. When an alarm occurs, the firmware stops
-service until restart and does not return further random output. These
-observations alone do not establish that previously generated keys are
-predictable.
+Hardware entropy qualification is still pending.
 
 ## USB identity and attestation
 
