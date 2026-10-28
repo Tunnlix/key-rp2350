@@ -76,7 +76,9 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
     a->base=rp2350_crypto_interface(crypto); a->primitives=rp2350_secret_interface(crypto);
     Rp2350StoreBootConfig config={.policy={.profile=1},.resolve=resolve,.root_context=a,
         .hash=hash,.key_inspect=inspect,.records_context=a};
-    AuthStatus status=rp2350_store_provider_stage_internal(&a->store,flash,&config,crypto,&a->reset_workspace.phase.provider);
+    AuthStatus status=io->trial_boot ?
+        rp2350_store_provider_trial_internal(&a->store,flash,&config,crypto,&a->reset_workspace.phase.provider) :
+        rp2350_store_provider_stage_internal(&a->store,flash,&config,crypto,&a->reset_workspace.phase.provider);
     if(status!=AUTH_OK) goto failed;
     AuthCrypto c=rp2350_store_provider_crypto_internal(&a->store);
     AuthStorage storage=rp2350_store_provider_storage_internal(&a->store);

@@ -204,6 +204,18 @@ Application flashing must preserve everything at or above `0x178000`, including
 both blob and credential storage. Firmware images exclude those regions. ROM
 BOOTSEL does not enforce this application-specific boundary.
 
+Version 1.4 reads existing v1.3 credential stores without resetting them. New
+writes use envelope v3: the encrypted body, MACs and digest are written and
+read back before a separate page programs one commit bit. This distinguishes
+an interrupted write from corruption of an acknowledged record, including
+partial page programming. Root capsules and typed credential records retain
+their previous encodings. Some frame sizes increase by one page.
+
+After the first v1.4 storage write, v1.3 cannot read the mixed/new envelopes.
+Keep compatible firmware available; do not downgrade a used v1.4 key to v1.3.
+A/B trial startup validates storage read-only and makes no format change before
+ROM confirmation, preserving pre-confirmation rollback to the stable image.
+
 Downgrading to firmware that cannot decode stored algorithms, blob metadata or
 PIN policies can prevent recovery. Use compatible firmware or intentionally
 reset and re-enroll. Product renaming does not change storage derivation labels.

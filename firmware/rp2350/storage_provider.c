@@ -36,6 +36,7 @@ void rp2350_store_provider_close_internal(Rp2350StoreProvider *p) {
 static bool begin(Rp2350StoreProvider *p) {
     if(!p || !p->live || p->busy || !p->crypto) return false;
     if(p->crypto->faulted || (p->crypto->keys_locked && !p->staged)) {
+        if(p->failure==AUTH_OK) p->failure=AUTH_CRYPTO_ERROR;
         fault(p);
         auth_secure_zero(p->workspace,sizeof(*p->workspace));
         return false;
@@ -44,12 +45,25 @@ static bool begin(Rp2350StoreProvider *p) {
     p->busy=true;
     return true;
 }
-static AuthStatus finish(Rp2350StoreProvider *p,AuthStatus status,bool mutation) {
-    if(mutation && status!=AUTH_OK) fault(p);
+static AuthStatus finish_operation(Rp2350StoreProvider *p,AuthStatus status,bool mutation,bool scratch_used) {
+    if(mutation && status!=AUTH_OK) {
+        if(p->failure==AUTH_OK) p->failure=status;
+        fault(p);
+    }
     rp2350_crypto_clear_credentials_internal(p->crypto);
-    auth_secure_zero(p->workspace,sizeof(*p->workspace));
+    if(scratch_used) auth_secure_zero(p->workspace,sizeof(*p->workspace));
     p->busy=false;
     return status;
+}
+static AuthStatus finish(Rp2350StoreProvider *p,AuthStatus status,bool mutation) {
+    return finish_operation(p,status,mutation,true);
+}
+/* Recovery and every scratch-using operation leave the workspace fully zero.
+ * Cached reads and base-crypto calls below never touch it. Do not write another
+ * 76 KiB of zeroes for these operations; credential working slots are still
+ * wiped, errors still revoke service, and busy remains held through cleanup. */
+static AuthStatus finish_cached(Rp2350StoreProvider *p,AuthStatus status,bool mutation) {
+    return finish_operation(p,status,mutation,false);
 }
 static AuthStatus refresh(Rp2350StoreProvider *p) {
     Rp2350StoreCheckpointWorkspace *w=&p->workspace->phase.recovery;
@@ -108,6 +122,7 @@ static AuthStatus space_for_commit(Rp2350StoreProvider *p,size_t extent) {
     return available<extent ? AUTH_CAPACITY : AUTH_OK;
 }
 static AuthStatus commit(Rp2350StoreProvider *p,const Rp2350StoreTransaction *tx) {
+    if(p->read_only) return AUTH_BUSY;
     /* Freeze payloads before maintenance: callers may refer into the cache and
      * phase workspaces share memory. Never retry after an uncertain append. */
     size_t length=0,extent=0;
@@ -127,10 +142,10 @@ static AuthStatus commit(Rp2350StoreProvider *p,const Rp2350StoreTransaction *tx
     memcpy(id.epoch,p->version.epoch,16);
     if(status==AUTH_OK) status=rp2350_store_recovery_apply(&w->boot.recovery,&id,&pending);
     if(status!=AUTH_OK) return status;
-    /* The cursor and index came from full recovery or our last verified append.
-     * Append still authenticates the entire existing log, rejects holes/stale
-     * cursors and verifies every programmed page plus the new frame before ACK.
-     * Publish the staged index only after that durable verification succeeds. */
+    /* Exclusive ownership starts with full recovery and a blank-tail check.
+     * Every append verifies its destination, programmed pages and new frame.
+     * The authenticated prefix/index remain trusted until close or a fault;
+     * external writes require fresh recovery. Publish only after durable ACK. */
     w->log=(Rp2350StoreLog){.flash=p->flash,.crypto=&w->source.root.seal,
         .base=w->source.selection.arena_base,.size=RP2350_STORE_ARENA_SIZE,.end=p->journal_end,
         .generation=p->version.generation,.next_sequence=id.sequence,.initialized=true};
@@ -149,17 +164,22 @@ static AuthStatus maintenance(Rp2350StoreProvider *p) {
     auth_secure_zero(&receipt,sizeof(receipt)); return status;
 }
 static AuthStatus recover(Rp2350StoreProvider *p,const Rp2350Flash *flash,const Rp2350StoreBootConfig *config,
-        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w,bool activate) {
+        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w,bool activate,bool read_only) {
     if(p && (p->busy || p->live)) return AUTH_BUSY;
     if(w) auth_secure_zero(w,sizeof(*w));
     if(!p || !flash || !flash->read || !config || !crypto || !w) return AUTH_INVALID_ARGUMENT;
     if(!flash->program_page || !flash->erase_sector || config->policy.profile!=1 || config->policy.backend) return AUTH_UNSUPPORTED;
-    *p=(Rp2350StoreProvider){.crypto=crypto,.flash=*flash,.config=*config,.workspace=w,.busy=true};
+    *p=(Rp2350StoreProvider){.crypto=crypto,.flash=*flash,.config=*config,.workspace=w,.busy=true,.read_only=read_only};
     rp2350_crypto_invalidate_internal(crypto);
-    AuthStatus status=maintenance(p); if(status!=AUTH_OK) goto done;
+    AuthStatus status=AUTH_OK;
+    if(!read_only) {
+        status=maintenance(p);
+        if(status!=AUTH_OK) goto done;
+    }
     status=refresh(p); if(status!=AUTH_OK) goto done;
     Rp2350StoreCheckpointWorkspace *capture=&w->phase.recovery;
-    if(capture->source.state!=RP2350_STORE_RECOVERED) { status=AUTH_BUSY; goto done; }
+    if(capture->source.state!=RP2350_STORE_RECOVERED &&
+        !(read_only && capture->source.state==RP2350_STORE_MAINTENANCE)) { status=AUTH_BUSY; goto done; }
     status=rp2350_store_checkpoint_keys_internal(capture,&p->flash,&p->config,&capture->source.selection,false); if(status!=AUTH_OK) goto done;
     status=rp2350_crypto_stage_epoch_internal(crypto,p->cache.global.handle_prefix,p->cache.global.handle_high); if(status!=AUTH_OK) goto done;
     if(activate) { status=rp2350_crypto_activate_internal(crypto); if(status!=AUTH_OK) goto done; }
@@ -169,9 +189,18 @@ done:
     return finish(p,status,true);
 }
 AuthStatus rp2350_store_provider_recover_internal(Rp2350StoreProvider *p,const Rp2350Flash *f,const Rp2350StoreBootConfig *c,
-        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w) { return recover(p,f,c,crypto,w,true); }
+        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w) { return recover(p,f,c,crypto,w,true,false); }
 AuthStatus rp2350_store_provider_stage_internal(Rp2350StoreProvider *p,const Rp2350Flash *f,const Rp2350StoreBootConfig *c,
-        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w) { return recover(p,f,c,crypto,w,false); }
+        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w) { return recover(p,f,c,crypto,w,false,false); }
+AuthStatus rp2350_store_provider_trial_internal(Rp2350StoreProvider *p,const Rp2350Flash *f,const Rp2350StoreBootConfig *c,
+        Rp2350Crypto *crypto,Rp2350StoreProviderWorkspace *w) { return recover(p,f,c,crypto,w,false,true); }
+AuthStatus rp2350_store_provider_finish_trial_internal(Rp2350StoreProvider *p) {
+    if(!p || !p->read_only || !begin(p)) return AUTH_INVALID_ARGUMENT;
+    AuthStatus status=maintenance(p);
+    if(status==AUTH_OK) status=refresh(p);
+    if(status==AUTH_OK) p->read_only=false;
+    return finish(p,status,true);
+}
 static size_t index_of(const Rp2350StoreProvider *p,const uint8_t id[32]) {
     for(size_t i=0;i<p->cache.metadata_count;i++) if(store_equal(id,p->cache.metadata[i].credential_id,32)) return i;
     return p->cache.metadata_count;
@@ -229,7 +258,7 @@ static AuthStatus find_rp(void *ctx,const uint8_t rp[32],bool resident,size_t n,
 static AuthStatus count(void *ctx,size_t *out) {
     Rp2350StoreProvider *p=ctx; if(!out) return AUTH_INVALID_ARGUMENT;
     if(!begin(p)) return AUTH_IO_ERROR;
-    *out=p->cache.metadata_count; return finish(p,AUTH_OK,false);
+    *out=p->cache.metadata_count; return finish_cached(p,AUTH_OK,false);
 }
 static AuthStatus put(void *ctx,const uint8_t *old,const AuthCredential *in,const uint8_t *state) {
     Rp2350StoreProvider *p=ctx; if(!in) return AUTH_INVALID_ARGUMENT;
@@ -286,7 +315,7 @@ static AuthStatus counter(void *ctx,const uint8_t id[32],uint32_t expected,uint3
 static AuthStatus pin_read(void *ctx,AuthPinRecord *out) {
     Rp2350StoreProvider *p=ctx; if(!out) return AUTH_INVALID_ARGUMENT;
     if(!begin(p)) return AUTH_IO_ERROR;
-    *out=p->cache.pin; return finish(p,AUTH_OK,false);
+    *out=p->cache.pin; return finish_cached(p,AUTH_OK,false);
 }
 static AuthStatus pin_write(void *ctx,const AuthPinRecord *in) {
     Rp2350StoreProvider *p=ctx; if(!in) return AUTH_INVALID_ARGUMENT;
@@ -298,11 +327,11 @@ static AuthStatus pin_write(void *ctx,const AuthPinRecord *in) {
 }
 static AuthStatus random_bytes(void *ctx,uint8_t *out,size_t n) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,n); return AUTH_IO_ERROR; }
-    AuthCrypto c=rp2350_crypto_interface(p->crypto); return finish(p,c.random(c.context,out,n),true);
+    AuthCrypto c=rp2350_crypto_interface(p->crypto); return finish_cached(p,c.random(c.context,out,n),true);
 }
 static AuthStatus hash(void *ctx,const uint8_t *in,size_t n,uint8_t out[32]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,32); return AUTH_IO_ERROR; }
-    AuthCrypto c=rp2350_crypto_interface(p->crypto); return finish(p,c.sha256(c.context,in,n,out),true);
+    AuthCrypto c=rp2350_crypto_interface(p->crypto); return finish_cached(p,c.sha256(c.context,in,n,out),true);
 }
 static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *out,uint8_t pub[65]) {
     Rp2350StoreProvider *p=ctx; if(!out || !pub) return AUTH_INVALID_ARGUMENT;
@@ -357,6 +386,7 @@ static AuthStatus sign(void *ctx,const AuthKeyHandle *h,const uint8_t d[32],uint
 }
 static AuthStatus destroy(void *ctx,const AuthKeyHandle *h) {
     Rp2350StoreProvider *p=ctx; if(!h) return AUTH_INVALID_ARGUMENT; if(!begin(p)) return AUTH_IO_ERROR;
+    if(p->read_only) return finish(p,AUTH_BUSY,false);
     for(size_t i=0;i<p->cache.metadata_count;i++) if(store_equal(h->bytes,p->cache.metadata[i].key.bytes,32)) return finish(p,AUTH_BUSY,false);
     size_t i=0; while(i<p->cache.key_count && !store_equal(h->bytes,p->cache.keys[i].handle.bytes,32)) i++;
     if(i==p->cache.key_count) return finish(p,AUTH_NOT_FOUND,false);
@@ -371,19 +401,19 @@ static AuthStatus destroy(void *ctx,const AuthKeyHandle *h) {
 }
 static AuthStatus agreement(void *ctx,uint8_t out[65]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,65); return AUTH_IO_ERROR; }
-    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.key_agreement(s.context,out),true);
+    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish_cached(p,s.key_agreement(s.context,out),true);
 }
 static AuthStatus shared(void *ctx,const uint8_t peer[65],uint8_t out[32]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,32); return AUTH_IO_ERROR; }
-    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); AuthStatus status=s.ecdh(s.context,peer,out); return finish(p,status,status!=AUTH_BAD_DATA);
+    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); AuthStatus status=s.ecdh(s.context,peer,out); return finish_cached(p,status,status!=AUTH_BAD_DATA);
 }
 static AuthStatus mac(void *ctx,const uint8_t *key,size_t kn,const uint8_t *in,size_t n,uint8_t out[32]) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,32); return AUTH_IO_ERROR; }
-    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.hmac_sha256(s.context,key,kn,in,n,out),true);
+    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish_cached(p,s.hmac_sha256(s.context,key,kn,in,n,out),true);
 }
 static AuthStatus aes(void *ctx,bool encrypt,const uint8_t key[32],const uint8_t iv[16],const uint8_t *in,size_t n,uint8_t *out) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) auth_secure_zero(out,n); return AUTH_IO_ERROR; }
-    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.aes256_cbc(s.context,encrypt,key,iv,in,n,out),true);
+    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish_cached(p,s.aes256_cbc(s.context,encrypt,key,iv,in,n,out),true);
 }
 static AuthStatus supported(void *ctx,const AuthKeyHandle *h,bool *out) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) { if(out) *out=false; return AUTH_IO_ERROR; }
@@ -413,7 +443,7 @@ static AuthStatus large_blob_key(void *ctx,const AuthKeyHandle *h,uint8_t out[32
 }
 static AuthStatus regenerate(void *ctx) {
     Rp2350StoreProvider *p=ctx; if(!begin(p)) return AUTH_IO_ERROR;
-    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish(p,s.regenerate(s.context),true);
+    AuthSecretCrypto s=rp2350_secret_interface(p->crypto); return finish_cached(p,s.regenerate(s.context),true);
 }
 AuthCrypto rp2350_store_provider_crypto_internal(Rp2350StoreProvider *p) { return (AuthCrypto){p,random_bytes,hash,generate,public_key,sign,destroy,generate_ed25519,sign_ed25519}; }
 AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *p) { return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate,large_blob_key}; }

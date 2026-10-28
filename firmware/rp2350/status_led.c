@@ -6,12 +6,15 @@ static struct {
     bool initialized, rgb, shown, success;
     uint32_t color, success_ms;
     uint64_t last_write_us;
+    Rp2350Fault fault;
+    uint32_t fault_ms;
 } led;
 
 void rp2350_status_led_init(void) {
     led.initialized = status_led_init();
     led.rgb = led.initialized && colored_status_led_supported();
     led.shown = led.success = false;
+    led.fault = 0;
     led.last_write_us = time_us_64();
     /* The XIAO user LED remains available even if RGB initialization fails. */
     gpio_init(PICO_DEFAULT_LED_PIN);
@@ -22,6 +25,12 @@ void rp2350_status_led_init(void) {
 void rp2350_status_led_success(uint32_t now_ms) {
     led.success = true;
     led.success_ms = now_ms;
+}
+void rp2350_status_led_fault(Rp2350Fault fault, uint32_t now_ms) {
+    if(!led.fault && fault>=RP2350_FAULT_STORAGE && fault<=RP2350_FAULT_USB) {
+        led.fault=fault;
+        led.fault_ms=now_ms;
+    }
 }
 
 void rp2350_status_led_poll(Rp2350LedState state, uint32_t now_ms) {
@@ -35,10 +44,13 @@ void rp2350_status_led_poll(Rp2350LedState state, uint32_t now_ms) {
         on = true;
         color = 0x020100U;
         break;
-    case RP2350_LED_FAULT:
-        on = now_ms % 100U < 50U;
+    case RP2350_LED_FAULT: {
+        unsigned flashes=led.fault ? (unsigned)led.fault : (unsigned)RP2350_FAULT_BOOT;
+        uint32_t phase=(uint32_t)(now_ms-led.fault_ms)%(flashes*400U+1400U);
+        on = phase<flashes*400U && phase%400U<150U;
         color = 0x100000U;
         break;
+    }
     case RP2350_LED_UPDATE: {
         uint32_t phase = now_ms % 1500U;
         on = phase < 100U || (phase >= 250U && phase < 350U);

@@ -32,6 +32,7 @@ static struct {
 
 static uint64_t presence_operation;
 static Rp2350AbBoot boot;
+static Rp2350Fault failure_stage=RP2350_FAULT_BOOT;
 static void update_status_led(AuthStatus status);
 
 static uint32_t now_ms(void *context) {
@@ -46,6 +47,13 @@ static bool button_pressed(void *context) {
 
 static void flash_progress(void *context) {
     (void)context;
+    /* Flash validation calls this once per read. Service transport/LEDs at
+     * millisecond cadence, rather than thousands of times per journal scan.
+     * Long program/erase calls still service immediately after returning. */
+    static uint32_t serviced_ms;
+    uint32_t now=now_ms(NULL);
+    if((uint32_t)(now-serviced_ms)<1U) return;
+    serviced_ms=now;
     if(!boot.pending) watchdog_update();
     rp2350_usb_service(&app.application);
     update_status_led(AUTH_OK);
@@ -107,12 +115,15 @@ static bool submit_report(void *context, const uint8_t report[64], uint64_t tran
 }
 
 static AuthStatus start_application(void) {
+    failure_stage=RP2350_FAULT_FLASH;
     AuthStatus status = rp2350_board_flash_open(&app.flash, 0, RP2350_STORE_FLASH_BYTES);
     if(status != AUTH_OK) return status;
     app.flash.writes_locked = boot.pending;
     app.flash.progress = flash_progress;
 
+    failure_stage=RP2350_FAULT_ENTROPY;
     if(!rp2350_board_entropy_init(&app.entropy)) return AUTH_CRYPTO_ERROR;
+    failure_stage=RP2350_FAULT_CRYPTO;
     status = rp2350_crypto_init(&app.crypto, rp2350_entropy_read, &app.entropy);
     if(status != AUTH_OK) return status;
 
@@ -122,20 +133,24 @@ static AuthStatus start_application(void) {
         .pressed = button_pressed,
         .submit = submit_report,
         .usb_transport = true,
+        .trial_boot = boot.pending,
         .cancel_requested = rp2350_usb_cancel_requested
     };
     /* Key onboard model: fa024a59-a2a6-41d9-bd40-ed6a78915bca. Stable across firmware revisions. */
     static const uint8_t model_aaguid[16] = {0xfa, 0x02, 0x4a, 0x59, 0xa2, 0xa6, 0x41, 0xd9, 0xbd, 0x40, 0xed, 0x6a, 0x78, 0x91, 0x5b, 0xca};
+    failure_stage=RP2350_FAULT_STORAGE;
     status = rp2350_application_init(&app.application, &app.crypto, &flash, &io,
         model_aaguid, 0); /* Actual power-on time; USB reset never renews it. */
     if(status != AUTH_OK) return status;
     Rp2350Flash blobs = rp2350_board_blob_flash(&app.flash);
     status = rp2350_application_configure_blobs(&app.application, &blobs);
     if(status != AUTH_OK) return status;
+    failure_stage=RP2350_FAULT_USB;
     return rp2350_usb_init() ? AUTH_OK : AUTH_IO_ERROR;
 }
 
 static AuthStatus poll_application(void) {
+    failure_stage=RP2350_FAULT_USB;
     if(app.application.backend.pending && app.application.backend.awaiting_presence)
         presence_operation = app.application.backend.operation_id;
     else if(app.application.device.phase == CTAPHID_DEVICE_IDLE ||
@@ -181,7 +196,10 @@ int main(void) {
         watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
     }
     AuthStatus status = AUTH_IO_ERROR;
-    if(boot_valid && !interrupted) status = stack_observed ? start_application() : AUTH_CAPACITY;
+    if(boot_valid && !interrupted) {
+        if(!stack_observed) failure_stage=RP2350_FAULT_STACK;
+        status = stack_observed ? start_application() : AUTH_CAPACITY;
+    }
     clear_startup_marker();
     bool fault_closed = false;
     uint32_t last_stack_check=now_ms(NULL)-STACK_CHECK_INTERVAL_MS;
@@ -194,12 +212,20 @@ int main(void) {
                 Rp2350StoreProviderWorkspace *scratch = &app.application.reset_workspace.phase.provider;
                 _Static_assert(sizeof(*scratch) >= 4096 && _Alignof(Rp2350StoreProviderWorkspace) >= 4,
                     "ROM confirmation requires aligned 4 KiB scratch");
-                if(rp2350_stack_probe_used() > STACK_USE_LIMIT_BYTES ||
+                bool stack_excessive=rp2350_stack_probe_used() > STACK_USE_LIMIT_BYTES;
+                if(stack_excessive ||
                     !rp2350_application_ready(&app.application) || app.application.store.busy ||
-                    !rp2350_ab_boot_confirm(&boot, scratch, sizeof(*scratch))) status = AUTH_IO_ERROR;
+                    !rp2350_ab_boot_confirm(&boot, scratch, sizeof(*scratch))) {
+                    failure_stage=stack_excessive ? RP2350_FAULT_STACK : RP2350_FAULT_BOOT;
+                    status = AUTH_IO_ERROR;
+                }
                 else {
                     app.flash.writes_locked = false;
                     watchdog_enable(WATCHDOG_TIMEOUT_MS, true);
+                    /* No CTAP request has run. Finish recoverable cleanup only
+                     * after ROM buy, with writes unlocked, before serving USB. */
+                    failure_stage=RP2350_FAULT_STORAGE;
+                    status=rp2350_store_provider_finish_trial_internal(&app.application.store);
                 }
             }
         } else if(status == AUTH_OK) status = poll_application();
@@ -208,9 +234,19 @@ int main(void) {
         if(stack_observed && (uint32_t)(now-last_stack_check)>=STACK_CHECK_INTERVAL_MS) {
             last_stack_check=now;
             uint32_t used = rp2350_stack_probe_used();
-            if(used > STACK_USE_LIMIT_BYTES) status = AUTH_CAPACITY;
+            if(used > STACK_USE_LIMIT_BYTES) {
+                failure_stage=RP2350_FAULT_STACK;
+                status = AUTH_CAPACITY;
+            }
         }
         if(status != AUTH_OK && !fault_closed) {
+            Rp2350Fault reason=failure_stage;
+            AuthStatus store_error=app.application.store.failure;
+            if(store_error!=AUTH_OK) reason=store_error==AUTH_IO_ERROR ? RP2350_FAULT_FLASH : RP2350_FAULT_STORAGE;
+            if(status==AUTH_CRYPTO_ERROR || store_error==AUTH_CRYPTO_ERROR || app.crypto.faulted) reason=RP2350_FAULT_CRYPTO;
+            if(app.entropy.faulted || failure_stage==RP2350_FAULT_ENTROPY) reason=RP2350_FAULT_ENTROPY;
+            if(failure_stage==RP2350_FAULT_STACK) reason=RP2350_FAULT_STACK;
+            rp2350_status_led_fault(reason,now);
             rp2350_usb_close();
             if(app.application.initialized) rp2350_application_close(&app.application);
             /* Terminal faults never resume service. Wipe the owned DRBG/arena

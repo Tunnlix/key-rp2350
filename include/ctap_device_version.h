@@ -5,7 +5,7 @@
  * This is not the CTAPHID protocol revision or a CTAP conformance claim.
  * Increase the firmware version for each released firmware change. */
 #define CTAP_DEVICE_VERSION_MAJOR 1
-#define CTAP_DEVICE_VERSION_MINOR 3
+#define CTAP_DEVICE_VERSION_MINOR 4
 #define CTAP_DEVICE_VERSION_BUILD 0
 #define CTAP_DEVICE_VERSION_PRERELEASE ""
 

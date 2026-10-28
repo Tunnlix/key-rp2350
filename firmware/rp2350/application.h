@@ -12,6 +12,7 @@ typedef struct {
     CtaphidAbortReport abort;
     bool asynchronous;
     bool usb_transport;
+    bool trial_boot; /* Owner must finish provider maintenance after ROM buy. */
     bool (*cancel_requested)(void *, uint64_t);
 } Rp2350ApplicationIo;
 typedef struct Rp2350Application {

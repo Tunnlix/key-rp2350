@@ -30,17 +30,19 @@ typedef struct {
     Rp2350StoreVersion version;
     Rp2350StoreProviderWorkspace *workspace;
     uint32_t journal_end;
+    AuthStatus failure; /* First terminal provider error; no credential data. */
     uint8_t selected_id[RP2350_NONRESIDENT_ID_SIZE],selected_rp[32];
     bool selected_nonresident;
-    bool live,busy,staged;
+    bool live,busy,staged,read_only;
 } Rp2350StoreProvider;
 /* Single serialized writer with caller-owned, disjoint contexts/workspace.
  * Config primitives must use base crypto, never the gated provider callbacks.
  * Recovery validates authority and the complete log, cleans orphan/retired keys
  * and builds a compact index. External writes require close + fresh recovery.
  * Reads authenticate current authority and the indexed frame. Private working
- * keys and scratch are wiped on callback exit. Mutations validate typed state,
- * authenticate the old journal, then verify the new frame before publishing.
+ * keys and used scratch are wiped on callback exit. Mutations validate typed
+ * state against the exclusively owned recovered index, then verify the new
+ * frame before publishing; external writes invalidate this ownership.
  * Any mutation failure revokes service; never retry an uncertain append.
  * Creation reserves journal space before staging an unreferenced key. Pending
  * transaction bytes survive phase-union compaction. Key destruction completes
@@ -53,6 +55,12 @@ AuthStatus rp2350_store_provider_recover_internal(Rp2350StoreProvider *,const Rp
  * until that owner activates crypto after all initialization succeeds. */
 AuthStatus rp2350_store_provider_stage_internal(Rp2350StoreProvider *,const Rp2350Flash *,
     const Rp2350StoreBootConfig *,Rp2350Crypto *,Rp2350StoreProviderWorkspace *);
+/* A/B trial only: authenticate selected records without erasing an inactive
+ * bank or cleaning retired keys. Mutations stay disabled until maintenance
+ * completes after ROM confirms the image and the board unlocks flash writes. */
+AuthStatus rp2350_store_provider_trial_internal(Rp2350StoreProvider *,const Rp2350Flash *,
+    const Rp2350StoreBootConfig *,Rp2350Crypto *,Rp2350StoreProviderWorkspace *);
+AuthStatus rp2350_store_provider_finish_trial_internal(Rp2350StoreProvider *);
 void rp2350_store_provider_close_internal(Rp2350StoreProvider *);
 AuthCrypto rp2350_store_provider_crypto_internal(Rp2350StoreProvider *);
 AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *);

@@ -12,6 +12,12 @@
 static alignas(max_align_t) uint8_t crypto_pool[RP2350_CRYPTO_POOL_SIZE];
 static Rp2350Crypto *owner;
 static bool ready(const Rp2350Crypto *p) { return p && owner==p && p->initialized && !p->faulted; }
+static int fresh_entropy(Rp2350Crypto *p) {
+    if(!ready(p)) return MBEDTLS_ERR_HMAC_DRBG_ENTROPY_SOURCE_FAILED;
+    int rc=mbedtls_hmac_drbg_reseed(&p->drbg,NULL,0);
+    if(rc) p->faulted=true;
+    return rc;
+}
 static int rng(void *ctx, unsigned char *out, size_t n) {
     Rp2350Crypto *p=ctx;
     if (!ready(p)) {
@@ -24,6 +30,10 @@ static int rng(void *ctx, unsigned char *out, size_t n) {
 }
 static AuthStatus random_bytes(void *ctx,uint8_t *out,size_t n) {
     if (!out || n==0 || n>MBEDTLS_HMAC_DRBG_MAX_REQUEST) return AUTH_INVALID_ARGUMENT;
+    /* Public random outputs (PIN tokens, IVs, handles) retain fresh entropy.
+     * Internal scalar-blinding requests use the bounded DRBG stream instead
+     * of waiting for hardware on each multiplication. */
+    if(fresh_entropy(ctx)) { auth_secure_zero(out,n); return AUTH_CRYPTO_ERROR; }
     return rng(ctx,out,n)==0 ? AUTH_OK : AUTH_CRYPTO_ERROR;
 }
 static AuthStatus hash(void *ctx,const uint8_t *in,size_t n,uint8_t out[32]) {
@@ -69,7 +79,8 @@ static AuthStatus aes(void *ctx,bool encrypt,const uint8_t key[32],const uint8_t
 static int keypair(Rp2350Crypto *p,uint8_t scalar[32],uint8_t public_key[65]) {
     mbedtls_ecp_keypair k; size_t len=0;
     mbedtls_ecp_keypair_init(&k);
-    int rc=mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1,&k,rng,p);
+    int rc=fresh_entropy(p);
+    if(!rc) rc=mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1,&k,rng,p);
     if (!rc) rc=mbedtls_mpi_write_binary(&k.MBEDTLS_PRIVATE(d),scalar,32);
     if (!rc) rc=mbedtls_ecp_point_write_binary(&k.MBEDTLS_PRIVATE(grp),&k.MBEDTLS_PRIVATE(Q),
         MBEDTLS_ECP_PF_UNCOMPRESSED,&len,public_key,65);
@@ -89,6 +100,24 @@ static void ed25519_public(const uint8_t seed[32], uint8_t pub[65]) {
     crypto_ed25519_key_pair(secret,pub,copy); /* Wipes its seed input. */
     auth_secure_zero(secret,sizeof(secret)); auth_secure_zero(copy,sizeof(copy));
 }
+static AuthStatus derive_public(Rp2350Crypto *p,Rp2350Key *k) {
+    if(k->public_ready) return AUTH_OK;
+    if(k->algorithm==AUTH_COSE_ALG_EDDSA) {
+        ed25519_public(k->scalar,k->public_key);
+    } else {
+        mbedtls_ecp_group group; mbedtls_ecp_point point; mbedtls_mpi scalar; size_t n=0;
+        mbedtls_ecp_group_init(&group); mbedtls_ecp_point_init(&point); mbedtls_mpi_init(&scalar);
+        int rc=mbedtls_ecp_group_load(&group,MBEDTLS_ECP_DP_SECP256R1);
+        if(!rc) rc=mbedtls_mpi_read_binary(&scalar,k->scalar,32);
+        if(!rc) rc=mbedtls_ecp_mul(&group,&point,&scalar,&group.G,rng,p);
+        if(!rc) rc=mbedtls_ecp_check_pubkey(&group,&point);
+        if(!rc) rc=mbedtls_ecp_point_write_binary(&group,&point,MBEDTLS_ECP_PF_UNCOMPRESSED,&n,k->public_key,65);
+        mbedtls_mpi_free(&scalar); mbedtls_ecp_point_free(&point); mbedtls_ecp_group_free(&group);
+        if(rc || n!=65) { auth_secure_zero(k->public_key,sizeof(k->public_key)); return AUTH_CRYPTO_ERROR; }
+    }
+    k->public_ready=true;
+    return AUTH_OK;
+}
 static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *h,uint8_t pub[65]) {
     Rp2350Crypto *p=ctx;
     if (!h || !pub) return AUTH_INVALID_ARGUMENT;
@@ -98,7 +127,8 @@ static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *
     for (size_t i=0;i<RP2350_KEY_SLOTS;i++) if (!p->keys[i].used) { k=&p->keys[i]; break; }
     if (!k) return AUTH_CAPACITY;
     k->algorithm=algorithm;
-    int rc=algorithm==AUTH_COSE_ALG_ES256 ? keypair(p,k->scalar,k->public_key) : rng(p,k->scalar,32);
+    int rc=algorithm==AUTH_COSE_ALG_ES256 ? keypair(p,k->scalar,k->public_key) : fresh_entropy(p);
+    if(!rc && algorithm==AUTH_COSE_ALG_EDDSA) rc=rng(p,k->scalar,32);
     if (!rc && algorithm==AUTH_COSE_ALG_EDDSA) ed25519_public(k->scalar,k->public_key);
     if (rc || rng(p,(uint8_t *)k->randoms,sizeof(k->randoms))) {
         auth_secure_zero(k,sizeof(*k)); return AUTH_CRYPTO_ERROR;
@@ -106,7 +136,7 @@ static AuthStatus generate_algorithm(void *ctx,int32_t algorithm,AuthKeyHandle *
     ++p->next_handle;
     memcpy(k->handle.bytes,p->epoch,sizeof(p->epoch));
     for (size_t i=0;i<8;i++) k->handle.bytes[24+i]=(uint8_t)(p->next_handle>>(56U-8U*i));
-    k->used=true; *h=k->handle; memcpy(pub,k->public_key,65);
+    k->used=k->public_ready=true; *h=k->handle; memcpy(pub,k->public_key,65);
     return AUTH_OK;
 }
 static AuthStatus generate(void *ctx,AuthKeyHandle *h,uint8_t pub[65]) {
@@ -121,6 +151,8 @@ static AuthStatus sign_ed25519(void *ctx,const AuthKeyHandle *h,const uint8_t *m
     Rp2350Key *k=find(ctx,h);
     if (!k) return AUTH_NOT_FOUND;
     if (k->algorithm!=AUTH_COSE_ALG_EDDSA) return AUTH_UNSUPPORTED;
+    AuthStatus status=derive_public(ctx,k);
+    if(status!=AUTH_OK) return status;
     /* Monocypher's private-key representation is seed || public key. */
     uint8_t secret[64]; memcpy(secret,k->scalar,32); memcpy(secret+32,k->public_key,32);
     crypto_ed25519_sign(out,secret,message,length);
@@ -130,6 +162,8 @@ static AuthStatus public_key(void *ctx,const AuthKeyHandle *h,uint8_t out[65]) {
     if (!out) return AUTH_INVALID_ARGUMENT;
     Rp2350Key *k=find(ctx,h);
     if (!k) { auth_secure_zero(out,65); return AUTH_NOT_FOUND; }
+    AuthStatus status=derive_public(ctx,k);
+    if(status!=AUTH_OK) { auth_secure_zero(out,65); return status; }
     memcpy(out,k->public_key,65); return AUTH_OK;
 }
 static AuthStatus destroy(void *ctx,const AuthKeyHandle *h) {
@@ -245,18 +279,6 @@ AuthStatus rp2350_crypto_restore_records_internal(Rp2350Crypto *p,const uint8_t 
         uint64_t number=0; for(size_t j=24;j<32;j++) number=(number<<8)|k->handle.bytes[j];
         if(!number || number>p->next_handle || memcmp(k->handle.bytes,p->epoch,24)) { status=AUTH_BAD_DATA; goto failed; }
         for(size_t j=0;j<i;j++) if(!memcmp(k->handle.bytes,p->keys[j].handle.bytes,32)) { status=AUTH_BAD_DATA; goto failed; }
-        if (k->algorithm==AUTH_COSE_ALG_EDDSA) {
-            ed25519_public(k->scalar,k->public_key); k->used=true; continue;
-        }
-        mbedtls_ecp_group group; mbedtls_ecp_point point; mbedtls_mpi scalar; size_t n=0;
-        mbedtls_ecp_group_init(&group); mbedtls_ecp_point_init(&point); mbedtls_mpi_init(&scalar);
-        int rc=mbedtls_ecp_group_load(&group,MBEDTLS_ECP_DP_SECP256R1);
-        if(!rc) rc=mbedtls_mpi_read_binary(&scalar,k->scalar,32);
-        if(!rc) rc=mbedtls_ecp_mul(&group,&point,&scalar,&group.G,rng,p);
-        if(!rc) rc=mbedtls_ecp_check_pubkey(&group,&point);
-        if(!rc) rc=mbedtls_ecp_point_write_binary(&group,&point,MBEDTLS_ECP_PF_UNCOMPRESSED,&n,k->public_key,65);
-        mbedtls_mpi_free(&scalar); mbedtls_ecp_point_free(&point); mbedtls_ecp_group_free(&group);
-        if(rc || n!=65) { status=AUTH_CRYPTO_ERROR; goto failed; }
         k->used=true;
     }
     return AUTH_OK;
@@ -284,7 +306,12 @@ AuthStatus rp2350_crypto_init(Rp2350Crypto *p,int (*entropy)(void *,unsigned cha
     static const uint8_t domain[]="ctap-rp2350-volatile-v1";
     int rc=mbedtls_hmac_drbg_seed(&p->drbg,mbedtls_md_info_from_type(MBEDTLS_MD_SHA256),entropy,ctx,domain,sizeof(domain)-1);
     if (rc) { rp2350_crypto_free(p); return AUTH_CRYPTO_ERROR; }
-    mbedtls_hmac_drbg_set_prediction_resistance(&p->drbg,MBEDTLS_HMAC_DRBG_PR_ON);
+    /* Reseed at public-output and private-key generation boundaries. Blinding
+     * and other internal requests are still automatically reseeded after at
+     * most 256 calls, within this exclusively owned, volatile DRBG instance.
+     * Entropy failure remains terminal; hardware health checks are unchanged. */
+    mbedtls_hmac_drbg_set_prediction_resistance(&p->drbg,MBEDTLS_HMAC_DRBG_PR_OFF);
+    mbedtls_hmac_drbg_set_reseed_interval(&p->drbg,256);
     p->initialized=true;
     if (rng(p,p->epoch,sizeof(p->epoch)) || regenerate(p)!=AUTH_OK) {
         rp2350_crypto_free(p); return AUTH_CRYPTO_ERROR;

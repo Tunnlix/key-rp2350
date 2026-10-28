@@ -11,8 +11,22 @@ int rp2350_entropy_read(void *ctx,unsigned char *out,size_t n) {
     if (!out || n==0 || n>RP2350_ENTROPY_MAX_REQUEST) return -1;
     auth_secure_zero(out,n);
     if (!p || !p->initialized || p->faulted) return -1;
+    uint32_t started=p->io.now_ms(p->io.context);
+    p->requests++;
     size_t done=0; uint8_t block[RP2350_ENTROPY_BLOCK_SIZE]={0};
     Rp2350EntropyFault failure=RP2350_ENTROPY_FAULT_NONE;
+    if(p->available) {
+        /* Keep every health-checked byte single-use. The full previous block
+         * stays intact for the continuous comparison; only its unused suffix
+         * can seed a later request. Still reject a newly latched HW/config
+         * fault before releasing buffered bytes. */
+        p->last_status=p->io.status(p->io.context);
+        if(p->last_status&0x0eU) { failure=RP2350_ENTROPY_FAULT_STATUS; goto failed; }
+        size_t take=n<p->available ? n : p->available;
+        memcpy(out,p->previous+sizeof(p->previous)-p->available,take);
+        p->available-=(uint8_t)take;
+        done=take;
+    }
     while (done<n) {
         if (!p->io.start(p->io.context)) { failure=RP2350_ENTROPY_FAULT_START; goto failed; }
         uint32_t begun=p->io.now_ms(p->io.context),status,polls=0;
@@ -40,14 +54,19 @@ int rp2350_entropy_read(void *ctx,unsigned char *out,size_t n) {
         for (size_t i=0;i<sizeof(block);i++) { any|=block[i]!=0; all_ff&=block[i]==0xff; }
         if (!any || all_ff) { failure=RP2350_ENTROPY_FAULT_STUCK; goto failed; }
         memcpy(p->previous,block,sizeof(block)); p->have_previous=true;
+        p->blocks++;
         size_t take=n-done;
         if (take>sizeof(block)) take=sizeof(block);
         memcpy(out+done,block,take); done+=take;
+        p->available=(uint8_t)(sizeof(block)-take);
     }
     auth_secure_zero(block,sizeof(block));
+    p->elapsed_ms+=(uint32_t)(p->io.now_ms(p->io.context)-started);
     return 0;
 failed:
     p->io.stop(p->io.context); p->faulted=true; p->failure=failure;
+    p->available=0;
+    p->elapsed_ms+=(uint32_t)(p->io.now_ms(p->io.context)-started);
     auth_secure_zero(block,sizeof(block)); auth_secure_zero(p->previous,sizeof(p->previous));
     auth_secure_zero(out,n);
     return -1;

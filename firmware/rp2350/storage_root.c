@@ -5,6 +5,8 @@ static const uint8_t uuid[16]={0x43,0x54,0x41,0x50,0x53,0x54,0x4f,0x52,0x45,0x2d
 static bool valid(const Rp2350StoreRoot *r) {
     if(!r->serial || !r->reset_generation || !store_nonzero(r->epoch,16) || !r->descriptor_length || r->descriptor_length>128) return false;
     if(!store_zero(r->descriptor+r->descriptor_length,128U-r->descriptor_length)) return false;
+    /* Profile 2 is a reserved wire-format capability, not an implemented
+     * protected-root backend. The onboard application accepts profile 1 only. */
     return (r->profile==1 && !r->backend && r->descriptor_length==32) || (r->profile==2 && r->backend!=0);
 }
 AuthStatus rp2350_store_root_inspect_internal(const uint8_t *in,size_t n,uint8_t profile,Rp2350StoreRoot *r) {

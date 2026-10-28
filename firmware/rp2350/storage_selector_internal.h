@@ -5,11 +5,12 @@ typedef struct {
     Rp2350StoreSelector selector;
     uint32_t arena_base; /* Only meaningful for state 1 SWITCH. */
     bool validated;
-    uint8_t used[2],current_mask; /* Authenticated append placement information. */
+    uint8_t used[2],current_mask,damaged_mask;
 } Rp2350StoreSelection;
 typedef struct {
     uint8_t frame[512],plain[96];
     Rp2350StoreSealWorkspace seal;
+    Rp2350StoreSeal candidate; /* One sector's failed MAC cannot poison the other. */
     Rp2350StoreSelector records[16]; size_t count;
     uint8_t used[2]; uint64_t last[2];
 } Rp2350StoreSelectorWorkspace;
@@ -18,7 +19,14 @@ typedef struct {
  * envelope sequence equals payload serial. Epoch/reset generation bind root.
  * Each sector is a contiguous append prefix. First retained serial may be an
  * authenticated recycling anchor; following serials are contiguous. Merge
- * overlapping identical anchors, reject conflicts/gaps/torn or hidden tails.
+ * overlapping identical anchors, reject conflicts/gaps/invalid commits and
+ * hidden tails. A final body with no commit retires its sector's append space;
+ * it cannot select an arena or authorize Reset.
+ * If one sector has structural/MAC damage, retain only the other sector and
+ * report damaged_mask. This is usable ONLY after complete boot validation of
+ * its selected arena. The serving provider must finish old-arena erasure
+ * before accepting post-switch operations, and re-anchor damaged authority
+ * before writes. IO/crypto failures and damage to both sectors remain fatal.
  * SWITCH increments arena generation and alternates arenas. RESET_INTENT is
  * terminal within this root epoch and never authorizes an arena.
  * All buffers/contexts disjoint, static caller-owned workspace, serial calls.

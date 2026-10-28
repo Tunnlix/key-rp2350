@@ -52,6 +52,29 @@ static AuthStatus append_selector(Rp2350StoreCheckpointWorkspace *w,const Rp2350
     }
     return write_record(w,flash,at,next);
 }
+AuthStatus rp2350_store_selector_repair_internal(const Rp2350Flash *flash,const Rp2350StoreBootConfig *config,
+        Rp2350StoreCheckpointWorkspace *w) {
+    if(!flash || !flash->erase_sector || !flash->program_page || !config || !w) return AUTH_INVALID_ARGUMENT;
+    if(config->policy.profile!=1 || config->policy.backend) return AUTH_UNSUPPORTED;
+    auth_secure_zero(w,sizeof(*w));
+    AuthStatus status=rp2350_store_boot_internal(&w->source,flash,config,&w->boot);
+    if(status!=AUTH_OK) goto done;
+    if(w->source.state!=RP2350_STORE_RECOVERED && w->source.state!=RP2350_STORE_MAINTENANCE) { status=AUTH_BUSY; goto done; }
+    uint8_t damaged=w->source.selection.damaged_mask;
+    if(damaged && damaged!=1 && damaged!=2) { status=AUTH_BAD_DATA; goto done; }
+    if(damaged & w->source.selection.current_mask) { status=AUTH_BAD_DATA; goto done; }
+    if(damaged) {
+        uint32_t base=damaged==1 ? 0 : 4096U;
+        status=flash->erase_sector(flash->context,base); if(status!=AUTH_OK) goto done;
+        for(uint32_t page=0;page<4096U;page+=256U) {
+            status=flash->read(flash->context,base+page,w->boot.io.log.page,256); if(status!=AUTH_OK) goto done;
+            for(size_t i=0;i<256;i++) if(w->boot.io.log.page[i]!=0xff) { status=AUTH_IO_ERROR; goto done; }
+        }
+        status=write_record(w,flash,base,&w->source.selection.selector);
+    }
+done:
+    auth_secure_zero(w,sizeof(*w)); return status;
+}
 AuthStatus rp2350_store_selector_commit_internal(Rp2350StoreSelection *out,const Rp2350Flash *flash,
         const Rp2350StoreBootConfig *config,const Rp2350StoreCheckpointCandidate *candidate,Rp2350StoreCheckpointWorkspace *w) {
     if(out) auth_secure_zero(out,sizeof(*out));

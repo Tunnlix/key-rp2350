@@ -24,7 +24,7 @@ static AuthStatus append(Rp2350StoreProvisionWorkspace *w,uint16_t class_id,uint
     if(status==AUTH_OK) status=rp2350_store_log_append_internal(&w->log,class_id,w->plain,length,&w->boot.io.log);
     auth_secure_zero(w->plain,sizeof(w->plain)); auth_secure_zero(w->data,sizeof(w->data));
     if(status!=AUTH_OK || !digest) return status;
-    return w->log.flash.read(w->log.flash.context,w->log.base+w->log.end-256U+40U,digest,32);
+    return w->log.flash.read(w->log.flash.context,w->log.base+w->log.end-320U,digest,32);
 }
 static AuthStatus root_slots(Rp2350StoreProvisionWorkspace *w,const Rp2350Flash *flash) {
     for(uint32_t base=0x2000U;base<=0x3000U;base+=4096U) for(uint32_t page=0;page<512;page+=256U) {
@@ -84,7 +84,7 @@ AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2
     status=config->hash(config->records_context,w->ordered,sizeof(w->ordered),w->manifest.ordered_digest); if(status!=AUTH_OK) goto done;
     status=rp2350_store_manifest_encode(&w->manifest,w->data); if(status!=AUTH_OK) goto done;
     status=append(w,3,8,96,w->selector.manifest_digest); if(status!=AUTH_OK) goto done;
-    if(w->log.end!=1536) { status=AUTH_BAD_DATA; goto done; }
+    if(w->log.end!=2048) { status=AUTH_BAD_DATA; goto done; }
     status=root_slots(w,flash); if(status!=AUTH_OK) goto done;
     /* Only the final selector commit makes this new empty epoch bootable. */
     w->selector.state=1; w->selector.serial=w->selector.generation=w->selector.reset_generation=1;

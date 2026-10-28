@@ -9,13 +9,18 @@
  * Never erase the sole current selector; never touch roots or data arenas.
  * Success requires complete boot recovery through the new selection.
  * Failure can follow a completed commit: latch the application into recovery;
- * do not retry from cached authority. A torn record may lock recovery while
- * leaving the prior valid selector bytes intact. No repair here.
+ * do not retry from cached authority. Incomplete final records retire append
+ * space; a separately validated retained authority can re-anchor a damaged
+ * stale sector through selector_repair_internal.
  * Static workspace and all inputs/contexts disjoint. Wiped on every exit.
  * Output clears on failure. No physical binding/protected-root support or
  * durable encryption-attempt reservation; not a production writer. */
 AuthStatus rp2350_store_selector_commit_internal(Rp2350StoreSelection *,const Rp2350Flash *,
     const Rp2350StoreBootConfig *,const Rp2350StoreCheckpointCandidate *,Rp2350StoreCheckpointWorkspace *);
+/* Re-anchor a damaged/non-current sector only after full boot validation of
+ * the retained selector and its selected arena. Never repair an unusable
+ * selected checkpoint or erase the sector retaining current authority. */
+AuthStatus rp2350_store_selector_repair_internal(const Rp2350Flash *,const Rp2350StoreBootConfig *,Rp2350StoreCheckpointWorkspace *);
 /* The application callback must consume an already approved core Reset
  * (presence/startup window intact), invalidate tokens, enumeration/assertion
  * state and cached keys, and latch credential service off before returning OK.

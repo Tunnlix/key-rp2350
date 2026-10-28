@@ -33,7 +33,9 @@ typedef struct {
     bool initialized, faulted, have_previous;
     Rp2350EntropyFault failure;
     uint32_t last_status;
+    uint32_t requests,blocks,elapsed_ms; /* Nonsecret, wrapping diagnostic counters. */
     uint8_t previous[RP2350_ENTROPY_BLOCK_SIZE];
+    uint8_t available; /* Unused suffix of the last health-checked block. */
 } Rp2350Entropy;
 bool rp2350_entropy_init(Rp2350Entropy *,const Rp2350EntropyIo *);
 int rp2350_entropy_read(void *,unsigned char *,size_t);

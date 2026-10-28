@@ -14,8 +14,10 @@
 #define MBEDTLS_ECP_C
 #define MBEDTLS_ECP_DP_SECP256R1_ENABLED
 #define MBEDTLS_ECP_NIST_OPTIM
-#define MBEDTLS_ECP_WINDOW_SIZE 2
-#define MBEDTLS_ECP_FIXED_POINT_OPTIM 0
+/* Use a bounded precomputation table within the existing 64 KiB crypto arena.
+ * Mbed TLS retains its scalar blinding and constant-time multiplication. */
+#define MBEDTLS_ECP_WINDOW_SIZE 4
+#define MBEDTLS_ECP_FIXED_POINT_OPTIM 1
 #define MBEDTLS_ECDH_C
 #define MBEDTLS_ECDSA_C
 #define MBEDTLS_ECDSA_DETERMINISTIC
