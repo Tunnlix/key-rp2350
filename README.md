@@ -13,3 +13,14 @@ hardware providers. FIDO certification is not claimed. Read the [security limita
 before using it for important accounts.
 
 [Building and setup](docs/building.md) · [Dependency notices](docs/third-party-notices.md) · [MIT license](LICENSE)
+
+## Hardware targets
+
+The working reference hardware is a Seeed Studio XIAO RP2350 with an external
+user-presence button connected between D0 (GPIO26) and GND. Seeed publishes
+[hardware resources, including schematics and editable PCB design files](https://wiki.seeedstudio.com/xiao_rp2350_arduino/#assets--resources).
+
+XIAO RP2350 support will remain available. A custom RP2350 board is planned as
+another hardware target under the same Tunnlix Key project; it is not yet
+available. Its editable schematics and PCB layout will be published under a
+recognized open-source hardware license. The firmware remains MIT-licensed.
