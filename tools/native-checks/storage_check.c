@@ -4,6 +4,7 @@
 #include "application.h"
 #include "ctap/ctap_large_blobs.h"
 #include "ctap/ctap_pin_protocol.h"
+#include "ctap/ctap_authenticator_config.h"
 #include "ctap/cbor_writer.h"
 #include "mbedtls/ecdsa.h"
 #include "monocypher-ed25519.h"
@@ -79,6 +80,9 @@ static AuthStatus resolve(void *ctx,const Rp2350StoreRoot *root,Rp2350StoreSeal 
     (void)ctx; return rp2350_store_seal_init_internal(seal,&base,&secrets,root->descriptor,root->epoch);
 }
 static AuthStatus consent(void *ctx) { (void)ctx; return AUTH_OK; }
+static AuthStatus reset_consent(void *ctx) {
+    (void)ctx; rp2350_store_provider_close_internal(&provider); return AUTH_OK;
+}
 static void initialize_crypto(void) {
     assert(rp2350_crypto_init(&crypto,entropy,NULL)==AUTH_OK);
     base=rp2350_crypto_interface(&crypto); secrets=rp2350_secret_interface(&crypto);
@@ -293,6 +297,166 @@ static void check_blobs(AuthCredentialService *service,AuthPinStorage *pins,uint
     }
     printf("PIN protocol %u: LBW scoped/expiring token, fragment/channel/timeout/integrity checks and interrupted blob commits pass\n",protocol);
 }
+static uint8_t configure_rp_list_permission(CtapClientPin *pin,uint8_t protocol,const char *const *rps,size_t count,
+        uint8_t permission,bool tamper) {
+    uint8_t pin_hash[16],token[32],params[512],request[640],message[546],mac[32];
+    memset(pin_hash,42,sizeof(pin_hash));
+    assert(pin_token_permissions(pin,protocol,pin_hash,permission,token)==CTAP_STATUS_OK);
+    CborWriter p; cbor_writer_init(&p,params,sizeof(params));
+    assert(cbor_write_map(&p,1) && cbor_write_uint(&p,2) && cbor_write_array(&p,count));
+    for(size_t i=0;i<count;i++) assert(cbor_write_text(&p,rps[i]));
+    memset(message,0xff,32); message[32]=0x0d; message[33]=3;
+    memcpy(message+34,params,p.length);
+    assert(secrets.hmac_sha256(secrets.context,token,32,message,34+p.length,mac)==AUTH_OK);
+    if(tamper) mac[0]^=1;
+    CborWriter w; cbor_writer_init(&w,request,sizeof(request));
+    assert(cbor_write_map(&w,4) && cbor_write_uint(&w,1) && cbor_write_uint(&w,3) && cbor_write_uint(&w,2));
+    assert(w.length+p.length<=sizeof(request)); memcpy(request+w.length,params,p.length); w.length+=p.length;
+    assert(cbor_write_uint(&w,3) && cbor_write_uint(&w,protocol) && cbor_write_uint(&w,4) &&
+        cbor_write_bytes(&w,mac,ctap_pin_protocol_auth_length(protocol)));
+    return ctap_authenticator_config_execute(pin,request,w.length,1001);
+}
+static uint8_t configure_rp_list(CtapClientPin *pin,uint8_t protocol,const char *const *rps,size_t count) {
+    return configure_rp_list_permission(pin,protocol,rps,count,CTAP_PIN_PERMISSION_CONFIG,false);
+}
+static void check_min_pin_length(AuthCredentialService *service,AuthPinStorage *pins,uint8_t protocol) {
+    static uint8_t baseline[sizeof(media)],configured[sizeof(media)];
+    memcpy(baseline,media,sizeof(media));
+    CtapClientPin pin; AuthPinRecord record,decoded;
+    uint8_t wire[RP2350_STORE_PIN_MAX],allowed[32],denied[32],minimum=0;
+    assert(ctap_client_pin_init(&pin,service,pins));
+    CtapGetInfoProfile profile={.make_credential=true,.hmac_secret=true,.user_presence=true,
+        .pin_uv_auth=true,.max_message_size=CTAP_MESSAGE_CAPACITY,.min_pin_length=6};
+    uint8_t info_reply[CTAP_GET_INFO_MAX_CBOR_SIZE]; size_t info_length=0;
+    CborValue info_map,info_value;
+    assert(ctap_get_info_encode(&profile,info_reply,sizeof(info_reply),&info_length));
+    assert(cbor_read_document(info_reply,info_length,&info_map));
+    assert(cbor_map_uint(&info_map,0x10,&info_value) && info_value.major==0 && info_value.value==AUTH_PIN_MAX_RP_IDS);
+    assert(cbor_map_uint(&info_map,0x1f,&info_value) && info_value.major==4 && info_value.value==2);
+    const uint8_t *config_cursor=info_value.data,*config_end=info_value.encoded+info_value.encoded_length;
+    assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==2);
+    assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==3 && config_cursor==config_end);
+    assert(hash(NULL,(const uint8_t *)"audit.invalid",13,allowed)==AUTH_OK);
+    assert(hash(NULL,(const uint8_t *)"other.invalid",13,denied)==AUTH_OK);
+    assert(ctap_client_pin_min_length_for_rp(&pin,allowed,&minimum)==CTAP_STATUS_OK && minimum==0);
+    const char *rps[]={"audit.invalid","other.invalid","audit.invalid"};
+    assert(configure_rp_list_permission(&pin,protocol,rps,3,CTAP_PIN_PERMISSION_CONFIG,true)==CTAP_STATUS_PIN_AUTH_INVALID);
+    assert(configure_rp_list_permission(&pin,protocol,rps,3,CTAP_PIN_PERMISSION_CM,false)==CTAP_STATUS_PIN_AUTH_INVALID);
+    assert(pins->read(pins->context,&record)==AUTH_OK && record.min_length_rp_count==0);
+    assert(configure_rp_list(&pin,protocol,rps,3)==CTAP_STATUS_OK && !pin.token_active);
+    assert(pins->read(pins->context,&record)==AUTH_OK && record.min_length_rp_count==2);
+    assert(rp2350_store_pin_encode(&record,wire)==AUTH_OK && rp2350_store_pin_size(&record)==RP2350_STORE_PIN_MAX);
+    assert(rp2350_store_pin_decode(wire,sizeof(wire),&decoded)==AUTH_OK && !memcmp(&record,&decoded,sizeof(record)));
+    /* Legacy decoder rejects the new typed record; never interprets it as an
+     * old policy. New decoder still accepts the original 24-byte encoding. */
+    assert(wire[0]==2 && wire[1]==0);
+    uint8_t corrupted[RP2350_STORE_PIN_MAX]; memcpy(corrupted,wire,sizeof(wire)); corrupted[7]=5;
+    assert(rp2350_store_pin_decode(corrupted,sizeof(corrupted),&decoded)==AUTH_BAD_DATA);
+    memcpy(configured,media,sizeof(media));
+    assert(cold_boot()==AUTH_OK && ctap_client_pin_init(&pin,service,pins));
+    assert(ctap_client_pin_min_length_for_rp(&pin,allowed,&minimum)==CTAP_STATUS_OK && minimum==6);
+    assert(configure_rp_list(&pin,protocol,NULL,0)==CTAP_STATUS_OK);
+    assert(ctap_client_pin_min_length_for_rp(&pin,allowed,&minimum)==CTAP_STATUS_OK && minimum==6);
+    const char *replacement[]={"other.invalid"};
+    assert(configure_rp_list(&pin,protocol,replacement,1)==CTAP_STATUS_OK);
+    assert(ctap_client_pin_min_length_for_rp(&pin,allowed,&minimum)==CTAP_STATUS_OK && minimum==0);
+    assert(ctap_client_pin_min_length_for_rp(&pin,denied,&minimum)==CTAP_STATUS_OK && minimum==6);
+    const char *at_capacity[]={"a.invalid","b.invalid","c.invalid","other.invalid"};
+    assert(configure_rp_list(&pin,protocol,at_capacity,AUTH_PIN_MAX_RP_IDS)==CTAP_STATUS_OK);
+    assert(cold_boot()==AUTH_OK && ctap_client_pin_init(&pin,service,pins));
+    assert(pins->read(pins->context,&record)==AUTH_OK && record.min_length_rp_count==AUTH_PIN_MAX_RP_IDS);
+    const char *too_many[]={"a.invalid","b.invalid","c.invalid","d.invalid","e.invalid"};
+    assert(configure_rp_list(&pin,protocol,too_many,5)==CTAP_STATUS_LIMIT_EXCEEDED);
+    assert(ctap_client_pin_min_length_for_rp(&pin,denied,&minimum)==CTAP_STATUS_OK && minimum==6);
+    /* Inject interruption at each write boundary of the real policy append.
+     * Recovery must publish the entire old or new list, never partial policy. */
+    for(int cut=0;cut<4;cut++) {
+        memcpy(media,configured,sizeof(media)); assert(cold_boot()==AUTH_OK);
+        assert(pins->read(pins->context,&record)==AUTH_OK);
+        record.min_length_rp_count=1; memset(record.min_length_rp_hashes,0,sizeof(record.min_length_rp_hashes));
+        memcpy(record.min_length_rp_hashes[0],denied,32);
+        write_budget=cut; AuthStatus update=pins->write(pins->context,&record); write_budget=-1;
+        AuthStatus recovery=cold_boot();
+        printf("RP-list interrupted append: cut=%d update=%u recovery=%u\n",cut,update,recovery);
+        assert(recovery==AUTH_OK && pins->read(pins->context,&decoded)==AUTH_OK);
+        assert(decoded.min_length_rp_count==1 || decoded.min_length_rp_count==2);
+        if(update==AUTH_OK) assert(decoded.min_length_rp_count==1);
+        assert(!memcmp(decoded.min_length_rp_hashes[decoded.min_length_rp_count==1 ? 0 : 1],denied,32));
+    }
+    /* Real successful credential creation, signed extension and denial paths. */
+    memcpy(media,configured,sizeof(media)); assert(cold_boot()==AUTH_OK);
+    AuthNonresidentProvider old=service->nonresident;
+    service->nonresident=rp2350_store_provider_nonresident_internal(&provider);
+    for(unsigned permit=0;permit<4;permit++) {
+        assert(ctap_client_pin_init(&pin,service,pins));
+        CtapMakeCredential request;
+        uint8_t parameters[512],client_hash[32]; memset(client_hash,7,32);
+        CborWriter input; cbor_writer_init(&input,parameters,sizeof(parameters));
+        assert(cbor_write_map(&input,permit==2 ? 4 : 5) && cbor_write_uint(&input,1) &&
+            cbor_write_bytes(&input,client_hash,32) && cbor_write_uint(&input,2) &&
+            cbor_write_map(&input,1) && cbor_write_text(&input,"id") &&
+            cbor_write_text(&input,permit==1 ? "denied.invalid" : "audit.invalid") &&
+            cbor_write_uint(&input,3) && cbor_write_map(&input,1) && cbor_write_text(&input,"id") &&
+            cbor_write_bytes(&input,(const uint8_t *)"test-user",9) && cbor_write_uint(&input,4) &&
+            cbor_write_array(&input,1) && cbor_write_map(&input,2) && cbor_write_text(&input,"alg") &&
+            cbor_write_int(&input,AUTH_COSE_ALG_ES256) && cbor_write_text(&input,"type") && cbor_write_text(&input,"public-key"));
+        if(permit!=2) assert(cbor_write_uint(&input,6) && cbor_write_map(&input,1) &&
+            cbor_write_text(&input,"minPinLength") && cbor_write_bool(&input,permit!=3));
+        uint8_t output[1024],aaguid[16]={1}; size_t length=0;
+        static CtapMakeCredentialWorkspace mc;
+        assert(ctap_make_credential_prepare_with_pin(service,&mc,&pin,1001,
+            parameters,input.length,&request)==CTAP_STATUS_OK);
+        assert(ctap_make_credential_finish_at(service,&mc,&request,aaguid,output,sizeof(output),&length,1002)==CTAP_STATUS_OK);
+        CborValue root,data,extension,value,statement,sig;
+        assert(cbor_read_document(output,length,&root) && cbor_map_uint(&root,2,&data));
+        size_t id_length=((size_t)data.data[53]<<8)|data.data[54];
+        const uint8_t *cursor=data.data+55+id_length,*end=data.data+data.value;
+        CborValue public_key; assert(cbor_read_next(&cursor,end,&public_key));
+        if(permit==0) {
+            assert(data.data[32]&0x80);
+            assert(cbor_read_document(cursor,(size_t)(end-cursor),&extension) &&
+                cbor_map_text(&extension,"minPinLength",&value) && value.major==0 && value.value==6);
+        } else assert(!(data.data[32]&0x80) && cursor==end);
+        /* Verify packed self-attestation covers the output, not merely that the
+         * encoder placed bytes in the map. */
+        assert(cbor_map_uint(&root,3,&statement) && cbor_map_text(&statement,"sig",&sig));
+        uint8_t signed_data[1024],digest[32],point[65]={4};
+        assert(data.value+32<=sizeof(signed_data)); memcpy(signed_data,data.data,(size_t)data.value);
+        memcpy(signed_data+data.value,request.client_data_hash,32);
+        assert(hash(NULL,signed_data,(size_t)data.value+32,digest)==AUTH_OK);
+        assert(cbor_map_uint(&public_key,0,&value)==false);
+        const uint8_t *key_cursor=public_key.data,*key_end=public_key.encoded+public_key.encoded_length;
+        for(uint64_t i=0;i<public_key.value;i++) {
+            CborValue k,v; assert(cbor_read_next(&key_cursor,key_end,&k) && cbor_read_next(&key_cursor,key_end,&v));
+            if(k.major==1 && (k.value==1 || k.value==2)) {
+                assert(v.major==2 && v.value==32); memcpy(point+(k.value==1 ? 1 : 33),v.data,32);
+            }
+        }
+        mbedtls_ecdsa_context verifier; mbedtls_ecdsa_init(&verifier);
+        assert(mbedtls_ecp_group_load(&verifier.MBEDTLS_PRIVATE(grp),MBEDTLS_ECP_DP_SECP256R1)==0);
+        assert(mbedtls_ecp_point_read_binary(&verifier.MBEDTLS_PRIVATE(grp),&verifier.MBEDTLS_PRIVATE(Q),point,65)==0);
+        assert(mbedtls_ecdsa_read_signature(&verifier,digest,32,sig.data,(size_t)sig.value)==0);
+        mbedtls_ecdsa_free(&verifier);
+    }
+    service->nonresident=old;
+    /* The real destructive reset primitives clear the configured list along
+     * with credentials and restore the original empty-policy encoding. */
+    static Rp2350StoreCheckpointWorkspace intent_workspace;
+    static Rp2350StoreResetWorkspace erase_workspace;
+    Rp2350StoreSelection selection;
+    Rp2350StoreResetErasure erased;
+    Rp2350StoreProvisioned receipt;
+    assert(rp2350_store_reset_intent_internal(&selection,&flash,&config,reset_consent,NULL,&intent_workspace)==AUTH_OK);
+    assert(rp2350_store_reset_erase_internal(&erased,&flash,&config,reset_consent,NULL,&erase_workspace)==AUTH_OK);
+    assert(rp2350_store_provision_internal(&receipt,&flash,&config,&base,&secrets,consent,NULL,&provisioning)==AUTH_OK);
+    assert(cold_boot()==AUTH_OK && provider.cache.metadata_count==0);
+    assert(pins->read(pins->context,&record)==AUTH_OK && !record.set && !record.min_length_rp_count && record.min_length==6);
+    memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+    assert(pins->read(pins->context,&record)==AUTH_OK && !record.min_length_rp_count);
+    assert(rp2350_store_pin_encode(&record,wire)==AUTH_OK && rp2350_store_pin_size(&record)==24);
+    assert(rp2350_store_pin_decode(wire,24,&decoded)==AUTH_OK);
+    puts("minPinLength: authenticated RP list, duplicate/empty/replacement/capacity, legacy/new records, interrupted writes and signed authorized-only output pass");
+}
 static void check_pin_policy(AuthCredentialService *service,AuthPinStorage *pins) {
     CtapClientPin pin; AuthPinRecord record; uint8_t wrong[16],correct[16],token[32];
     memset(wrong,43,16); memset(correct,42,16);
@@ -423,6 +587,7 @@ int main(int argc,char **argv) {
     memcpy(saved,media,sizeof(media));
     if(policy_only) {
         AuthPinStorage pins=rp2350_store_provider_pin_internal(&provider);
+        check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
         check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
         check_blobs(&service,&pins,1); check_blobs(&service,&pins,2);
         check_pin_policy(&service,&pins); rp2350_crypto_free(&crypto); return 0;
@@ -568,6 +733,7 @@ int main(int argc,char **argv) {
     memcpy(media,saved,sizeof(media)); assert(cold_boot()==AUTH_OK);
     assert(pins.read(pins.context,&pin)==AUTH_OK); pin.force_change=false;
     assert(pins.write(pins.context,&pin)==AUTH_OK);
+    check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
     check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
     check_blobs(&service,&pins,1);
     check_blobs(&service,&pins,2);

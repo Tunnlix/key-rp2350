@@ -76,6 +76,12 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
 /* Persist policy and retire authorization before exposing changed configuration. */
 uint8_t ctap_client_pin_configure(CtapClientPin *, uint8_t subcommand, uint8_t minimum, bool force_change);
+/* Hashes are a contiguous count*32 byte list. A zero count preserves the
+ * existing list (CTAP setMinPINLength treats an empty array as no update). */
+uint8_t ctap_client_pin_configure_rpids(CtapClientPin *, uint8_t subcommand, uint8_t minimum,
+    bool force_change, const uint8_t *rp_hashes, size_t count);
+/* Zero output means this RP is not authorized; no PIN/token is disclosed. */
+uint8_t ctap_client_pin_min_length_for_rp(CtapClientPin *, const uint8_t rp_hash[32], uint8_t *minimum);
 uint8_t ctap_client_pin_require_uv(CtapClientPin *);
 uint8_t ctap_client_pin_authorize_permission(CtapClientPin *, uint8_t protocol, uint8_t permission,
     const uint8_t *, size_t, const uint8_t *, uint32_t now_ms);

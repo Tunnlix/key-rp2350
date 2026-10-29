@@ -20,12 +20,21 @@ static uint32_t status(void *ctx) {
     (void)ctx;
     /* Detect another user changing the configuration while collecting. */
     if (trng_hw->trng_debug_control || trng_hw->rng_debug_en_input ||
-        trng_hw->sample_cnt1!=100 || trng_hw->trng_config!=0) return 0x0e;
+        trng_hw->sample_cnt1!=100 || trng_hw->trng_config!=0)
+        return RP2350_ENTROPY_CONFIG_ERROR | trng_hw->rng_isr;
     return trng_hw->rng_isr;
 }
 static uint32_t word(void *ctx,size_t i) { (void)ctx; return trng_hw->ehr_data[i]; }
 static void stop(void *ctx) { (void)ctx; trng_hw->rnd_source_enable=0; }
+static bool clear_crngt(void *ctx) {
+    /* The Arm reference polling driver clears CRNGT_ERR and continues waiting
+     * for fresh, checked EHR_VALID. Acknowledge exactly that bit, only while
+     * this adapter still owns an enabled, correctly configured collection. */
+    if(status(ctx)!=4U || !trng_hw->rnd_source_enable) return false;
+    trng_hw->rng_icr=4U;
+    return true;
+}
 bool rp2350_board_entropy_init(Rp2350Entropy *p) {
-    Rp2350EntropyIo io={NULL,start,status,word,stop,now_ms};
+    Rp2350EntropyIo io={NULL,start,status,word,stop,now_ms,clear_crngt};
     return rp2350_entropy_init(p,&io);
 }

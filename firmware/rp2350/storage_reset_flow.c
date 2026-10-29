@@ -28,7 +28,8 @@ static AuthStatus run(Rp2350StoreResetFlow *state,const Rp2350Flash *flash,const
     if(status!=AUTH_OK) goto done;
     status=rp2350_store_boot_internal(&w->snapshot,flash,config,&w->phase.boot); if(status!=AUTH_OK) goto done;
     if(w->snapshot.state!=RP2350_STORE_RECOVERED || w->snapshot.records.metadata_count || w->snapshot.records.key_count ||
-        w->snapshot.records.pin.set || w->snapshot.records.pin.retries!=AUTH_PIN_MAX_RETRIES) { status=AUTH_BAD_DATA; goto done; }
+        w->snapshot.records.pin.set || w->snapshot.records.pin.retries!=AUTH_PIN_MAX_RETRIES ||
+        w->snapshot.records.pin.min_length_rp_count!=0U) { status=AUTH_BAD_DATA; goto done; }
     status=rp2350_crypto_stage_epoch_internal(crypto,w->snapshot.records.global.handle_prefix,w->snapshot.records.global.handle_high);
     if(status!=AUTH_OK) goto done;
     status=hooks->reinitialize(hooks->context,&w->snapshot.records); if(status!=AUTH_OK) goto done;

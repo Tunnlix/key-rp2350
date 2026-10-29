@@ -320,8 +320,8 @@ static AuthStatus pin_read(void *ctx,AuthPinRecord *out) {
 static AuthStatus pin_write(void *ctx,const AuthPinRecord *in) {
     Rp2350StoreProvider *p=ctx; if(!in) return AUTH_INVALID_ARGUMENT;
     if(!begin(p)) return AUTH_IO_ERROR;
-    AuthStatus status=rp2350_store_pin_encode(in,p->workspace->global);
-    Rp2350StoreTransaction tx={.class_id=1,.count=1,.entries={{7,p->workspace->global,24}}};
+    AuthStatus status=rp2350_store_pin_encode(in,p->workspace->pin);
+    Rp2350StoreTransaction tx={.class_id=1,.count=1,.entries={{7,p->workspace->pin,rp2350_store_pin_size(in)}}};
     if(status==AUTH_OK) status=commit(p,&tx);
     return finish(p,status,true);
 }

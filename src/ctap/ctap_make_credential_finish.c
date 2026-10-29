@@ -22,7 +22,7 @@ typedef struct {
     const uint8_t *aaguid;
     CtapMakeCredentialWorkspace *workspace;
     size_t length, capacity;
-    uint8_t status;
+    uint8_t status, min_pin_length;
 } RegistrationResponse;
 
 static AuthStatus prepare_response_id(void *context, const AuthCredential *credential,
@@ -48,11 +48,12 @@ static AuthStatus prepare_response_id(void *context, const AuthCredential *crede
         service->secrets.large_blob_key(service->secrets.context, &credential->key, blob_key) != AUTH_OK)) {
         auth_secure_zero(blob_key, sizeof blob_key); return AUTH_CRYPTO_ERROR;
     }
-    bool encoded = ctap_attestation_encode_extensions(service, credential, id, id_length, public_key, prepared->client_data_hash, response->aaguid,
+    bool encoded = ctap_attestation_encode_policy_extensions(service, credential, id, id_length, public_key, prepared->client_data_hash, response->aaguid,
         prepared->omit_attestation, prepared->hmac_secret_requested ? &has_secret : NULL,
         prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
         prepared->cred_blob_requested ? &prepared->cred_blob_stored : NULL,
         prepared->large_blob_requested ? blob_key : NULL,
+        response->min_pin_length ? &response->min_pin_length : NULL,
         response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length);
     auth_secure_zero(blob_key, sizeof blob_key);
     if (!encoded) return AUTH_CRYPTO_ERROR;
@@ -94,7 +95,12 @@ static uint8_t finish_at(AuthCredentialService *service,
     AuthCredential *credential = &workspace->scratch.finish.credential;
     uint8_t *public_key = workspace->scratch.finish.public_key;
     AuthStatus status;
-    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, capacity, CTAP_STATUS_OK};
+    uint8_t minimum = 0U;
+    if (prepared->min_pin_length_requested) {
+        uint8_t policy_status = ctap_client_pin_min_length_for_rp(prepared->pin, prepared->rp_id_hash, &minimum);
+        if (policy_status != CTAP_STATUS_OK) return policy_status;
+    }
+    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, capacity, CTAP_STATUS_OK, minimum};
     if (prepared->discoverable) {
         status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
             prepare_response, &response, credential, public_key);

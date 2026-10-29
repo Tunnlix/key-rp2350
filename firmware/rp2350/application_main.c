@@ -246,7 +246,8 @@ int main(void) {
             if(status==AUTH_CRYPTO_ERROR || store_error==AUTH_CRYPTO_ERROR || app.crypto.faulted) reason=RP2350_FAULT_CRYPTO;
             if(app.entropy.faulted || failure_stage==RP2350_FAULT_ENTROPY) reason=RP2350_FAULT_ENTROPY;
             if(failure_stage==RP2350_FAULT_STACK) reason=RP2350_FAULT_STACK;
-            rp2350_status_led_fault(reason,now);
+            rp2350_status_led_fault(reason,(uint8_t)app.entropy.failure,
+                app.entropy.last_status,now);
             rp2350_usb_close();
             if(app.application.initialized) rp2350_application_close(&app.application);
             /* Terminal faults never resume service. Wipe the owned DRBG/arena

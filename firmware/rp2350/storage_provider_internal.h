@@ -17,6 +17,7 @@ typedef struct {
         Rp2350StoreCompactionWorkspace compaction;
     } phase;
     uint8_t metadata[RP2350_STORE_METADATA_MAX],global[96],key[136],counter[48];
+    uint8_t pin[RP2350_STORE_PIN_MAX];
     uint8_t pending[RP2350_STORE_PLAIN_MAX]; /* Survives phase-union compaction. */
     Rp2350NonresidentSeal nonresident_seal;
     Rp2350NonresidentWorkspace nonresident;

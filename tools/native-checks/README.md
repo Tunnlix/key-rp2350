@@ -41,7 +41,22 @@ permission, including excluded credentials and deferred extension failures.
 Silent assertions preserve permissions. Removed permissions, old tokens, stale
 prepared-token generations and expired tokens are rejected.
 
+Minimum-PIN-length checks exercise authenticated RP allowlist configuration under
+both PIN protocols, duplicate/empty/replaced/oversized lists, legacy and extended
+PIN records, cold recovery and every page boundary of a policy append. They also
+parse actual MakeCredential CBOR and verify packed self-attestation signatures
+for authorized, unauthorized, unrequested and false minPinLength inputs.
+
 `crypto_check` verifies ECDH against a peer, rejects an invalid point, verifies a
 signature and rejects a modified digest. It also verifies automatic reseed
 limits and terminal failures with cleared output when entropy fails. CPU timings
 are native timings, not RP2350 performance claims.
+
+Entropy checks inject start, hardware status, timeout, poll-limit, repeated/stuck
+output and configuration faults, including faults after EHR reads and before
+buffered delivery. They verify status retention, output clearing and terminal
+latching. CRNGT recovery checks require fresh valid output, enforce a shared
+three-retry request budget without extending collection deadlines, and reject
+simultaneous valid/error flags, other health faults, adapter refusal, cached or
+post-read errors and missing fresh output. LED checks count each pulse and its width for every entropy failure
+type/status combination; the diagnostic emits only a failure code and status.

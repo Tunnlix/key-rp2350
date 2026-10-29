@@ -59,20 +59,35 @@ AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHa
     if(status!=AUTH_OK) auth_secure_zero(c,sizeof(*c));
     return status;
 }
-AuthStatus rp2350_store_pin_encode(const AuthPinRecord *p,uint8_t out[24]) {
+size_t rp2350_store_pin_size(const AuthPinRecord *p) {
+    return p->min_length_rp_count ? RP2350_STORE_PIN_MAX : 24U;
+}
+AuthStatus rp2350_store_pin_encode(const AuthPinRecord *p,uint8_t out[RP2350_STORE_PIN_MAX]) {
     if(!p || !out) return AUTH_INVALID_ARGUMENT;
     if(!auth_pin_record_valid(p)) return AUTH_BAD_DATA;
-    memset(out,0,24); store_put16(out,1); out[2]=p->set ? 1U : 0U; out[3]=p->code_points; out[4]=p->retries;
+    memset(out,0,RP2350_STORE_PIN_MAX); store_put16(out,p->min_length_rp_count ? 2U : 1U);
+    out[2]=p->set ? 1U : 0U; out[3]=p->code_points; out[4]=p->retries;
     out[5]=p->min_length; out[6]=(p->always_uv ? 1U : 0U) | (p->force_change ? 2U : 0U);
-    memcpy(out+8,p->hash,16); return AUTH_OK;
+    out[7]=p->min_length_rp_count;
+    memcpy(out+8,p->hash,16);
+    if(p->min_length_rp_count) memcpy(out+24,p->min_length_rp_hashes,sizeof(p->min_length_rp_hashes));
+    return AUTH_OK;
 }
 AuthStatus rp2350_store_pin_decode(const uint8_t *in,size_t n,AuthPinRecord *p) {
     if(!p) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(p,sizeof(*p));
     if(!in) return AUTH_INVALID_ARGUMENT;
-    if(n!=24 || store_u16(in)!=1 || in[2]>1 || (in[6]&~3U) || in[7]) return AUTH_BAD_DATA;
+    if(n!=24U && n!=RP2350_STORE_PIN_MAX) return AUTH_BAD_DATA;
+    uint16_t version=store_u16(in);
+    if((n==24U && (version!=1U || in[7])) ||
+        (n==RP2350_STORE_PIN_MAX && (version!=2U || !in[7] || in[7]>AUTH_PIN_MAX_RP_IDS)) ||
+        in[2]>1 || (in[6]&~3U)) return AUTH_BAD_DATA;
     p->min_length=in[5]; p->always_uv=(in[6]&1U)!=0; p->force_change=(in[6]&2U)!=0;
     p->set=in[2]!=0; p->code_points=in[3]; p->retries=in[4]; memcpy(p->hash,in+8,16);
+    if(version==2U) {
+        p->min_length_rp_count=in[7];
+        memcpy(p->min_length_rp_hashes,in+24,sizeof(p->min_length_rp_hashes));
+    }
     if(!auth_pin_record_valid(p)) { auth_secure_zero(p,sizeof(*p)); return AUTH_BAD_DATA; }
     return AUTH_OK;
 }

@@ -6,9 +6,19 @@ and source code for supported features and configuration details.
 
 ## Validation status
 
-FIDO certification and full protocol conformance have not yet been established.
-Native regression checks cover software behavior; hardware timing, endurance and
-behavior during interrupted writes require separate qualification.
+Tunnlix Key v1.5.0 is a FIDO2/CTAP2.3-compliant USB authenticator, self-validated
+using FIDO Alliance conformance tools. A Tools 1.9.3 / CTAP2.3 run on the Seeed
+XIAO RP2350 completed on October 29, 2026 with 231 passes and zero failures.
+Unmarked cases were reviewed against advertised capabilities and conditional
+prerequisites; no unexplained mandatory supported-feature omission was found.
+FIDO certification has not been obtained.
+
+Native regression and sanitizer checks cover policy, cryptography and storage
+recovery, including simulated interrupted writes. Hardware validation also
+includes 400 PIN-token requests, 51 functional checks, 16 credential cleanup
+checks and 24 minimum-PIN-length checks. This establishes the recorded protocol
+test results; hardware endurance, environmental behavior and resistance to
+physical attacks require separate qualification.
 
 ## PIN setup
 
@@ -35,12 +45,19 @@ A/B confirmation covers read-only startup and USB enumeration, not every
 possible runtime failure. Future storage-format changes need a separate
 compatibility strategy: both firmware slots share credential and blob storage.
 
+Version 1.5.0 adds an extended PIN record when a minimum-PIN-length RP list is
+configured. Existing empty-policy records remain readable. Older firmware cannot
+read the extended record; downgrade after configuring that policy is unsupported.
+
 Storage-encryption lifetime limits are not enforced. The encoded attempt field
 does not provide a durable reservation of storage-encryption usage.
 
 ## Randomness validation
 
-Hardware entropy qualification is still pending.
+Hardware random-source health checks remain enabled. Native fault-injection
+checks cover bounded collection recovery and terminal failure behavior; the
+hardware token stress run passed. Statistical and environmental entropy
+qualification is separate from protocol conformance testing.
 
 ## USB identity and attestation
 

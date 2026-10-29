@@ -13,7 +13,7 @@ typedef struct {
     Rp2350StoreLog log;
     Rp2350StoreBootResult recovered;
     Rp2350StoreBootWorkspace boot;
-    uint8_t root_wire[512],data[96],compare[96],plain[112],ordered[88];
+    uint8_t root_wire[512],data[RP2350_STORE_PIN_MAX],compare[RP2350_STORE_PIN_MAX],plain[112],ordered[88];
 } Rp2350StoreProvisionWorkspace;
 /* Development provisioning over injected IO. Fixed caller profile 1/backend 0;
  * the on-flash root descriptor is UNPROTECTED. No production root backend,

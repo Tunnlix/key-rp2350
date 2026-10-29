@@ -50,7 +50,7 @@ static AuthStatus validate(Rp2350StoreProvisionWorkspace *w,const Rp2350Flash *f
     status=rp2350_store_pin_encode(&w->pin,w->data);
     if(status==AUTH_OK) status=rp2350_store_pin_encode(&r->records.pin,w->compare);
     if(status!=AUTH_OK) return status;
-    if(!store_equal(w->data,w->compare,24)) return AUTH_BAD_DATA;
+    if(!store_equal(w->data,w->compare,RP2350_STORE_PIN_MAX)) return AUTH_BAD_DATA;
     return blank_range(flash,RP2350_STORE_ARENA_B,RP2350_STORE_ARENA_SIZE,w->boot.io.blank);
 }
 AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2350Flash *flash,
@@ -80,7 +80,7 @@ AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2
     status=config->hash(config->records_context,w->data,96,w->manifest.global_digest); if(status!=AUTH_OK) goto done;
     status=append(w,2,1,96,w->ordered+24); if(status!=AUTH_OK) goto done;
     status=rp2350_store_pin_encode(&w->pin,w->data); if(status!=AUTH_OK) goto done;
-    status=append(w,2,7,24,w->ordered+56); if(status!=AUTH_OK) goto done;
+    status=append(w,2,7,rp2350_store_pin_size(&w->pin),w->ordered+56); if(status!=AUTH_OK) goto done;
     status=config->hash(config->records_context,w->ordered,sizeof(w->ordered),w->manifest.ordered_digest); if(status!=AUTH_OK) goto done;
     status=rp2350_store_manifest_encode(&w->manifest,w->data); if(status!=AUTH_OK) goto done;
     status=append(w,3,8,96,w->selector.manifest_digest); if(status!=AUTH_OK) goto done;

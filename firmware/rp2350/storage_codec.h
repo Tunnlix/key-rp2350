@@ -3,6 +3,7 @@
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_pin.h"
 #define RP2350_STORE_PLAIN_MAX 3584U
+#define RP2350_STORE_PIN_MAX (24U + AUTH_PIN_MAX_RP_IDS * 32U)
 #define RP2350_STORE_FRAME_MAX 4096U
 #define RP2350_STORE_METADATA_MAX (128U+64U+2048U+192U+32U)
 #define RP2350_STORE_PARTITION_SIZE 0x80000U
@@ -34,7 +35,12 @@ typedef AuthStatus (*Rp2350StoreHash)(void *,const uint8_t *,size_t,uint8_t[32])
  * Payloads are plaintext INTERNAL storage objects, never a transport API. */
 AuthStatus rp2350_store_metadata_encode(const AuthCredential *,Rp2350StoreHash,void *,uint8_t *,size_t,size_t *);
 AuthStatus rp2350_store_metadata_decode(const uint8_t *,size_t,Rp2350StoreHash,void *,AuthCredential *);
-AuthStatus rp2350_store_pin_encode(const AuthPinRecord *,uint8_t[24]);
+/* Legacy empty-list policies keep their exact version-1/24-byte encoding.
+ * Nonempty RP lists use version 2. Old firmware must not be booted against a
+ * store after that feature is configured: it rejects version 2 fail-closed.
+ * Decoder accepts both versions; the upgrade never erases existing records. */
+size_t rp2350_store_pin_size(const AuthPinRecord *);
+AuthStatus rp2350_store_pin_encode(const AuthPinRecord *,uint8_t[RP2350_STORE_PIN_MAX]);
 AuthStatus rp2350_store_pin_decode(const uint8_t *,size_t,AuthPinRecord *);
 AuthStatus rp2350_store_global_encode(const Rp2350StoreGlobal *,uint8_t[96]);
 AuthStatus rp2350_store_global_decode(const uint8_t *,size_t,Rp2350StoreGlobal *);

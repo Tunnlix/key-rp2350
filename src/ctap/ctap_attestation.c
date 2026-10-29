@@ -40,12 +40,28 @@ bool ctap_attestation_encode_extensions(AuthCredentialService *service,
     const bool *cred_blob_stored, const uint8_t *large_blob_key,
     uint8_t *output, size_t capacity, size_t *length)
 {
+    return ctap_attestation_encode_policy_extensions(service, credential, id, id_length,
+        public_key, client_data_hash, aaguid, omit, hmac_secret, user_verified,
+        cred_protect_requested, hmac_secret_mc, hmac_secret_mc_length, cred_blob_stored,
+        large_blob_key, NULL, output, capacity, length);
+}
+
+bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
+    const AuthCredential *credential, const uint8_t *id, size_t id_length,
+    const uint8_t public_key[65], const uint8_t client_data_hash[32],
+    const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
+    bool user_verified, bool cred_protect_requested,
+    const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
+    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length,
+    uint8_t *output, size_t capacity, size_t *length)
+{
     if (service == NULL || !auth_credential_valid(credential) || public_key == NULL ||
         !auth_public_key_valid(credential->algorithm, public_key) || client_data_hash == NULL || aaguid == NULL || output == NULL || length == NULL ||
         id == NULL || !auth_credential_id_length_valid(id_length)) return false;
     if (hmac_secret_mc_length != 0U && (hmac_secret_mc == NULL ||
         (hmac_secret_mc_length != 32U && hmac_secret_mc_length != 48U && hmac_secret_mc_length != 64U && hmac_secret_mc_length != 80U))) return false;
-    bool extensions = hmac_secret != NULL || cred_protect_requested || hmac_secret_mc_length != 0U || cred_blob_stored != NULL;
+    if (min_pin_length != NULL && (*min_pin_length < 4U || *min_pin_length > 63U)) return false;
+    bool extensions = hmac_secret != NULL || cred_protect_requested || hmac_secret_mc_length != 0U || cred_blob_stored != NULL || min_pin_length != NULL;
     /* Fixed portion, extensions, and trailing clientDataHash for signing. */
     uint8_t data[384U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE] = {0};
     memcpy(data, credential->rp_id_hash, 32U);
@@ -64,7 +80,8 @@ bool ctap_attestation_encode_extensions(AuthCredentialService *service,
     if (extensions) {
         CborWriter extension; cbor_writer_init(&extension, data + data_length, sizeof data - data_length - 32U);
         bool extensions_ok = cbor_write_map(&extension, (hmac_secret != NULL ? 1U : 0U) +
-            (cred_protect_requested ? 1U : 0U) + (cred_blob_stored != NULL ? 1U : 0U) + (hmac_secret_mc_length != 0U ? 1U : 0U));
+            (cred_protect_requested ? 1U : 0U) + (cred_blob_stored != NULL ? 1U : 0U) +
+            (min_pin_length != NULL ? 1U : 0U) + (hmac_secret_mc_length != 0U ? 1U : 0U));
         if (cred_blob_stored != NULL) extensions_ok = extensions_ok && cbor_write_text(&extension, "credBlob") &&
             cbor_write_bool(&extension, *cred_blob_stored);
         /* Both keys have 11 bytes: credProtect precedes hmac-secret. */
@@ -72,6 +89,8 @@ bool ctap_attestation_encode_extensions(AuthCredentialService *service,
             cbor_write_uint(&extension, credential->cred_protect);
         if (hmac_secret != NULL) extensions_ok = extensions_ok && cbor_write_text(&extension, "hmac-secret") &&
             cbor_write_bool(&extension, *hmac_secret);
+        if (min_pin_length != NULL) extensions_ok = extensions_ok && cbor_write_text(&extension, "minPinLength") &&
+            cbor_write_uint(&extension, *min_pin_length);
         if (hmac_secret_mc_length != 0U) extensions_ok = extensions_ok && cbor_write_text(&extension, "hmac-secret-mc") &&
             cbor_write_bytes(&extension, hmac_secret_mc, hmac_secret_mc_length);
         if (!extensions_ok) return false;

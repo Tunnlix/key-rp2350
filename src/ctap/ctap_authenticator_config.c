@@ -37,6 +37,8 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
     }
     uint8_t minimum = 0U;
     bool force = false;
+    uint8_t rp_hashes[AUTH_PIN_MAX_RP_IDS][32] = {{0}};
+    size_t rp_count = 0U;
     if (fields[1].value == 3U && present[2]) {
         CborValue value;
         if (cbor_map_uint(&fields[2], 1U, &value)) {
@@ -46,7 +48,23 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
         }
         if (cbor_map_uint(&fields[2], 2U, &value)) {
             if (value.major != 4U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-            if (value.value != 0U) return CTAP_STATUS_LIMIT_EXCEEDED;
+            if (value.value > AUTH_PIN_MAX_RP_IDS) return CTAP_STATUS_LIMIT_EXCEEDED;
+            const uint8_t *cursor = value.data, *end = value.encoded + value.encoded_length;
+            for (uint64_t i = 0U; i < value.value; ++i) {
+                CborValue rp;
+                if (!cbor_read_next(&cursor, end, &rp)) return CTAP_STATUS_INVALID_CBOR;
+                if (rp.major != 3U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+                if (rp.value == 0U || rp.value > AUTH_RP_ID_MAX_SIZE) return CTAP_STATUS_INVALID_PARAMETER;
+                if (pin->service->crypto.sha256(pin->service->crypto.context, rp.data,
+                        (size_t)rp.value, rp_hashes[rp_count]) != AUTH_OK) return CTAP_STATUS_OTHER;
+                bool duplicate = false;
+                for (size_t j = 0U; j < rp_count; ++j)
+                    if (ctap_pin_equal(rp_hashes[j], rp_hashes[rp_count], 32U)) duplicate = true;
+                if (!duplicate) ++rp_count;
+            }
+            /* Clear the temporary slot populated by a final duplicate. */
+            if (rp_count < AUTH_PIN_MAX_RP_IDS)
+                memset(rp_hashes[rp_count], 0, (AUTH_PIN_MAX_RP_IDS - rp_count) * 32U);
         }
         if (cbor_map_uint(&fields[2], 3U, &value)) {
             if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
@@ -54,5 +72,6 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
             force = value.encoded[0] == 0xf5U;
         }
     }
-    return ctap_client_pin_configure(pin, (uint8_t)fields[1].value, minimum, force);
+    return ctap_client_pin_configure_rpids(pin, (uint8_t)fields[1].value, minimum, force,
+        &rp_hashes[0][0], rp_count);
 }

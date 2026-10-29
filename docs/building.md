@@ -181,18 +181,22 @@ Building source does not imply release or completed hardware acceptance.
 
 ES256/P-256 and Ed25519 work with PIN protocols 1 and 2. Legacy `getPinToken`
 remains available for older clients. OpenSSH uses these through `ecdsa-sk` and
-`ed25519-sk`. CTAP protocol advertising does not claim FIDO certification.
+`ed25519-sk`. Version 1.5.0 passed the FIDO Conformance Tools 1.9.3 / CTAP2.3
+run with 231 passes and zero failures; see the [testing status](../README.md#conformance-testing).
 
 The device stores 32 discoverable credentials. Sealed non-discoverable credential
 IDs are held by clients and do not consume those slots. Credential management
 supports listing, deletion and editable user names. PIN policy supports always-UV,
 increasing the minimum length, and requiring a PIN change. The factory minimum
 is six Unicode characters; existing stored policies remain unchanged by updates.
+The signed `minPinLength` extension reports the current minimum only to
+configured RP IDs. The authenticated RP policy supports up to four distinct IDs.
 
 Resident credentials can carry a 32-byte `credBlob`. Large blobs share a 4 KiB
-client-encrypted array, backed by four rotating banks. Credential-management
-output of `largeBlobKey` is incomplete; full garbage-collection interoperability
-is not yet established.
+client-encrypted array, backed by four rotating banks. Credential management
+returns `largeBlobKey` for credentials created with that support. The
+large-blob-key, blob-array and credential-management groups passed the recorded
+conformance run.
 
 | Region | Flash offsets | Size |
 | --- | --- | --- |
@@ -215,6 +219,11 @@ After the first v1.4 storage write, v1.3 cannot read the mixed/new envelopes.
 Keep compatible firmware available; do not downgrade a used v1.4 key to v1.3.
 A/B trial startup validates storage read-only and makes no format change before
 ROM confirmation, preserving pre-confirmation rollback to the stable image.
+
+Version 1.5.0 retains the existing PIN encoding while no RP allowlist is stored.
+Configuring an RP allowlist writes an extended PIN record. Older firmware rejects
+that record, so downgrading after configuring the list is unsupported. Resetting
+the list does not establish compatibility with older firmware journals.
 
 Downgrading to firmware that cannot decode stored algorithms, blob metadata or
 PIN policies can prevent recovery. Use compatible firmware or intentionally

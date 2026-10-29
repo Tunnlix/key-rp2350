@@ -51,7 +51,7 @@ AuthStatus rp2350_store_checkpoint_matches_internal(Rp2350StoreCheckpointWorkspa
     status=rp2350_store_pin_encode(&a->pin,w->data);
     if(status==AUTH_OK) status=rp2350_store_pin_encode(&b->pin,w->compare);
     if(status!=AUTH_OK) return status;
-    if(!store_equal(w->data,w->compare,24)) return AUTH_BAD_DATA;
+    if(!store_equal(w->data,w->compare,RP2350_STORE_PIN_MAX)) return AUTH_BAD_DATA;
     for(size_t i=0;i<a->metadata_count;i++) {
         if(!rp2350_store_metadata_index_equal_internal(&a->metadata[i],&b->metadata[i]) || b->keys[i].retired ||
             !store_equal(b->keys[i].handle.bytes,a->metadata[i].key.bytes,32)) return AUTH_BAD_DATA;
@@ -74,9 +74,12 @@ AuthStatus rp2350_store_checkpoint_stage_internal(Rp2350StoreCheckpointCandidate
     status=rp2350_store_checkpoint_keys_internal(w,flash,config,&w->source.selection,false);
     if(status!=AUTH_OK) goto done;
     /* Preflight all sizes/encodings and capture keys before any erase. */
-    /* V3 fixed records: global/manifest 768 each, PIN 512, keys 768 each.
-     * Metadata extents remain determined from their encoded lengths below. */
-    size_t needed=2048U+w->source.records.metadata_count*768U;
+    /* PIN policy length can grow when an RP allowlist is configured. Preflight
+     * its actual frame extent as well as each metadata record before erasing. */
+    size_t pin_extent=0;
+    status=rp2350_store_frame_extent(rp2350_store_pin_size(&w->source.records.pin)+16U,&pin_extent);
+    if(status!=AUTH_OK) goto done;
+    size_t needed=1536U+pin_extent+w->source.records.metadata_count*768U;
     for(size_t i=0;i<w->source.records.metadata_count;i++) {
         size_t n=0,extent=0;
         status=encode_metadata(w,flash,config,i,&n); if(status!=AUTH_OK) goto done;
@@ -114,7 +117,7 @@ AuthStatus rp2350_store_checkpoint_stage_internal(Rp2350StoreCheckpointCandidate
     status=config->hash(config->records_context,w->data,96,manifest.global_digest); if(status!=AUTH_OK) goto done;
     status=item(w,1,96); if(status!=AUTH_OK) goto done;
     status=rp2350_store_pin_encode(&w->source.records.pin,w->data); if(status!=AUTH_OK) goto done;
-    status=item(w,7,24); if(status!=AUTH_OK) goto done;
+    status=item(w,7,rp2350_store_pin_size(&w->source.records.pin)); if(status!=AUTH_OK) goto done;
     for(size_t i=0;i<w->source.records.metadata_count;i++) {
         size_t n=0; status=encode_metadata(w,flash,config,i,&n); if(status!=AUTH_OK) goto done;
         status=item(w,2,n); if(status!=AUTH_OK) goto done;

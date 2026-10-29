@@ -101,9 +101,11 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
         status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
         if (status != CTAP_STATUS_OK) return status;
     }
-    if (pin != NULL && cbor_map_text(extensions, "minPinLength", &value) &&
-        (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U)))
-        return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    if (pin != NULL && cbor_map_text(extensions, "minPinLength", &value)) {
+        if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        result->min_pin_length_requested = value.encoded[0] == 0xf5U;
+    }
     if (pin != NULL && cbor_map_text(extensions, "credProtect", &value)) {
         if (value.major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         if (value.value < 1U || value.value > 3U) return CTAP_STATUS_INVALID_PARAMETER;

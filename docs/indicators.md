@@ -27,3 +27,12 @@ one group. The fallback user LED repeats the same code. The first terminal
 reason is retained in RAM until restart; no diagnostic flash writes or secret
 data are recorded. A code identifies the failing subsystem, not an exact root
 cause. Boot ROM failures before the application starts cannot display a code.
+
+Entropy faults with additional detail repeat three groups: red subsystem code
+3, amber failure type, then cyan hardware status plus one. Amber counts are
+1 = collection start, 2 = hardware status, 3 = timeout, 4 = poll limit,
+5 = repeated block, 6 = stuck output, and 7 = configuration change. Subtract
+one from the cyan count to obtain the low four bits of `RNG_ISR` (valid = 1,
+autocorrelation error = 2, continuous-test error = 4, Von Neumann error = 8).
+For example, red 3 / amber 2 / cyan 5 identifies a hardware continuous-test
+failure. The monochrome fallback preserves the same group order and timings.

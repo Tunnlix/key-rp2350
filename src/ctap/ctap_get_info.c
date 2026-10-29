@@ -1,6 +1,7 @@
 #include "ctap/ctap_get_info.h"
 #include "ctap/cbor_writer.h"
 #include "authenticator/auth_platform.h"
+#include "authenticator/auth_pin.h"
 
 #include <string.h>
 
@@ -20,7 +21,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     CborWriter writer;
     cbor_writer_init(&writer, encoded, sizeof encoded);
     bool ok = cbor_write_map(&writer, 9U + (profile->large_blobs ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 3U : 0U) +
-        (profile->usb_transport ? 1U : 0U) + (profile->firmware_version ? 1U : 0U) +
+        (profile->usb_transport ? 1U : 0U) + (profile->firmware_version ? 1U : 0U) + (profile->pin_uv_auth ? 1U : 0U) +
         (profile->resident_credentials ? 1U : 0U)) &&
         /* Integer map keys are in increasing canonical order. */
         /* Older clients require 2.0 discovery even when newer CTAP2 versions
@@ -75,10 +76,12 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->firmware_version) ok = ok && cbor_write_uint(&writer, 0x0EU) &&
         cbor_write_uint(&writer, profile->firmware_version);
     if (profile->resident_credentials) ok = ok && cbor_write_uint(&writer, 0x0FU) && cbor_write_uint(&writer, 32U);
-    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x10U) && cbor_write_uint(&writer, 0U);
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x10U) && cbor_write_uint(&writer, AUTH_PIN_MAX_RP_IDS);
     if (profile->resident_credentials) ok = ok && cbor_write_uint(&writer, 0x14U) &&
         cbor_write_uint(&writer, profile->remaining_credentials);
     ok = ok && cbor_write_uint(&writer, 0x16U) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "packed");
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1FU) &&
+        cbor_write_array(&writer, 2U) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U);
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);
     *output_length = writer.length;

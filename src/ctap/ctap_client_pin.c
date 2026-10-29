@@ -447,7 +447,36 @@ uint8_t ctap_client_pin_require_uv(CtapClientPin *pin)
 
 uint8_t ctap_client_pin_configure(CtapClientPin *pin, uint8_t command, uint8_t minimum, bool force)
 {
+    return ctap_client_pin_configure_rpids(pin, command, minimum, force, NULL, 0U);
+}
+
+uint8_t ctap_client_pin_min_length_for_rp(CtapClientPin *pin, const uint8_t rp_hash[32], uint8_t *minimum)
+{
+    if (pin == NULL || rp_hash == NULL || minimum == NULL || pin->faulted) return CTAP_STATUS_OTHER;
+    *minimum = 0U;
+    AuthPinRecord record = {0};
+    uint8_t status = CTAP_STATUS_OTHER;
+    if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
+        pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
+    }
+    for (size_t i = 0U; i < record.min_length_rp_count; ++i) {
+        if (ctap_pin_equal(record.min_length_rp_hashes[i], rp_hash, 32U)) {
+            *minimum = record.min_length ? record.min_length : 4U;
+            break;
+        }
+    }
+    status = CTAP_STATUS_OK;
+done:
+    auth_secure_zero(&record, sizeof record);
+    return status;
+}
+
+uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uint8_t minimum,
+    bool force, const uint8_t *rp_hashes, size_t count)
+{
     if (pin == NULL || pin->faulted) return CTAP_STATUS_OTHER;
+    if (count > AUTH_PIN_MAX_RP_IDS) return CTAP_STATUS_LIMIT_EXCEEDED;
+    if (count && (rp_hashes == NULL || command != 3U)) return CTAP_STATUS_INVALID_PARAMETER;
     AuthPinRecord record = {0};
     uint8_t status = CTAP_STATUS_OTHER;
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
@@ -461,6 +490,11 @@ uint8_t ctap_client_pin_configure(CtapClientPin *pin, uint8_t command, uint8_t m
         if (force && !record.set) { status = CTAP_STATUS_PIN_NOT_SET; goto done; }
         record.min_length = minimum;
         record.force_change = record.force_change || force || (record.set && record.code_points < minimum);
+        if (count != 0U) {
+            auth_secure_zero(record.min_length_rp_hashes, sizeof record.min_length_rp_hashes);
+            memcpy(record.min_length_rp_hashes, rp_hashes, count * 32U);
+            record.min_length_rp_count = (uint8_t)count;
+        }
     } else { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
     if (!persist(pin, &record)) goto done;
     pin->min_length = record.min_length ? record.min_length : 4U;
