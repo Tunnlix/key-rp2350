@@ -64,3 +64,4 @@ Thumbs.db
 /docs/*
 !/docs/third-party-notices.md
 !/docs/building.md
+!/docs/pin-policy.md
