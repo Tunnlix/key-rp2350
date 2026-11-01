@@ -89,7 +89,21 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
             return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[4].major != 2U || fields[5].major != 2U || (command == 4U && fields[6].major != 2U))
             return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-        if (fields[5].value != 64U + prefix || (command == 4U && fields[6].value != 16U + prefix)) return CTAP_STATUS_INVALID_PARAMETER;
+        if (command == 4U && fields[6].value != 16U + prefix) return CTAP_STATUS_INVALID_PARAMETER;
+        if (fields[5].value != 64U + prefix) {
+#if CTAP_EXPERIMENTAL_PIN2_OVERSIZE_POLICY
+            /* Experimental classification for the official tool's PIN2 F-2
+             * request shape. Reject before copying, decrypting or touching PIN
+             * state; all normal builds and other malformed sizes retain 0x02. */
+            if (protocol == 2U && command == 3U && fields[5].value > 64U + prefix &&
+                (fields[5].value - prefix) % 16U == 0U && fields[4].value == auth_length &&
+                fields[3].major == 5U) {
+                status = ctap_pin_public_key_parse(&fields[3], peer);
+                return status == CTAP_STATUS_OK ? CTAP_STATUS_PIN_POLICY_VIOLATION : status;
+            }
+#endif
+            return CTAP_STATUS_INVALID_PARAMETER;
+        }
         if (fields[4].value != auth_length) return CTAP_STATUS_PIN_AUTH_INVALID;
         /* ClientPIN COSE keys cannot include optional parameters other than alg. */
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

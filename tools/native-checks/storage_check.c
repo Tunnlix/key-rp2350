@@ -561,6 +561,83 @@ static void check_pin_boundaries(AuthCredentialService *service,AuthPinStorage *
     memcpy(media,baseline,sizeof(media));assert(cold_boot()==AUTH_OK);
     printf("PIN protocol %u: 63/64-byte ASCII, multibyte limits, truncated UTF-8 and nonzero padding checks pass\n",protocol);
 }
+/* Conformance v1.9.3 ClientPIN2 F-2 encrypts a random 64..128-byte
+ * buffer. Its crypto.update emits complete blocks without final padding.
+ * CTAP 2.3 setPIN step 7 requires INVALID_PARAMETER for paddedNewPin !=64.
+ * The opt-in PIN2 experiment intentionally classifies oversized setPIN as
+ * policy violation instead. Keep both build variants covered. */
+static void check_pin_wire_lengths(AuthCredentialService *service,AuthPinStorage *pins,uint8_t protocol) {
+    static uint8_t baseline[sizeof(media)]; memcpy(baseline,media,sizeof(media));
+    for(size_t plain_size=16;plain_size<=128;plain_size+=16) {
+        memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+        AuthPinRecord record; assert(pins->read(pins->context,&record)==AUTH_OK);
+        record.set=false; memset(record.hash,0,sizeof(record.hash));record.code_points=0;
+        record.retries=8;record.force_change=false;
+        assert(pins->write(pins->context,&record)==AUTH_OK);
+        CtapClientPin pin;assert(ctap_client_pin_init(&pin,service,pins));
+        uint8_t plain[128],encrypted[144]={0},keys[64],iv[16]={0},mac[32],wire[512],reply[256];
+        memset(plain,'A',sizeof(plain));
+        size_t prefix=ctap_pin_protocol_prefix(protocol),encrypted_size=plain_size+prefix;
+        assert(ctap_pin_protocol_shared_version(&base,&secrets,protocol,crypto.agreement_public,keys)==CTAP_STATUS_OK);
+        assert(secrets.aes256_cbc(secrets.context,true,keys+32,iv,plain,plain_size,encrypted+prefix)==AUTH_OK);
+        assert(secrets.hmac_sha256(secrets.context,keys,32,encrypted,encrypted_size,mac)==AUTH_OK);
+        CborWriter w;cbor_writer_init(&w,wire,sizeof(wire));
+        assert(cbor_write_map(&w,5) && cbor_write_uint(&w,1) && cbor_write_uint(&w,protocol) &&
+            cbor_write_uint(&w,2) && cbor_write_uint(&w,3) && cbor_write_uint(&w,3) && cbor_write_map(&w,5) &&
+            cbor_write_int(&w,1) && cbor_write_int(&w,2) && cbor_write_int(&w,3) && cbor_write_int(&w,-25) &&
+            cbor_write_int(&w,-1) && cbor_write_int(&w,1) && cbor_write_int(&w,-2) &&
+            cbor_write_bytes(&w,crypto.agreement_public+1,32) && cbor_write_int(&w,-3) &&
+            cbor_write_bytes(&w,crypto.agreement_public+33,32) && cbor_write_uint(&w,4) &&
+            cbor_write_bytes(&w,mac,ctap_pin_protocol_auth_length(protocol)) && cbor_write_uint(&w,5) &&
+            cbor_write_bytes(&w,encrypted,encrypted_size));
+        CtapClientPinRequest request,unchanged;memset(&request,0x5a,sizeof(request));unchanged=request;
+        unsigned before=writes;size_t reply_size=0;
+        uint8_t status=ctap_client_pin_prepare(wire,w.length,&request);
+        if(plain_size==64) {
+            assert(status==CTAP_STATUS_OK);
+            status=ctap_client_pin_execute(&pin,&request,reply,sizeof(reply),&reply_size,1000);
+            assert(status==CTAP_STATUS_PIN_POLICY_VIOLATION);
+        } else {
+            uint8_t expected=CTAP_EXPERIMENTAL_PIN2_OVERSIZE_POLICY && protocol==2U && plain_size>64U ?
+                CTAP_STATUS_PIN_POLICY_VIOLATION : CTAP_STATUS_INVALID_PARAMETER;
+            assert(status==expected && !memcmp(&request,&unchanged,sizeof(request)));
+        }
+        assert(writes==before && pins->read(pins->context,&record)==AUTH_OK && !record.set && record.retries==8);
+        printf("PIN protocol %u wire plaintext=%zu cipher=%zu returns 0x%02x, no persistent changes\n",protocol,plain_size,encrypted_size,status);
+        auth_secure_zero(keys,sizeof(keys));auth_secure_zero(&request,sizeof(request));
+    }
+    memcpy(media,baseline,sizeof(media));assert(cold_boot()==AUTH_OK);
+}
+static void check_pin2_experiment_rejections(void) {
+    /* Only the opted-in protocol-2/setPIN/aligned-oversize shape may change.
+     * These failures must not publish a request or touch storage/crypto state. */
+    for(unsigned test=0;test<11;test++) {
+        uint8_t wire[512],cipher[144]={0},mac[32]={0},old[32]={0};
+        size_t sizes[]={0,16,79,81,95,96,96,96,96,96,96};
+        uint8_t protocol=test==10 ? 1U : 2U;
+        unsigned command=test==8 ? 4U : 3U;
+        size_t auth_size=test==6 ? 31U : ctap_pin_protocol_auth_length(protocol);
+        CborWriter w;cbor_writer_init(&w,wire,sizeof(wire));
+        assert(cbor_write_map(&w,command==4 ? 6 : 5) && cbor_write_uint(&w,1) && cbor_write_uint(&w,protocol) &&
+            cbor_write_uint(&w,2) && cbor_write_uint(&w,command) && cbor_write_uint(&w,3) &&
+            cbor_write_map(&w,5) && cbor_write_int(&w,1) && cbor_write_int(&w,2) &&
+            cbor_write_int(&w,3) && cbor_write_int(&w,-25) && cbor_write_int(&w,-1) &&
+            cbor_write_int(&w,test==7 ? 2 : 1) && cbor_write_int(&w,-2) &&
+            cbor_write_bytes(&w,crypto.agreement_public+1,32) && cbor_write_int(&w,-3) &&
+            cbor_write_bytes(&w,crypto.agreement_public+33,32) && cbor_write_uint(&w,4) &&
+            cbor_write_bytes(&w,mac,auth_size) && cbor_write_uint(&w,5));
+        if(test==9) assert(cbor_write_text(&w,"not a ciphertext"));
+        else assert(cbor_write_bytes(&w,cipher,sizes[test]));
+        if(command==4) assert(cbor_write_uint(&w,6) && cbor_write_bytes(&w,old,sizeof(old)));
+        CtapClientPinRequest request,unchanged;memset(&request,0x5a,sizeof(request));unchanged=request;
+        unsigned before=writes;
+        uint8_t status=ctap_client_pin_prepare(wire,w.length,&request);
+        uint8_t expected=test==9 ? CTAP_STATUS_CBOR_UNEXPECTED_TYPE :
+            test==5 && CTAP_EXPERIMENTAL_PIN2_OVERSIZE_POLICY ? CTAP_STATUS_PIN_POLICY_VIOLATION : CTAP_STATUS_INVALID_PARAMETER;
+        assert(status==expected && !memcmp(&request,&unchanged,sizeof(request)) && writes==before);
+    }
+    puts("PIN2 experiment: short/unaligned/type/MAC-length/curve/changePIN/protocol-1 errors retain their rejection; request and storage unchanged");
+}
 static void check_pin_policy(AuthCredentialService *service,AuthPinStorage *pins) {
     CtapClientPin pin; AuthPinRecord record; uint8_t wrong[16],correct[16],token[32];
     memset(wrong,43,16); memset(correct,42,16);
@@ -694,6 +771,8 @@ int main(int argc,char **argv) {
         check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
         check_long_touch_policy(&service,&pins,1); check_long_touch_policy(&service,&pins,2);
         check_pin_boundaries(&service,&pins,1);check_pin_boundaries(&service,&pins,2);
+        check_pin_wire_lengths(&service,&pins,1);check_pin_wire_lengths(&service,&pins,2);
+        check_pin2_experiment_rejections();
         check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
         check_blobs(&service,&pins,1); check_blobs(&service,&pins,2);
         check_pin_policy(&service,&pins); rp2350_crypto_free(&crypto); return 0;
@@ -842,6 +921,8 @@ int main(int argc,char **argv) {
     check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
         check_long_touch_policy(&service,&pins,1); check_long_touch_policy(&service,&pins,2);
         check_pin_boundaries(&service,&pins,1);check_pin_boundaries(&service,&pins,2);
+        check_pin_wire_lengths(&service,&pins,1);check_pin_wire_lengths(&service,&pins,2);
+        check_pin2_experiment_rejections();
     check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
     check_blobs(&service,&pins,1);
     check_blobs(&service,&pins,2);
