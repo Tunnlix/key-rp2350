@@ -13,6 +13,7 @@ typedef struct {
     size_t user_id_length;
     int32_t algorithm;
     bool credential_excluded, omit_attestation, enterprise_attestation;
+    uint8_t enterprise_fingerprint[32];
     bool hmac_secret_requested;
     CtapHmacSecret hmac_secret_mc;
     CtapClientPin *pin;

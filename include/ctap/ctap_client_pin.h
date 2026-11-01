@@ -28,6 +28,8 @@ typedef struct {
     uint8_t min_length;
     bool always_uv, force_change, large_blobs;
     bool long_touch_reset;
+    bool enterprise_enabled;
+    uint8_t enterprise_fingerprint[32];
     uint8_t persistent_token[32];
     bool persistent_readonly, persistent_token_present, last_management_persistent;
     uint64_t persistent_generation;
@@ -56,6 +58,7 @@ typedef struct {
     uint64_t token_generation;
 } CtapPinAuth;
 
+bool ctap_client_pin_enterprise_enabled(const CtapClientPin *);
 bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, const AuthPinStorage *storage);
 /* Input must not overlap request. Failure leaves request unchanged. */
 uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientPinRequest *request);

@@ -1,3 +1,4 @@
+#include "enterprise_attestation.h"
 #include "application.h"
 #include "storage_key_record_internal.h"
 #include "ctap_device_version.h"
@@ -89,6 +90,7 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
         !auth_credentials_configure_nonresident(&a->service,&nonresident) ||
         !ctap_client_pin_init(&a->pin,&a->service,&pins)) { status=AUTH_CRYPTO_ERROR; goto failed; }
     status=rp2350_crypto_activate_internal(crypto); if(status!=AUTH_OK) goto failed;
+    if(!rp2350_enterprise_configure_internal(&a->service,crypto) || !rp2350_batch_configure_internal(&a->service,crypto)) { status=AUTH_BAD_DATA; goto failed; }
     CtapGetInfoProfile profile={.max_message_size=CTAP_MESSAGE_CAPACITY,.user_presence=true,
         .firmware_version=CTAP_DEVICE_FIRMWARE_VERSION,.usb_transport=io->usb_transport};
     memcpy(profile.aaguid,aaguid,16);

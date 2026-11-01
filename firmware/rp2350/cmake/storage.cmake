@@ -30,3 +30,6 @@ target_compile_options(rp2350_storage_codec PRIVATE -Wall -Wextra -Wpedantic -We
 # Private-key record serialization is internal to the candidate software provider.
 target_sources(rp2350_crypto PRIVATE "${storage_dir}/storage_key_record.c")
 target_sources(rp2350_crypto PRIVATE "${storage_dir}/nonresident_seal.c")
+
+target_sources(rp2350_storage_codec PRIVATE "${storage_dir}/enterprise_attestation.c")
+include("${CMAKE_CURRENT_LIST_DIR}/enterprise.cmake")

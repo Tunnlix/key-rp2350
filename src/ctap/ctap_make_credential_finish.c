@@ -55,7 +55,7 @@ static AuthStatus prepare_response_id(void *context, const AuthCredential *crede
         prepared->cred_blob_requested ? &prepared->cred_blob_stored : NULL,
         prepared->large_blob_requested ? blob_key : NULL,
         response->min_pin_length && prepared->min_pin_length_requested ? &response->min_pin_length : NULL,
-        prepared->uvm_requested,
+        prepared->uvm_requested, prepared->enterprise_attestation,
         response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length);
     auth_secure_zero(blob_key, sizeof blob_key);
     if (!encoded) return AUTH_CRYPTO_ERROR;
@@ -76,6 +76,8 @@ static uint8_t finish_at(AuthCredentialService *service,
     if (service == NULL || prepared == NULL || aaguid == NULL || output == NULL || length == NULL ||
         capacity < (prepared->hmac_secret_mc.requested ? 512U : 384U))
         return CTAP_STATUS_OTHER;
+    if (prepared->enterprise_attestation && (!ctap_client_pin_enterprise_enabled(prepared->pin) ||
+        !ctap_pin_equal(prepared->enterprise_fingerprint,service->enterprise.fingerprint,32U))) return CTAP_STATUS_OPERATION_DENIED;
     if (prepared->auth.probe) return ctap_client_pin_probe(prepared->pin);
     if (prepared->user_verified != prepared->auth.present || (prepared->pin != NULL && prepared->pin->service != service))
         return CTAP_STATUS_OTHER;

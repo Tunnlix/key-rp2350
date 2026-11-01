@@ -183,7 +183,11 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
         if (enabled[1] && (pin == NULL || !auth_credentials_resident_supported(service))) return CTAP_STATUS_UNSUPPORTED_OPTION;
         result->discoverable = enabled[1];
     }
-    if (present[10]) return fields[10].major == 0U ? CTAP_STATUS_INVALID_PARAMETER : CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+    if (present[10]) {
+        if (fields[10].major != 0U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        if (!ctap_client_pin_enterprise_enabled(pin)) return CTAP_STATUS_INVALID_PARAMETER;
+        if (fields[10].value != 1U && fields[10].value != 2U) return CTAP_STATUS_INVALID_OPTION;
+    }
     if (present[6]) {
         status = ctap_request_text_map(&fields[6]);
         if (status != CTAP_STATUS_OK) return status;
@@ -201,6 +205,19 @@ static uint8_t prepare_with_pin(AuthCredentialService *service, CtapMakeCredenti
     result->user_id_length = user_id_length;
     memcpy(result->user_id, user_id, result->user_id_length); /* Empty user.id is valid. */
     if (service->crypto.sha256(service->crypto.context, rp_id, rp_id_length, result->rp_id_hash) != AUTH_OK) return CTAP_STATUS_OTHER;
+    if (present[10]) {
+        const AuthEnterpriseAttestation *ep=&service->enterprise;
+        bool allowed=fields[10].value==2U && ep->platform_managed;
+        for (size_t i=0U;i<ep->rp_count;i++)
+            if (ctap_pin_equal(result->rp_id_hash,ep->rp_hashes[i],32U)) allowed=true;
+        /* CTAP 2.3 §6.1.2 step 19: an explicit sole "none" preference
+         * suppresses even an otherwise authorized enterprise attestation. */
+        allowed = allowed && !result->omit_attestation;
+        result->enterprise_attestation=allowed;
+        if (allowed) {
+            memcpy(result->enterprise_fingerprint,ep->fingerprint,32U);
+        }
+    }
     status = ctap_client_pin_authorize(pin, &result->auth, result->rp_id_hash, result->client_data_hash,
         CTAP_PIN_PERMISSION_MC, now_ms, false);
     if (status != CTAP_STATUS_OK) return status;

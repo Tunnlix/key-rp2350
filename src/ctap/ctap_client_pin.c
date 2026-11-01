@@ -34,6 +34,8 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     pin->service = service; pin->storage = copied; pin->pin_set = set;
     pin->min_length = minimum ? minimum : 4U; pin->always_uv = always; pin->force_change = force;
     pin->long_touch_reset = long_touch;
+    pin->enterprise_enabled = record.enterprise_enabled;
+    memcpy(pin->enterprise_fingerprint,record.enterprise_fingerprint,32U);
     pin->credential_management = auth_credentials_resident_supported(service);
     pin->persistent_readonly = record.persistent_readonly;
     pin->persistent_token_present = record.persistent_token_present;
@@ -428,6 +430,8 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
         pin->min_length = record.min_length ? record.min_length : 4U;
         pin->always_uv = record.always_uv; pin->force_change = record.force_change;
         pin->long_touch_reset = record.long_touch_reset;
+        pin->enterprise_enabled = record.enterprise_enabled;
+        memcpy(pin->enterprise_fingerprint,record.enterprise_fingerprint,32U);
         refresh_persistent(pin, &record);
         if (pin->faulted) valid = false;
     }
@@ -609,7 +613,14 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
         pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
     }
-    if (command == 2U) record.always_uv = !record.always_uv;
+    if (command == 1U) {
+        if (!auth_enterprise_valid(&pin->service->enterprise)) { status=CTAP_STATUS_INVALID_PARAMETER; goto done; }
+        if (record.enterprise_enabled && ctap_pin_equal(record.enterprise_fingerprint,pin->service->enterprise.fingerprint,32U)) {
+            status=CTAP_STATUS_OK; goto done;
+        }
+        record.enterprise_enabled=true;
+        memcpy(record.enterprise_fingerprint,pin->service->enterprise.fingerprint,32U);
+    } else if (command == 2U) record.always_uv = !record.always_uv;
     else if (command == 3U) {
         uint8_t old = record.min_length ? record.min_length : 4U;
         if (minimum == 0U) minimum = old;
@@ -633,6 +644,8 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
     pin->min_length = record.min_length ? record.min_length : 4U;
     pin->always_uv = record.always_uv; pin->force_change = record.force_change;
     pin->long_touch_reset = record.long_touch_reset;
+    pin->enterprise_enabled = record.enterprise_enabled;
+    memcpy(pin->enterprise_fingerprint,record.enterprise_fingerprint,32U);
     ctap_client_pin_invalidate(pin);
     status = CTAP_STATUS_OK;
 done:
@@ -643,3 +656,8 @@ done:
 uint8_t ctap_client_pin_authorize_management(CtapClientPin *pin, const uint8_t *rp_hash,
     const uint8_t *message, size_t length, const uint8_t mac[32], uint32_t now_ms)
 { return ctap_client_pin_authorize_management_version(pin, 2U, rp_hash, message, length, mac, now_ms); }
+
+bool ctap_client_pin_enterprise_enabled(const CtapClientPin *pin) {
+    return pin && !pin->faulted && pin->enterprise_enabled && auth_enterprise_valid(&pin->service->enterprise) &&
+        ctap_pin_equal(pin->enterprise_fingerprint,pin->service->enterprise.fingerprint,32U);
+}

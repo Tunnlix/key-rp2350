@@ -18,6 +18,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.resident_credentials = backend->profile.large_blobs = false;
     backend->profile.always_uv = backend->profile.force_pin_change = false;
     backend->profile.long_touch_reset = false;
+    backend->profile.enterprise_capable = backend->profile.enterprise_enabled = false;
     backend->profile.third_party_payment = false;
     backend->profile.encrypted_identifiers = false;
     backend->profile.min_pin_length = 4U;
@@ -60,6 +61,8 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
     backend->profile.min_pin_length = pin->min_length;
     backend->profile.always_uv = pin->always_uv; backend->profile.force_pin_change = pin->force_change;
     backend->profile.long_touch_reset = pin->long_touch_reset;
+    backend->profile.enterprise_capable = auth_enterprise_valid(&pin->service->enterprise);
+    backend->profile.enterprise_enabled = ctap_client_pin_enterprise_enabled(pin);
     backend->profile.resident_credentials = auth_credentials_resident_supported(backend->credentials);
     return true;
 }
@@ -323,6 +326,8 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
         backend->profile.always_uv = backend->pin->always_uv;
         backend->profile.force_pin_change = backend->pin->force_change;
         backend->profile.long_touch_reset = backend->pin->long_touch_reset;
+        backend->profile.enterprise_capable = auth_enterprise_valid(&backend->credentials->enterprise);
+        backend->profile.enterprise_enabled = ctap_client_pin_enterprise_enabled(backend->pin);
         backend->profile.third_party_payment = auth_credentials_payment_supported(backend->credentials);
         backend->profile.encrypted_identifiers = false;
         if (status == CTAP_STATUS_OK && backend->pin->persistent_token_present && backend->pin->storage.encrypted_identifiers != NULL) {

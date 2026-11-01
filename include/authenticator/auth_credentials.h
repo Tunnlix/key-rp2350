@@ -2,6 +2,7 @@
 #define AUTH_CREDENTIALS_H
 
 #include "authenticator/auth_platform.h"
+#include "authenticator/auth_enterprise.h"
 #include "authenticator/auth_secret_crypto.h"
 #include "authenticator/auth_nonresident_provider.h"
 
@@ -24,6 +25,8 @@ typedef struct {
 typedef struct {
     AuthCrypto crypto; AuthStorage storage; AuthSecretCrypto secrets;
     AuthNonresidentProvider nonresident;
+    AuthEnterpriseAttestation enterprise;
+    AuthBatchAttestation batch;
     uint64_t metadata_revision; /* Invalidates enumeration snapshots after mutations. */
     AuthCreationScratch creation_scratch;
     bool creation_busy;
@@ -34,6 +37,8 @@ typedef struct {
     bool lookup_busy;
 } AuthCredentialService;
 
+bool auth_credentials_configure_batch(AuthCredentialService *,const AuthBatchAttestation *);
+bool auth_credentials_configure_enterprise(AuthCredentialService *,const AuthEnterpriseAttestation *);
 bool auth_credentials_init(AuthCredentialService *service,
     const AuthCrypto *crypto, const AuthStorage *storage);
 

@@ -13,6 +13,8 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         (profile->resident_credentials && !profile->pin_uv_auth) ||
         (profile->large_blobs && !profile->resident_credentials) ||
         (profile->always_uv && !profile->pin_uv_auth) ||
+        (profile->enterprise_capable && !profile->pin_uv_auth) ||
+        (profile->enterprise_enabled && !profile->enterprise_capable) ||
         (profile->encrypted_identifiers && !profile->pin_uv_auth) ||
         (profile->third_party_payment && !profile->resident_credentials) ||
         (profile->min_pin_length && (profile->min_pin_length < 4U || profile->min_pin_length > 63U)) ||
@@ -42,10 +44,11 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->third_party_payment) ok = ok && cbor_write_text(&writer, "thirdPartyPayment");
     ok = ok && cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
-        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, (profile->make_credential ? 4U : 3U) +
+        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, (profile->make_credential ? 4U : 3U) + (profile->enterprise_capable ? 1U : 0U) +
             (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 5U : 0U) + (profile->resident_credentials ? 2U : 0U)) &&
         /* String keys sort by length, then bytes: rk, up, plat.
          * Do not use uv=false/clientPin=false: those imply supported but unset. */
+        (!profile->enterprise_capable || (cbor_write_text(&writer, "ep") && cbor_write_bool(&writer, profile->enterprise_enabled))) &&
         cbor_write_text(&writer, "rk") && cbor_write_bool(&writer, profile->resident_credentials) &&
         cbor_write_text(&writer, "up") && cbor_write_bool(&writer, profile->user_presence) &&
         cbor_write_text(&writer, "plat") && cbor_write_bool(&writer, false);
@@ -90,8 +93,8 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1DU) && cbor_write_uint(&writer, 63U);
     if (profile->encrypted_identifiers) ok = ok && cbor_write_uint(&writer, 0x1EU) && cbor_write_bytes(&writer, profile->encrypted_store_state, 32U);
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1FU) &&
-        cbor_write_array(&writer, 3U) &&
-        cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U) && cbor_write_uint(&writer, 4U);
+        cbor_write_array(&writer, profile->enterprise_capable ? 4U : 3U) &&
+        (!profile->enterprise_capable || cbor_write_uint(&writer, 1U)) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U) && cbor_write_uint(&writer, 4U);
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);
     *output_length = writer.length;

@@ -11,8 +11,9 @@
  * Omitted extension inputs produce no unsolicited outputs.
  * Packed self-attestation signs
  * SHA256(authenticatorData || clientDataHash) with this credential's opaque key.
- * none emits an empty attStmt and zero AAGUID. No certificates or private keys
- * are handled here; the credential has already been authorized and its key may
+ * none emits an empty attStmt and zero AAGUID. Ordinary calls never include
+ * enterprise certificates; the authorized enterprise variant delegates signing
+ * to a separate provisioned provider and adds x5c plus epAtt=true; the credential has already been authorized and its key may
  * be staged pending metadata commit. The caller must not publish before commit.
  * Failure leaves output/length untouched; caller owns rollback on failure. */
 bool ctap_attestation_encode(AuthCredentialService *service,
@@ -44,14 +45,16 @@ bool ctap_attestation_encode_extensions(AuthCredentialService *service,
     uint8_t *output, size_t capacity, size_t *length);
 
 /* The caller must authorize the RP before supplying a minimum PIN length.
- * NULL omits the output. The value is included in signed authenticator data. */
+ * NULL omits the minimum-length output. Its disclosure requires RP allowlist authorization.
+ * UVM, when requested, reports presence and optional external PIN. These values
+ * are included in signed authenticator data. */
 bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
     const AuthCredential *credential, const uint8_t *id, size_t id_length,
     const uint8_t public_key[65], const uint8_t client_data_hash[32],
     const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
     bool user_verified, bool cred_protect_requested,
     const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
-    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length, bool uvm,
+    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length, bool uvm, bool enterprise,
     uint8_t *output, size_t capacity, size_t *length);
 
 #endif

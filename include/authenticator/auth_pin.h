@@ -16,6 +16,8 @@ typedef struct {
     uint8_t min_length; /* Zero is the backwards-compatible default of four. */
     bool always_uv, force_change;
     bool long_touch_reset;
+    bool enterprise_enabled;
+    uint8_t enterprise_fingerprint[32];
     bool persistent_readonly, persistent_token_present;
     /* May exist before PIN enrollment for encrypted GetInfo discovery, with
      * no permissions. Secret: encrypted by the storage provider. */

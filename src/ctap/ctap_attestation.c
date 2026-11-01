@@ -44,7 +44,7 @@ bool ctap_attestation_encode_extensions(AuthCredentialService *service,
     return ctap_attestation_encode_policy_extensions(service, credential, id, id_length,
         public_key, client_data_hash, aaguid, omit, hmac_secret, user_verified,
         cred_protect_requested, hmac_secret_mc, hmac_secret_mc_length, cred_blob_stored,
-        large_blob_key, NULL, false, output, capacity, length);
+        large_blob_key, NULL, false, false, output, capacity, length);
 }
 
 bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
@@ -53,12 +53,13 @@ bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
     const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
     bool user_verified, bool cred_protect_requested,
     const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
-    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length, bool uvm,
+    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length, bool uvm, bool enterprise,
     uint8_t *output, size_t capacity, size_t *length)
 {
     if (service == NULL || !auth_credential_valid(credential) || public_key == NULL ||
         !auth_public_key_valid(credential->algorithm, public_key) || client_data_hash == NULL || aaguid == NULL || output == NULL || length == NULL ||
         id == NULL || !auth_credential_id_length_valid(id_length)) return false;
+    if (enterprise && (omit || !auth_enterprise_valid(&service->enterprise))) return false;
     if (hmac_secret_mc_length != 0U && (hmac_secret_mc == NULL ||
         (hmac_secret_mc_length != 32U && hmac_secret_mc_length != 48U && hmac_secret_mc_length != 64U && hmac_secret_mc_length != 80U))) return false;
     if (min_pin_length != NULL && (*min_pin_length < 4U || *min_pin_length > 63U)) return false;
@@ -99,22 +100,41 @@ bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
         if (!extensions_ok) return false;
         data_length += extension.length;
     }
+    const AuthBatchAttestation *batch=service->batch.sign_digest ? &service->batch : NULL;
+    if (!omit && batch && !auth_batch_valid(batch)) return false;
+    bool full=!omit && (enterprise || batch!=NULL);
     uint8_t signature[72];
     size_t signature_length = 0U;
     if (!omit) {
         memcpy(data + data_length, client_data_hash, 32U);
-        if (auth_credentials_sign_key(service, credential, data, data_length + 32U, signature, &signature_length) != AUTH_OK ||
-            signature_length == 0U || signature_length > sizeof signature) return false;
+        AuthStatus signed_status;
+        if (full) {
+            uint8_t digest[32];
+            signed_status=service->crypto.sha256(service->crypto.context,data,data_length+32U,digest);
+            if (signed_status==AUTH_OK) signed_status=enterprise ?
+                service->enterprise.sign_digest(service->enterprise.context,digest,signature,&signature_length) :
+                batch->sign_digest(batch->context,digest,signature,&signature_length);
+            auth_secure_zero(digest,sizeof(digest));
+        } else signed_status=auth_credentials_sign_key(service, credential, data, data_length + 32U, signature, &signature_length);
+        if (signed_status != AUTH_OK || signature_length == 0U || signature_length > sizeof signature) return false;
     }
-    uint8_t encoded[576U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
+    uint8_t encoded[CTAP_MESSAGE_CAPACITY-1U];
     CborWriter writer;
     cbor_writer_init(&writer, encoded, sizeof encoded);
-    ok = cbor_write_map(&writer, large_blob_key != NULL ? 4U : 3U) &&
+    ok = cbor_write_map(&writer, 3U + (large_blob_key != NULL ? 1U : 0U) + (enterprise ? 1U : 0U)) &&
         cbor_write_uint(&writer, 1U) && cbor_write_text(&writer, omit ? "none" : "packed") &&
         cbor_write_uint(&writer, 2U) && cbor_write_bytes(&writer, data, data_length) &&
-        cbor_write_uint(&writer, 3U) && cbor_write_map(&writer, omit ? 0U : 2U);
-    if (!omit) ok = ok && cbor_write_text(&writer, "alg") && cbor_write_int(&writer, credential->algorithm) &&
+        cbor_write_uint(&writer, 3U) && cbor_write_map(&writer, omit ? 0U : full ? 3U : 2U);
+    if (!omit) ok = ok && cbor_write_text(&writer, "alg") && cbor_write_int(&writer, full ? AUTH_COSE_ALG_ES256 : credential->algorithm) &&
         cbor_write_text(&writer, "sig") && cbor_write_bytes(&writer, signature, signature_length);
+    if (full) {
+        size_t count=enterprise ? service->enterprise.certificate_count : batch->certificate_count;
+        ok=ok && cbor_write_text(&writer,"x5c") && cbor_write_array(&writer,count);
+        for(size_t i=0U;i<count;i++)
+            ok=ok && cbor_write_bytes(&writer,enterprise ? service->enterprise.certificates[i] : batch->certificates[i],
+                enterprise ? service->enterprise.certificate_lengths[i] : batch->certificate_lengths[i]);
+    }
+    if (enterprise) ok=ok && cbor_write_uint(&writer,4U) && cbor_write_bool(&writer,true);
     if (large_blob_key != NULL) ok = ok && cbor_write_uint(&writer, 5U) && cbor_write_bytes(&writer, large_blob_key, 32U);
     if (!ok || writer.length > capacity) { auth_secure_zero(encoded, sizeof encoded); return false; }
     memcpy(output, encoded, writer.length);

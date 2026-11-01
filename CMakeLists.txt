@@ -4,6 +4,7 @@ project(ctap_core VERSION 0.1.0 LANGUAGES C)
 # Embed with add_subdirectory() and link ctap_core. The application supplies
 # clock, touch, crypto and storage callbacks; this target has no platform drivers.
 add_library(ctap_core STATIC
+    src/authenticator/auth_enterprise.c
     src/authenticator/auth_credentials.c
     src/authenticator/auth_nonresident.c
     src/authenticator/auth_resident.c

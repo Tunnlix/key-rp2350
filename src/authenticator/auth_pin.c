@@ -6,6 +6,9 @@ bool auth_pin_record_valid(const AuthPinRecord *record)
     if (record == NULL || record->retries > AUTH_PIN_MAX_RETRIES ||
         (record->min_length != 0U && (record->min_length < 4U || record->min_length > 63U)) ||
         (record->force_change && !record->set) || record->min_length_rp_count > AUTH_PIN_MAX_RP_IDS) return false;
+    uint8_t enterprise_nonzero = 0U;
+    for (size_t i = 0U; i < 32U; ++i) enterprise_nonzero |= record->enterprise_fingerprint[i];
+    if (record->enterprise_enabled != (enterprise_nonzero != 0U)) return false;
     uint8_t token_nonzero = 0U;
     for (size_t i = 0U; i < 32U; ++i) token_nonzero |= record->persistent_token[i];
     if (record->persistent_token_present ? !token_nonzero : token_nonzero != 0U) return false;
