@@ -72,8 +72,9 @@ The protocol core is designed to be portable. Contributions that add hardware
 providers, support more boards, or improve existing ports are welcome. Share
 what you are building and help make Tunnlix Key available on more hardware.
 
-The current reference implementation runs on a Seeed Studio XIAO RP2350 with a
-user-presence button between D0 (GPIO26) and GND. Seeed publishes
+The current firmware targets Raspberry Pi's RP2350 microcontroller. The reference
+build uses a Seeed Studio XIAO RP2350 board with a user-presence button connected
+between D0 (GPIO26) and GND. Seeed publishes
 [hardware resources, including schematics and editable PCB design files](https://wiki.seeedstudio.com/xiao_rp2350_arduino/#assets--resources).
 See [building and setup](docs/building.md) to build this target.
 
