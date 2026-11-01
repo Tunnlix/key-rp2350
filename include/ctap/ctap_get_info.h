@@ -27,6 +27,7 @@ typedef struct {
     bool long_touch_reset;
     bool pin_set; /* Current persistent PIN state, refreshed before GetInfo. */
     bool large_blobs;
+    bool third_party_payment;
     bool encrypted_identifiers;
     uint8_t encrypted_identifier[32], encrypted_store_state[32];
     bool resident_credentials; /* Complete discovery + credential management binding. */

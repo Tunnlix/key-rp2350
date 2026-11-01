@@ -74,6 +74,7 @@ typedef struct {
     int32_t algorithm;
     uint32_t signature_count;
     bool discoverable;
+    bool third_party_payment; /* Credential-bound consent, immutable after creation. */
     uint8_t cred_protect; /* CTAP policy 1..3, persisted with metadata. */
     uint8_t rp_id[AUTH_RP_ID_MAX_SIZE], rp_name[AUTH_ENTITY_NAME_MAX_SIZE];
     uint8_t user_name[AUTH_ENTITY_NAME_MAX_SIZE], user_display_name[AUTH_ENTITY_NAME_MAX_SIZE];

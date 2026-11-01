@@ -2,6 +2,7 @@
 #include "ctap/cbor_reader.h"
 #include "ctap/ctap_request.h"
 #include "ctap/ctap_entities.h"
+#include "ctap/ctap_pin_protocol.h"
 
 #include <string.h>
 
@@ -76,6 +77,9 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
 {
     CborValue value;
     uint8_t status;
+    /* Only the specified CBOR true requests UVM. Other input is ignored. */
+    if (cbor_map_text(extensions, "uvm", &value))
+        result->uvm_requested = value.major == 7U && value.encoded[0] == 0xf5U;
     if (auth_credentials_resident_supported(service) && cbor_map_text(extensions, "credBlob", &value)) {
         if (value.major != 2U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         result->cred_blob_requested = true;
@@ -100,6 +104,11 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
         if (!result->hmac_secret_requested) return CTAP_STATUS_MISSING_PARAMETER;
         status = ctap_hmac_secret_parse(&value, &result->hmac_secret_mc);
         if (status != CTAP_STATUS_OK) return status;
+    }
+    if (auth_credentials_payment_supported(service) && cbor_map_text(extensions, "thirdPartyPayment", &value)) {
+        if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        result->metadata.third_party_payment = value.encoded[0] == 0xf5U;
     }
     if (pin != NULL && cbor_map_text(extensions, "minPinLength", &value)) {
         if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))

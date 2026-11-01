@@ -3,6 +3,7 @@
 #include "protocol/ctaphid_device.h"
 #include "protocol/ctaphid_ctap_backend.h"
 #include "ctap/ctap_get_info.h"
+#include "ctap/ctap_uvm.h"
 #include "ctap/cbor_reader.h"
 #include <assert.h>
 #include <stdio.h>
@@ -56,6 +57,44 @@ static void check_wink(void) {
     assert(!rp2350_wink_color(&animation,false,2900) && !animation.active);
     puts("PASS WINK: actual HID dispatch/capabilities/invalid payload/CID/busy/abort; bounded wrapping animation and priority");
 }
+static void request_at(CtaphidDevice *d,uint32_t cid,uint8_t cmd,unsigned length,uint8_t value,uint32_t now) {
+    uint8_t report[64]={0};
+    for(unsigned i=0;i<4;i++) report[i]=(uint8_t)(cid>>(24U-8U*i));
+    report[4]=cmd|0x80; report[6]=(uint8_t)length; report[7]=value;
+    CtaphidDeviceResult result=ctaphid_device_receive_report(d,report,64,now);
+    assert(result==CTAPHID_DEVICE_OK || (cmd==CTAPHID_COMMAND_CANCEL && result==CTAPHID_DEVICE_IGNORED));
+    assert(ctaphid_device_poll(d,now)==CTAPHID_DEVICE_OK);
+}
+static void check_lock(void) {
+    Recorder r={0}; CtaphidDevice d;
+    CtaphidDeviceConfig config={.submit_report=sent,.transport_context=&r,
+        .start_cbor=start,.abort_cbor=abort_cbor,.cbor_context=&r};
+    assert(ctaphid_device_init(&d,&config)==CTAPHID_DEVICE_OK);
+    uint32_t a=allocate(&d,&r,0x0c),b=allocate(&d,&r,0x0c);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,0,0,101); assert(r.report[7]==3 && !d.lock_channel_id);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,11,102); assert(r.report[7]==2 && !d.lock_channel_id);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,10,103);
+    assert(d.lock_channel_id==a && r.report[4]==(0x80|CTAPHID_COMMAND_LOCK) && !r.report[6]);
+    request_at(&d,b,CTAPHID_COMMAND_PING,0,0,104); assert(r.report[7]==6);
+    request_at(&d,b,CTAPHID_COMMAND_LOCK,1,0,105); assert(r.report[7]==6 && d.lock_channel_id==a);
+    request_at(&d,UINT32_MAX,CTAPHID_COMMAND_INIT,8,0,106); assert(r.report[7]==6);
+    unsigned before=r.sent; request_at(&d,b,CTAPHID_COMMAND_CANCEL,0,0,107); assert(r.sent==before);
+    request_at(&d,a,CTAPHID_COMMAND_INIT,8,0,108); assert(d.lock_channel_id==a);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,1,10000); assert(d.lock_channel_id==a);
+    request_at(&d,b,CTAPHID_COMMAND_PING,0,0,10999); assert(r.report[7]==6);
+    request_at(&d,b,CTAPHID_COMMAND_PING,0,0,11000); assert(r.report[4]==(0x80|CTAPHID_COMMAND_PING) && !d.lock_channel_id);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,10,11001);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,0,11002); assert(!d.lock_channel_id);
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,1,UINT32_MAX-499U);
+    request_at(&d,b,CTAPHID_COMMAND_PING,0,0,499); assert(r.report[7]==6);
+    request_at(&d,b,CTAPHID_COMMAND_PING,0,0,500); assert(r.report[4]==(0x80|CTAPHID_COMMAND_PING));
+    request_at(&d,a,CTAPHID_COMMAND_LOCK,1,1,501);
+    request_at(&d,a,CTAPHID_COMMAND_CBOR,1,0,502); assert(r.starts==1);
+    assert(ctaphid_device_poll(&d,1501)==CTAPHID_DEVICE_OK);
+    request_at(&d,b,CTAPHID_COMMAND_INIT,8,0,1501); assert(r.report[7]==6 && r.aborts==0);
+    request_at(&d,a,CTAPHID_COMMAND_INIT,8,0,1502); assert(r.aborts==1);
+    puts("PASS LOCK: bounded ownership, validation, renewal/release, foreign isolation, CANCEL, INIT, wrap and independent transaction lifetime");
+}
 static void check_presence(void) {
     Rp2350Presence p;
     rp2350_presence_init(&p,false,0); rp2350_presence_begin_hold(&p,1,0,5000);
@@ -85,18 +124,40 @@ static void check_presence(void) {
     assert(!rp2350_presence_sample(&p,true,1)); assert(rp2350_presence_sample(&p,true,21)==4);
     puts("PASS long touch: 5-second boundary, short/bouncing/pre-held/cancelled presses, one-shot consent and wrapping clock");
 }
+static void check_uvm(void) {
+    for(unsigned flags=0;flags<8;flags++) {
+        uint8_t out[64];CborWriter w;cbor_writer_init(&w,out,sizeof(out));
+        bool up=(flags&1)!=0,pin=(flags&2)!=0,remote=(flags&4)!=0;
+        assert(ctap_uvm_write(&w,up,pin,remote));
+        CborValue array,entry,method,key,matcher;
+        assert(cbor_read_document(out,w.length,&array) && array.major==4 && array.value==(up && pin ? 2 : 1));
+        const uint8_t *cursor=array.data,*end=out+w.length;
+        for(uint64_t i=0;i<array.value;i++) {
+            assert(cbor_read_next(&cursor,end,&entry) && entry.major==4 && entry.value==3);
+            const uint8_t *item=entry.data;
+            assert(cbor_read_next(&item,end,&method) && cbor_read_next(&item,end,&key) && cbor_read_next(&item,end,&matcher));
+            assert(method.value==(up && i==0 ? 1 : pin ? 0x800 : 0x200));
+            assert(key.value==(remote ? 0x11 : 1) && matcher.value==1);
+        }
+    }
+    puts("PASS UVM: presence/PIN/silent factors and resident/sealed key protection");
+}
 static void check_info(void) {
-    CtapGetInfoProfile p={.make_credential=true,.hmac_secret=true,.user_presence=true,.max_message_size=1024};
+    CtapGetInfoProfile p={.make_credential=true,.hmac_secret=true,.user_presence=true,.max_message_size=CTAP_MESSAGE_CAPACITY};
     uint8_t out[CTAP_GET_INFO_MAX_CBOR_SIZE],unchanged[sizeof(out)]; size_t n=0; CborValue map,v;
     assert(ctap_get_info_encode(&p,out,sizeof(out),&n) && cbor_read_document(out,n,&map));
     assert(!cbor_map_uint(&map,0x1d,&v) && !cbor_map_uint(&map,0x18,&v));
+    assert(!cbor_map_uint(&map,0x1c,&v));
     p.pin_uv_auth=true;p.long_touch_reset=true;
     CtaphidCtapBackend backend;
     assert(ctaphid_ctap_backend_init(&backend,&p));
     assert(!backend.profile.pin_uv_auth && !backend.profile.long_touch_reset);
     assert(ctap_get_info_encode(&p,out,sizeof(out),&n) && cbor_read_document(out,n,&map));
     assert(cbor_map_uint(&map,0x1d,&v) && v.major==0 && v.value==63);
+    assert(cbor_map_uint(&map,0x1f,&v) && v.major==4 && v.value==3);
+    assert(ctap_get_info_encode(&p,out,sizeof(out),&n) && cbor_read_document(out,n,&map));
     assert(cbor_map_uint(&map,0x18,&v) && v.major==7 && v.value==21);
+    assert(!cbor_map_uint(&map,0x1b,&v) && !cbor_map_uint(&map,0x1c,&v));
     const uint8_t *cursor=map.data,*end=map.encoded+map.encoded_length;
     uint64_t previous=0;
     for(uint64_t i=0;i<map.value;i++) {
@@ -105,8 +166,21 @@ static void check_info(void) {
         previous=key.value; assert(cbor_read_next(&cursor,end,&value));
     }
     assert(cursor==end);
+    p.resident_credentials=true;p.third_party_payment=true;p.encrypted_identifiers=true;
+    p.large_blobs=true;p.usb_transport=true;p.firmware_version=66817;p.ed25519=true;
+    assert(ctap_get_info_encode(&p,out,sizeof(out),&n) && cbor_read_document(out,n,&map));
+    assert(cbor_map_uint(&map,0x19,&v) && v.major==2 && v.value==32);
+    assert(cbor_map_uint(&map,0x1e,&v) && v.major==2 && v.value==32);
+    CborValue options;assert(cbor_map_uint(&map,4,&options) && cbor_map_text(&options,"perCredMgmtRO",&v) && v.value==21);
     memcpy(unchanged,out,sizeof(out)); size_t sentinel=99;
     assert(!ctap_get_info_encode(&p,out,1,&sentinel) && sentinel==99 && !memcmp(out,unchanged,sizeof(out)));
+    assert(!cbor_map_uint(&map,0x1b,&v) && !cbor_map_uint(&map,0x1c,&v));
+    CborValue extensions;assert(cbor_map_uint(&map,2,&extensions));
+    const uint8_t *item=extensions.data;
+    for(uint64_t i=0;i<extensions.value;i++) {
+        assert(cbor_read_next(&item,extensions.encoded+extensions.encoded_length,&v));
+        assert(!cbor_text_equal(&v,"pinComplexityPolicy"));
+    }
     puts("PASS GetInfo: PIN-bound maximum/reset fields, full CBOR parsing and bounded-output failure preservation");
 }
-int main(void) { check_wink();check_presence();check_info(); }
+int main(void) { check_wink();check_lock();check_presence();check_uvm();check_info(); }

@@ -1,5 +1,6 @@
 #include "ctap/ctap_make_credential.h"
 #include "ctap/ctap_attestation.h"
+#include "ctap/ctap_pin_protocol.h"
 
 #include <string.h>
 
@@ -53,7 +54,8 @@ static AuthStatus prepare_response_id(void *context, const AuthCredential *crede
         prepared->user_verified, prepared->cred_protect_requested, secret_output, secret_length,
         prepared->cred_blob_requested ? &prepared->cred_blob_stored : NULL,
         prepared->large_blob_requested ? blob_key : NULL,
-        response->min_pin_length ? &response->min_pin_length : NULL,
+        response->min_pin_length && prepared->min_pin_length_requested ? &response->min_pin_length : NULL,
+        prepared->uvm_requested,
         response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length);
     auth_secure_zero(blob_key, sizeof blob_key);
     if (!encoded) return AUTH_CRYPTO_ERROR;
@@ -105,8 +107,8 @@ static uint8_t finish_at(AuthCredentialService *service,
         status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
             prepare_response, &response, credential, public_key);
     } else if(auth_credentials_nonresident_supported(service)) {
-        status=auth_credentials_create_nonresident_algorithm(service,prepared->algorithm,prepared->rp_id_hash,
-            prepared->cred_protect==0U ? 1U : prepared->cred_protect,prepare_response_id,&response,
+        status=auth_credentials_create_nonresident_payment(service,prepared->algorithm,prepared->rp_id_hash,
+            prepared->cred_protect==0U ? 1U : prepared->cred_protect,prepared->metadata.third_party_payment,prepare_response_id,&response,
             credential,workspace->scratch.finish.wire_id,&workspace->scratch.finish.wire_id_length,public_key);
     } else {
         status = auth_credentials_create_protected_algorithm(service, prepared->algorithm, prepared->rp_id_hash,

@@ -14,6 +14,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         (profile->large_blobs && !profile->resident_credentials) ||
         (profile->always_uv && !profile->pin_uv_auth) ||
         (profile->encrypted_identifiers && !profile->pin_uv_auth) ||
+        (profile->third_party_payment && !profile->resident_credentials) ||
         (profile->min_pin_length && (profile->min_pin_length < 4U || profile->min_pin_length > 63U)) ||
         (profile->max_credential_id_length && (profile->max_credential_id_length<AUTH_CREDENTIAL_ID_SIZE ||
             profile->max_credential_id_length>AUTH_CREDENTIAL_ID_MAX_SIZE))) return false;
@@ -32,12 +33,13 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         cbor_write_text(&writer, "FIDO_2_1") &&
         cbor_write_text(&writer, "FIDO_2_3");
     if (profile->hmac_secret) ok = ok && cbor_write_uint(&writer, 0x02U) &&
-        cbor_write_array(&writer, 1U + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U)) &&
-        cbor_write_text(&writer, "hmac-secret");
+        cbor_write_array(&writer, 2U + (profile->third_party_payment ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U)) &&
+        cbor_write_text(&writer, "hmac-secret") && cbor_write_text(&writer, "uvm");
     if (profile->resident_credentials) ok = ok && cbor_write_text(&writer, "credBlob");
     if (profile->large_blobs) ok = ok && cbor_write_text(&writer, "largeBlobKey");
     if (profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "credProtect") && cbor_write_text(&writer, "minPinLength");
     if (profile->hmac_secret && profile->make_credential) ok = ok && cbor_write_text(&writer, "hmac-secret-mc");
+    if (profile->third_party_payment) ok = ok && cbor_write_text(&writer, "thirdPartyPayment");
     ok = ok && cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
         cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, (profile->make_credential ? 4U : 3U) +

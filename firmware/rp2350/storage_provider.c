@@ -495,7 +495,7 @@ static AuthStatus nonresident_metadata(Rp2350StoreProvider *p,const uint8_t *id,
     AuthStatus status=c.sha256(c.context,id,length,out->credential_id);
     if(status==AUTH_OK) {
         out->key=p->workspace->nonresident_key.handle; memcpy(out->rp_id_hash,rp,32);
-        out->algorithm=p->workspace->nonresident_key.algorithm; out->cred_protect=policy;
+        out->algorithm=p->workspace->nonresident_key.algorithm; out->cred_protect=policy&3U; out->third_party_payment=(policy&4U)!=0;
         out->signature_count=p->cache.global.nonresident_counter;
         if(!auth_credential_valid(out)) status=AUTH_BAD_DATA;
     }
@@ -537,7 +537,7 @@ static AuthStatus reserve_nonresident(void *ctx,uint64_t *serial) {
     if(status==AUTH_OK) *serial=p->cache.global.nonresident_issued;
     auth_secure_zero(&g,sizeof(g)); return status;
 }
-static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const uint8_t rp[32],uint8_t policy,
+static AuthStatus create_nonresident_payment(void *ctx,int32_t algorithm,const uint8_t rp[32],uint8_t policy,bool payment,
         AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
     Rp2350StoreProvider *p=ctx;
     if(!p || !rp || !out || !id || !length || !pub || policy<1 || policy>3) return AUTH_INVALID_ARGUMENT;
@@ -560,6 +560,7 @@ static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const
         }
         if(!found) status=AUTH_BAD_DATA;
     }
+    if(payment) policy|=4U;
     if(status==AUTH_OK) status=rp2350_nonresident_seal_create_internal(&p->workspace->nonresident_seal,
         &p->workspace->nonresident_key,rp,policy,reserve_nonresident,p,p->selected_id,&p->workspace->nonresident);
     if(status==AUTH_OK) status=nonresident_metadata(p,p->selected_id,sizeof(p->selected_id),rp,policy,out);
@@ -584,14 +585,14 @@ static AuthStatus counter_nonresident(void *ctx,const uint8_t *id,size_t length,
 }
 static AuthStatus create_nonresident(void *ctx,const uint8_t rp[32],uint8_t policy,
     AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
-    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_ES256,rp,policy,out,id,length,pub);
+    return create_nonresident_payment(ctx,AUTH_COSE_ALG_ES256,rp,policy,false,out,id,length,pub);
 }
 static AuthStatus create_nonresident_ed25519(void *ctx,const uint8_t rp[32],uint8_t policy,
     AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
-    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_EDDSA,rp,policy,out,id,length,pub);
+    return create_nonresident_payment(ctx,AUTH_COSE_ALG_EDDSA,rp,policy,false,out,id,length,pub);
 }
 AuthNonresidentProvider rp2350_store_provider_nonresident_internal(Rp2350StoreProvider *p) {
-    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident,create_nonresident_ed25519};
+    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident,create_nonresident_ed25519,create_nonresident_payment};
 }
 
 /* Never expose the stable plaintext identifiers through a protocol callback. */

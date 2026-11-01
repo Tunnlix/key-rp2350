@@ -51,7 +51,7 @@ bool ctap_attestation_encode_policy_extensions(AuthCredentialService *service,
     const uint8_t aaguid[16], bool omit, const bool *hmac_secret,
     bool user_verified, bool cred_protect_requested,
     const uint8_t *hmac_secret_mc, size_t hmac_secret_mc_length,
-    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length,
+    const bool *cred_blob_stored, const uint8_t *large_blob_key, const uint8_t *min_pin_length, bool uvm,
     uint8_t *output, size_t capacity, size_t *length);
 
 #endif

@@ -61,13 +61,14 @@ static uint8_t entry(AuthCredentialService *service, CtapCredentialManagement *s
             service->secrets.large_blob_key(service->secrets.context, &credential->key, blob_key) != AUTH_OK)) {
             auth_secure_zero(blob_key, sizeof blob_key); return CTAP_STATUS_OTHER;
         }
-        ok = cbor_write_map(&writer, (first ? 5U : 4U) + (include_blob_key ? 1U : 0U)) && cbor_write_uint(&writer, 6U) &&
+        ok = cbor_write_map(&writer, (first ? 5U : 4U) + (include_blob_key ? 1U : 0U) + (auth_credentials_payment_supported(service) ? 1U : 0U)) && cbor_write_uint(&writer, 6U) &&
             ctap_user_entity_write(&writer, credential, true) && cbor_write_uint(&writer, 7U) &&
             ctap_credential_descriptor_write(&writer, credential->credential_id) && cbor_write_uint(&writer, 8U) &&
             ctap_public_key_write_algorithm(&writer, credential->algorithm, key);
         if (first) ok = ok && cbor_write_uint(&writer, 9U) && cbor_write_uint(&writer, state->count);
         ok = ok && cbor_write_uint(&writer, 10U) && cbor_write_uint(&writer, credential->cred_protect);
         if (include_blob_key) ok = ok && cbor_write_uint(&writer, 11U) && cbor_write_bytes(&writer, blob_key, sizeof blob_key);
+        if (auth_credentials_payment_supported(service)) ok = ok && cbor_write_uint(&writer, 12U) && cbor_write_bool(&writer, credential->third_party_payment);
         auth_secure_zero(blob_key, sizeof blob_key);
     }
     if (!ok || writer.length > capacity) return CTAP_STATUS_OTHER;

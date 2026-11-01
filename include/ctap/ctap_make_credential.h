@@ -12,7 +12,7 @@ typedef struct {
     uint8_t client_data_hash[32], rp_id_hash[32], user_id[64];
     size_t user_id_length;
     int32_t algorithm;
-    bool credential_excluded, omit_attestation;
+    bool credential_excluded, omit_attestation, enterprise_attestation;
     bool hmac_secret_requested;
     CtapHmacSecret hmac_secret_mc;
     CtapClientPin *pin;
@@ -23,6 +23,7 @@ typedef struct {
     bool cred_blob_requested, cred_blob_stored, large_blob_requested;
     bool discoverable;
     bool min_pin_length_requested;
+    bool uvm_requested;
     AuthCredential metadata;
 } CtapMakeCredential;
 
@@ -33,7 +34,7 @@ typedef struct {
     union {
         struct {
             AuthCredential credential;
-            uint8_t public_key[65], encoded[576U + AUTH_CREDENTIAL_ID_MAX_SIZE - AUTH_CREDENTIAL_ID_SIZE];
+            uint8_t public_key[65], encoded[CTAP_MAX_RESPONSE_SIZE-1U];
             uint8_t wire_id[AUTH_CREDENTIAL_ID_MAX_SIZE];
             size_t wire_id_length;
         } finish;
@@ -55,7 +56,7 @@ typedef struct {
  * Unsupported extensions/options are ignored.
  * This entry point has no PIN binding; the with_pin variant adds protocol 2
  * authorization, credProtect and discoverable credentials. Enterprise attestation
- * remains unsupported. */
+ * requires a provisioned provider, enabled identity-bound policy and a permitted RP. */
 uint8_t ctap_make_credential_prepare(AuthCredentialService *service, CtapMakeCredentialWorkspace *workspace,
     const uint8_t *parameters, size_t length, CtapMakeCredential *prepared);
 /* Authorize against the injected clock after validating all descriptors. The

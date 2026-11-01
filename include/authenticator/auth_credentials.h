@@ -93,6 +93,10 @@ typedef AuthStatus (*AuthCredentialPrepare)(void *context, const AuthCredential 
     const uint8_t public_key[65]);
 typedef AuthStatus (*AuthCredentialPrepareId)(void *,const AuthCredential *,
     const uint8_t *,size_t,const uint8_t public_key[65]);
+bool auth_credentials_payment_supported(const AuthCredentialService *);
+AuthStatus auth_credentials_create_nonresident_payment(AuthCredentialService *, int32_t,
+    const uint8_t rp_hash[32], uint8_t, bool payment, AuthCredentialPrepareId, void *, AuthCredential *,
+    uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE], size_t *, uint8_t public_key[65]);
 AuthStatus auth_credentials_create_nonresident_algorithm(AuthCredentialService *, int32_t,
     const uint8_t rp_hash[32], uint8_t, AuthCredentialPrepareId, void *, AuthCredential *,
     uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE], size_t *, uint8_t public_key[65]);

@@ -25,8 +25,8 @@ AuthStatus rp2350_store_metadata_encode(const AuthCredential *c,Rp2350StoreHash 
     size_t sizes[]={c->user_id_length,c->rp_id_length,c->rp_name_length,c->user_name_length,c->user_display_name_length};
     size_t total=128+c->cred_blob_length; for(size_t i=0;i<5;i++) total+=sizes[i];
     if(capacity<total) return AUTH_CAPACITY;
-    memset(out,0,128); store_put16(out,(c->cred_blob_length || c->large_blob_key) ? 2U : 1U);
-    out[2]=(c->discoverable ? 1U : 0U) | (c->large_blob_key ? 2U : 0U); out[22]=c->cred_blob_length; out[3]=c->cred_protect;
+    memset(out,0,128); store_put16(out,c->third_party_payment ? 3U : (c->cred_blob_length || c->large_blob_key) ? 2U : 1U);
+    out[2]=(c->discoverable ? 1U : 0U) | (c->large_blob_key ? 2U : 0U) | (c->third_party_payment ? 4U : 0U); out[22]=c->cred_blob_length; out[3]=c->cred_protect;
     store_put32(out+4,(uint32_t)c->algorithm); store_put32(out+8,c->signature_count);
     for(size_t i=0;i<5;i++) store_put16(out+12+2*i,(uint16_t)sizes[i]);
     store_put64(out+24,c->creation_order); memcpy(out+32,c->credential_id,32);
@@ -41,12 +41,12 @@ AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHa
     auth_secure_zero(c,sizeof(*c));
     if (!in) return AUTH_INVALID_ARGUMENT;
     if(!supported()) return AUTH_UNSUPPORTED;
-    if(n<128 || n>RP2350_STORE_METADATA_MAX || (store_u16(in)!=1 && store_u16(in)!=2) || (in[2]&~3U) ||
+    if(n<128 || n>RP2350_STORE_METADATA_MAX || (store_u16(in)!=1 && store_u16(in)!=2 && store_u16(in)!=3) || (in[2]&~(store_u16(in)==3 ? 7U : 3U)) ||
         in[22]>32 || in[23] || (store_u16(in)==1 && ((in[2]&2U) || in[22])) || (store_u32(in+4)!=UINT32_C(0xfffffff9) && store_u32(in+4)!=UINT32_C(0xfffffff8))) return AUTH_BAD_DATA;
     size_t limits[]={64,AUTH_RP_ID_MAX_SIZE,64,64,64}, sizes[5],total=128+in[22];
     for(size_t i=0;i<5;i++) { sizes[i]=store_u16(in+12+2*i); if(sizes[i]>limits[i]) return AUTH_BAD_DATA; total+=sizes[i]; }
     if(total!=n) return AUTH_BAD_DATA;
-    c->cred_blob_length=in[22]; c->large_blob_key=(in[2]&2U)!=0;
+    c->third_party_payment=(in[2]&4U)!=0; c->cred_blob_length=in[22]; c->large_blob_key=(in[2]&2U)!=0;
     c->discoverable=(in[2]&1U)!=0; c->cred_protect=in[3]; c->algorithm=store_u32(in+4)==UINT32_C(0xfffffff9) ? AUTH_COSE_ALG_ES256 : AUTH_COSE_ALG_EDDSA;
     c->signature_count=store_u32(in+8); c->creation_order=store_u64(in+24);
     c->user_id_length=(uint8_t)sizes[0]; c->rp_id_length=(uint16_t)sizes[1];

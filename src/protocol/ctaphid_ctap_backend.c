@@ -18,6 +18,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.resident_credentials = backend->profile.large_blobs = false;
     backend->profile.always_uv = backend->profile.force_pin_change = false;
     backend->profile.long_touch_reset = false;
+    backend->profile.third_party_payment = false;
     backend->profile.encrypted_identifiers = false;
     backend->profile.min_pin_length = 4U;
     backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
@@ -322,6 +323,7 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
         backend->profile.always_uv = backend->pin->always_uv;
         backend->profile.force_pin_change = backend->pin->force_change;
         backend->profile.long_touch_reset = backend->pin->long_touch_reset;
+        backend->profile.third_party_payment = auth_credentials_payment_supported(backend->credentials);
         backend->profile.encrypted_identifiers = false;
         if (status == CTAP_STATUS_OK && backend->pin->persistent_token_present && backend->pin->storage.encrypted_identifiers != NULL) {
             uint8_t encrypted[64];

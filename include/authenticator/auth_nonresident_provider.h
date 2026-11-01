@@ -24,5 +24,9 @@ typedef struct {
     /* Optional Ed25519 creation; all other callbacks handle both algorithms. */
     AuthStatus (*create_ed25519)(void *,const uint8_t rp_hash[32],uint8_t cred_protect,
         AuthCredential *,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *,uint8_t public_key[65]);
+    /* Optional payment attribute, authenticated inside the sealed ID. */
+    AuthStatus (*create_payment)(void *, int32_t algorithm, const uint8_t rp_hash[32],
+        uint8_t cred_protect, bool third_party_payment, AuthCredential *,
+        uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE], size_t *, uint8_t public_key[65]);
 } AuthNonresidentProvider;
 #endif
