@@ -18,6 +18,15 @@ static uint32_t report_channel(const uint8_t *report)
         ((uint32_t)report[2] << 8) | report[3];
 }
 
+static void expire_lock(CtaphidDevice *device, uint32_t now_ms)
+{
+    if (device->lock_channel_id != 0U &&
+        (uint32_t)(now_ms - device->lock_started_ms) >= device->lock_duration_ms) {
+        device->lock_channel_id = 0U;
+        device->lock_duration_ms = 0U;
+    }
+}
+
 /* Transaction ownership is independent of reception and the transport slot. */
 static void release_transaction(CtaphidDevice *device)
 {
@@ -181,6 +190,7 @@ CtaphidDeviceResult ctaphid_device_receive_report(CtaphidDevice *device,
         return CTAPHID_DEVICE_INVALID_ARGUMENT;
     }
     if (length != CTAPHID_REPORT_SIZE) return CTAPHID_DEVICE_INVALID_REPORT_LENGTH;
+    expire_lock(device, now_ms);
     CtaphidDeviceResult expired = expire_reception(device, now_ms);
     if (expired != CTAPHID_DEVICE_OK) return expired;
 
@@ -202,6 +212,10 @@ CtaphidDeviceResult ctaphid_device_receive_report(CtaphidDevice *device,
         (cid != CTAPHID_BROADCAST_CHANNEL_ID &&
         !ctaphid_channels_is_allocated(&device->channels, cid))) {
         return report_error(device, cid, ERR_INVALID_CHANNEL);
+    }
+
+    if (device->lock_channel_id != 0U && cid != device->lock_channel_id) {
+        return report_error(device, cid, ERR_CHANNEL_BUSY);
     }
 
     /* Valid same-CID INIT is the only initial request that can resynchronize
@@ -263,6 +277,19 @@ static uint8_t dispatch_error(CtaphidDispatchResult result)
 
 static CtaphidDeviceResult process_request(CtaphidDevice *device, uint32_t now_ms)
 {
+    if (device->reassembler.command == CTAPHID_COMMAND_LOCK) {
+        uint8_t error;
+        if (device->reassembler.received_length != 1U) error = ERR_INVALID_LEN;
+        else if (device->reassembler.buffer[0] > 10U) error = ERR_INVALID_PAR;
+        else {
+            uint32_t duration = (uint32_t)device->reassembler.buffer[0] * 1000U;
+            device->lock_channel_id = duration != 0U ? device->active_channel_id : 0U;
+            device->lock_started_ms = now_ms;
+            device->lock_duration_ms = duration;
+            return queue_response(device, CTAPHID_COMMAND_LOCK, NULL, 0U);
+        }
+        return queue_response(device, CTAPHID_COMMAND_ERROR, &error, 1U);
+    }
     if (device->reassembler.command == CTAPHID_COMMAND_INIT && device->reassembler.received_length == 8U &&
         device->active_channel_id != CTAPHID_BROADCAST_CHANNEL_ID && device->config.resync_channel != NULL)
         device->config.resync_channel(device->config.cbor_context, device->active_channel_id);
@@ -387,6 +414,7 @@ static CtaphidDeviceResult submit_queued_reports(CtaphidDevice *device, uint32_t
 CtaphidDeviceResult ctaphid_device_poll(CtaphidDevice *device, uint32_t now_ms)
 {
     if (device == NULL || device->config.submit_report == NULL) return CTAPHID_DEVICE_INVALID_ARGUMENT;
+    expire_lock(device, now_ms);
     if (device->in_flight && (uint32_t)(now_ms - device->flight_started_ms) >= CTAPHID_SEND_TIMEOUT_MS) {
         device->config.abort_report(device->config.transport_context, device->flight_id);
         return ctaphid_device_report_sent(device, device->flight_id, false);

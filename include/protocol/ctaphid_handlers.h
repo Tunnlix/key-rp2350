@@ -10,7 +10,7 @@
  * WINK sends an empty reply after the caller's platform identification action.
  * These handlers return serialization/transport status without modifying the
  * request. CBOR execution and cancellation belong to the device/backend;
- * optional LOCK remains unsupported.
+ * stateful LOCK ownership belongs to ctaphid_device, outside these handlers.
  */
 CtaphidResponseResult ctaphid_handle_init(
     const CtaphidReassembler *message,

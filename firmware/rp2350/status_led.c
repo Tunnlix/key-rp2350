@@ -1,4 +1,5 @@
 #include "status_led.h"
+#include "led_wink.h"
 #include "pico/status_led.h"
 #include "pico/time.h"
 
@@ -9,6 +10,7 @@ static struct {
     Rp2350Fault fault;
     uint8_t fault_detail, fault_status;
     uint32_t fault_ms;
+    Rp2350Wink wink;
 } led;
 
 void rp2350_status_led_init(void) {
@@ -16,6 +18,7 @@ void rp2350_status_led_init(void) {
     led.rgb = led.initialized && colored_status_led_supported();
     led.shown = led.success = false;
     led.fault = 0;
+    led.wink=(Rp2350Wink){0};
     led.fault_detail = led.fault_status = 0;
     led.last_write_us = time_us_64();
     /* The XIAO user LED remains available even if RGB initialization fails. */
@@ -27,6 +30,9 @@ void rp2350_status_led_init(void) {
 void rp2350_status_led_success(uint32_t now_ms) {
     led.success = true;
     led.success_ms = now_ms;
+}
+void rp2350_status_led_wink(uint32_t now_ms) {
+    if(!led.fault) rp2350_wink_begin(&led.wink,now_ms);
 }
 void rp2350_status_led_fault(Rp2350Fault fault, uint8_t detail,
         uint32_t status, uint32_t now_ms) {
@@ -41,6 +47,7 @@ void rp2350_status_led_fault(Rp2350Fault fault, uint8_t detail,
 void rp2350_status_led_poll(Rp2350LedState state, uint32_t now_ms) {
     uint32_t color = 0;
     bool on = false;
+    uint32_t wink_color=rp2350_wink_color(&led.wink,state==RP2350_LED_IDLE,now_ms);
     if(led.success && (uint32_t)(now_ms - led.success_ms) >= 250U) led.success = false;
     if(state != RP2350_LED_IDLE) led.success = false;
 
@@ -74,8 +81,8 @@ void rp2350_status_led_poll(Rp2350LedState state, uint32_t now_ms) {
         color = 0x000010U;
         break;
     case RP2350_LED_IDLE:
-        on = led.success || now_ms % 3000U < 100U;
-        color = led.success ? 0x001000U : 0x000002U;
+        on = led.wink.active ? wink_color!=0U : led.success || now_ms % 3000U < 100U;
+        color = led.wink.active ? wink_color : led.success ? 0x001000U : 0x000002U;
         break;
     }
     if(!on) color = 0;
@@ -100,6 +107,7 @@ void rp2350_status_led_poll(Rp2350LedState state, uint32_t now_ms) {
 void rp2350_status_led_close(void) {
     if(led.initialized) status_led_deinit();
     led.initialized = led.rgb = led.success = false;
+    led.wink=(Rp2350Wink){0};
     gpio_init(PICO_DEFAULT_LED_PIN);
     gpio_put(PICO_DEFAULT_LED_PIN, true);
     gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
