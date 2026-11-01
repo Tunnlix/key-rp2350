@@ -181,8 +181,8 @@ Building source does not imply release or completed hardware acceptance.
 
 ES256/P-256 and Ed25519 work with PIN protocols 1 and 2. Legacy `getPinToken`
 remains available for older clients. OpenSSH uses these through `ecdsa-sk` and
-`ed25519-sk`. Version 1.5.0 passed the FIDO Conformance Tools 1.9.3 / CTAP2.3
-run with 231 passes and zero failures; see the [testing status](../README.md#conformance-testing).
+`ed25519-sk`. See the [testing status](../README.md#tested-on-real-hardware) for
+the recorded conformance result and configuration.
 
 The device stores 32 discoverable credentials. Sealed non-discoverable credential
 IDs are held by clients and do not consume those slots. Credential management
@@ -215,15 +215,11 @@ an interrupted write from corruption of an acknowledged record, including
 partial page programming. Root capsules and typed credential records retain
 their previous encodings. Some frame sizes increase by one page.
 
-After the first v1.4 storage write, v1.3 cannot read the mixed/new envelopes.
-Keep compatible firmware available; do not downgrade a used v1.4 key to v1.3.
-A/B trial startup validates storage read-only and makes no format change before
-ROM confirmation, preserving pre-confirmation rollback to the stable image.
-
-Version 1.5.0 retains the existing PIN encoding while no RP allowlist is stored.
-Configuring an RP allowlist writes an extended PIN record. Older firmware rejects
-that record, so downgrading after configuring the list is unsupported. Resetting
-the list does not establish compatibility with older firmware journals.
+Storage formats evolve with supported algorithms, policy and credential attributes.
+Keep compatible firmware available. A/B trial startup validates storage read-only
+and makes no format change before ROM confirmation, preserving pre-confirmation
+rollback to the stable image. Clearing a policy does not make earlier journal
+records readable by older firmware.
 
 Downgrading to firmware that cannot decode stored algorithms, blob metadata or
 PIN policies can prevent recovery. Use compatible firmware or intentionally
@@ -231,3 +227,46 @@ reset and re-enroll. Product renaming does not change storage derivation labels.
 
 See [status indications](indicators.md), [device identity](device-identity.md)
 and [security limitations](../.github/SECURITY.md).
+
+## Storage and validation scope
+
+PIN-policy, persistent-token, enterprise and payment records use versioned
+formats. The current firmware reads older records, but older firmware rejects
+formats it cannot interpret. Downgrade after new-format records are created is
+unsupported. Legacy experimental complexity flags remain readable without
+composition enforcement; an existing forced-PIN-change requirement remains in
+force until PIN change or reset.
+
+Both A/B firmware slots share credential and blob storage. Trial confirmation
+covers startup and USB enumeration, not every runtime path. Storage-encryption
+usage lifetime limits are not enforced. Protocol and simulated recovery checks
+do not establish endurance, environmental entropy qualification or resistance to
+physical extraction and flash replay.
+
+USB identity `1209:0001` is for private testing. Use an allocated identity before
+distributing devices. A model AAGUID or an attestation certificate does not imply
+FIDO certification. Optional attestation identities and their provisioning are
+covered in the [attestation guide](enterprise-attestation.md).
+
+## Conformance test configuration
+
+The recorded full run used FIDO Conformance Tools 1.9.3,
+the CTAP2.3 module and Security Enterprise Profile on the XIAO RP2350. It recorded
+252 passes and zero failures for the signed attestation lab configuration.
+
+That image uses separate ordinary and enterprise attestation identities,
+2048-byte messages and `CTAP_EXPERIMENTAL_PIN2_OVERSIZE_POLICY=ON`. The option
+changes the rejection code for certain oversized protocol-2 setPIN requests from
+`INVALID_PARAMETER` to `PIN_POLICY_VIOLATION`; it does not accept those requests.
+Ordinary builds default it to OFF and contain neither attestation identity.
+The full-run result therefore applies to the tested configuration.
+
+HID LOCK cases P-13/P-14 are skipped because the tool gates them on a legacy
+capability flag that CTAP 2.3 reserves. Equivalent lock/release, channel-exclusion,
+expiry and duration-rejection checks passed directly on hardware without setting
+the reserved bit. Generic P-4/P-5 ran and passed, including fresh-IV, stable-value
+and reset-change checks for both encrypted GetInfo fields.
+
+The matching lab metadata and raw reports are retained locally with the signed
+image hashes. They are not public default-build metadata or a production trust
+identity. FIDO certification has not been obtained.

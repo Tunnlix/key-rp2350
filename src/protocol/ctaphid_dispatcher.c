@@ -95,7 +95,8 @@ CtaphidDispatchResult ctaphid_dispatch_message_with_capabilities(
         if (message->buffer[0] > CTAPHID_MAX_LOCK_SECONDS) {
             return CTAPHID_DISPATCH_INVALID_PARAMETER;
         }
-        /* Optional LOCK is not implemented: never acknowledge a logging stub. */
+        /* Stateful LOCK is handled by ctaphid_device before this stateless
+         * dispatcher. Direct dispatch cannot acquire channel ownership. */
         return CTAPHID_DISPATCH_UNSUPPORTED_COMMAND;
 
     case CTAPHID_COMMAND_WINK:

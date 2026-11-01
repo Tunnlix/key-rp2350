@@ -88,6 +88,10 @@ typedef struct {
     CtaphidReassembler reassembler;
     CtaphidDevicePhase phase;
     uint32_t active_channel_id;
+    /* Optional CTAPHID_LOCK ownership survives individual transactions. */
+    uint32_t lock_channel_id;
+    uint32_t lock_started_ms;
+    uint32_t lock_duration_ms;
     uint64_t transaction_id;
     uint64_t next_transfer_id;
     bool cbor_running;

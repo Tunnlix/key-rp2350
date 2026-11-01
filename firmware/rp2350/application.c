@@ -1,3 +1,4 @@
+#include "enterprise_attestation.h"
 #include "application.h"
 #include "storage_key_record_internal.h"
 #include "ctap_device_version.h"
@@ -89,6 +90,7 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
         !auth_credentials_configure_nonresident(&a->service,&nonresident) ||
         !ctap_client_pin_init(&a->pin,&a->service,&pins)) { status=AUTH_CRYPTO_ERROR; goto failed; }
     status=rp2350_crypto_activate_internal(crypto); if(status!=AUTH_OK) goto failed;
+    if(!rp2350_enterprise_configure_internal(&a->service,crypto) || !rp2350_batch_configure_internal(&a->service,crypto)) { status=AUTH_BAD_DATA; goto failed; }
     CtapGetInfoProfile profile={.max_message_size=CTAP_MESSAGE_CAPACITY,.user_presence=true,
         .firmware_version=CTAP_DEVICE_FIRMWARE_VERSION,.usb_transport=io->usb_transport};
     memcpy(profile.aaguid,aaguid,16);
@@ -99,7 +101,8 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
         !ctaphid_ctap_backend_configure_pin(&a->backend,&a->pin)) { status=AUTH_BAD_DATA; goto failed; }
     CtaphidDeviceConfig device={.submit_report=io->submit,.abort_report=io->abort,.transport_context=io->context,
         .asynchronous_transport=io->asynchronous,.start_cbor=start,.abort_cbor=abort_operation,
-        .resync_channel=resync,.cbor_context=a,.cancel_requested=io->cancel_requested};
+        .resync_channel=resync,.cbor_context=a,.cancel_requested=io->cancel_requested,
+        .wink_action=io->wink,.wink_context=io->context};
     if(ctaphid_device_init(&a->device,&device)!=CTAPHID_DEVICE_OK) { status=AUTH_BAD_DATA; goto failed; }
     uint32_t now=io->now_ms(io->context);
     rp2350_presence_init(&a->presence,io->pressed(io->context),now);
@@ -144,7 +147,8 @@ CtaphidDeviceResult rp2350_application_poll(Rp2350Application *a) {
      * reinterpret an already-held contact as fresh presence. */
     if(a->backend.pending && a->backend.awaiting_presence && a->backend.presence_started) {
         if(a->presence.operation_id!=a->backend.operation_id)
-            rp2350_presence_begin(&a->presence,a->backend.operation_id,now);
+            rp2350_presence_begin_hold(&a->presence,a->backend.operation_id,now,
+                a->backend.awaiting_reset && a->pin.long_touch_reset ? 5000U : 0U);
     } else rp2350_presence_abort(&a->presence,a->presence.operation_id);
     if(event) (void)ctaphid_ctap_backend_signal_presence(&a->backend,event,true,now);
     result=rp2350_runtime_poll_internal(&a->runtime,&a->device,now);

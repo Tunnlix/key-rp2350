@@ -17,6 +17,10 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
     backend->profile.resident_credentials = backend->profile.large_blobs = false;
     backend->profile.always_uv = backend->profile.force_pin_change = false;
+    backend->profile.long_touch_reset = false;
+    backend->profile.enterprise_capable = backend->profile.enterprise_enabled = false;
+    backend->profile.third_party_payment = false;
+    backend->profile.encrypted_identifiers = false;
     backend->profile.min_pin_length = 4U;
     backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
@@ -56,6 +60,9 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
     backend->profile.pin_set = pin->pin_set;
     backend->profile.min_pin_length = pin->min_length;
     backend->profile.always_uv = pin->always_uv; backend->profile.force_pin_change = pin->force_change;
+    backend->profile.long_touch_reset = pin->long_touch_reset;
+    backend->profile.enterprise_capable = auth_enterprise_valid(&pin->service->enterprise);
+    backend->profile.enterprise_enabled = ctap_client_pin_enterprise_enabled(pin);
     backend->profile.resident_credentials = auth_credentials_resident_supported(backend->credentials);
     return true;
 }
@@ -314,9 +321,26 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
     }
     if (backend->awaiting_get_info) {
         uint8_t status = ctap_client_pin_status(backend->pin, &backend->profile.pin_set);
+        if (status == CTAP_STATUS_OK) status = ctap_client_pin_ensure_identifier_token(backend->pin);
         backend->profile.min_pin_length = backend->pin->min_length;
         backend->profile.always_uv = backend->pin->always_uv;
         backend->profile.force_pin_change = backend->pin->force_change;
+        backend->profile.long_touch_reset = backend->pin->long_touch_reset;
+        backend->profile.enterprise_capable = auth_enterprise_valid(&backend->credentials->enterprise);
+        backend->profile.enterprise_enabled = ctap_client_pin_enterprise_enabled(backend->pin);
+        backend->profile.third_party_payment = auth_credentials_payment_supported(backend->credentials);
+        backend->profile.encrypted_identifiers = false;
+        if (status == CTAP_STATUS_OK && backend->pin->persistent_token_present && backend->pin->storage.encrypted_identifiers != NULL) {
+            uint8_t encrypted[64];
+            if (backend->pin->storage.encrypted_identifiers(backend->pin->storage.context,
+                    backend->pin->persistent_token, encrypted) != AUTH_OK) status = CTAP_STATUS_OTHER;
+            else {
+                memcpy(backend->profile.encrypted_identifier, encrypted, 32U);
+                memcpy(backend->profile.encrypted_store_state, encrypted + 32U, 32U);
+                backend->profile.encrypted_identifiers = true;
+            }
+            auth_secure_zero(encrypted, sizeof encrypted);
+        }
         if (status == CTAP_STATUS_OK && backend->profile.resident_credentials) {
             size_t total = 0U;
             const AuthStorage *storage = &backend->credentials->storage;
@@ -368,8 +392,7 @@ CtaphidDeviceResult ctaphid_ctap_backend_poll(CtaphidCtapBackend *backend,
     ctap_assertion_sequence_poll(&backend->assertion_sequence, now_ms);
     /* Discard the authenticated snapshot as soon as its token expires (§6). */
     if (backend->management.kind != 0U &&
-        (backend->pin == NULL || !backend->pin->token_active ||
-         backend->management.token_generation != backend->pin->token_generation ||
+        (!ctap_client_pin_management_active(backend->pin, backend->management.persistent_authorization, backend->management.token_generation) ||
          (uint32_t)(now_ms - backend->management.last_call_ms) > 30000U))
         ctap_credential_management_clear(&backend->management);
     if (backend->blobs.expected_length && (uint32_t)(now_ms - backend->blobs.last_call_ms) > 30000U)

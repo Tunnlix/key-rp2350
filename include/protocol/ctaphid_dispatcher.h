@@ -41,7 +41,7 @@ typedef enum {
  * so retrying dispatch must not resend a partial response.
  * INIT/PING/WINK and MSG rejection require send_report; transport_context is
  * passed through unchanged and may be NULL. CBOR execution and CANCEL belong
- * to the device/backend; optional LOCK is unsupported.
+ * to the device/backend; stateful LOCK ownership belongs to ctaphid_device.
  * channels is borrowed device-owned allocation state and must not be NULL.
  * Broadcast INIT allocates a CID; existing-channel INIT preserves that CID and
  * the allocated range. Other requests require an allocated CID. Allocation

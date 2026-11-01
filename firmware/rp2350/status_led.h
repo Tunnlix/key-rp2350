@@ -24,6 +24,7 @@ typedef enum {
 
 void rp2350_status_led_init(void);
 void rp2350_status_led_success(uint32_t now_ms);
+void rp2350_status_led_wink(uint32_t now_ms);
 /* Retain the first nonsecret fault code in RAM; never write diagnostics to flash. */
 void rp2350_status_led_fault(Rp2350Fault fault, uint8_t detail,
     uint32_t status, uint32_t now_ms);

@@ -50,4 +50,5 @@ AuthSecretCrypto rp2350_secret_interface(Rp2350Crypto *);
 void rp2350_crypto_invalidate_internal(Rp2350Crypto *);
 AuthStatus rp2350_crypto_stage_epoch_internal(Rp2350Crypto *,const uint8_t[24],uint64_t);
 AuthStatus rp2350_crypto_activate_internal(Rp2350Crypto *);
+AuthStatus rp2350_crypto_sign_attestation_internal(Rp2350Crypto *,const uint8_t scalar[32],const uint8_t digest[32],uint8_t signature[72],size_t *);
 #endif

@@ -13,6 +13,10 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         (profile->resident_credentials && !profile->pin_uv_auth) ||
         (profile->large_blobs && !profile->resident_credentials) ||
         (profile->always_uv && !profile->pin_uv_auth) ||
+        (profile->enterprise_capable && !profile->pin_uv_auth) ||
+        (profile->enterprise_enabled && !profile->enterprise_capable) ||
+        (profile->encrypted_identifiers && !profile->pin_uv_auth) ||
+        (profile->third_party_payment && !profile->resident_credentials) ||
         (profile->min_pin_length && (profile->min_pin_length < 4U || profile->min_pin_length > 63U)) ||
         (profile->max_credential_id_length && (profile->max_credential_id_length<AUTH_CREDENTIAL_ID_SIZE ||
             profile->max_credential_id_length>AUTH_CREDENTIAL_ID_MAX_SIZE))) return false;
@@ -22,7 +26,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     cbor_writer_init(&writer, encoded, sizeof encoded);
     bool ok = cbor_write_map(&writer, 9U + (profile->large_blobs ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 3U : 0U) +
         (profile->usb_transport ? 1U : 0U) + (profile->firmware_version ? 1U : 0U) + (profile->pin_uv_auth ? 1U : 0U) +
-        (profile->resident_credentials ? 1U : 0U)) &&
+        (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->encrypted_identifiers ? 2U : 0U) + (profile->usb_transport && profile->pin_uv_auth ? 1U : 0U)) &&
         /* Integer map keys are in increasing canonical order. */
         /* Older clients require 2.0 discovery even when newer CTAP2 versions
          * are understood. PIN protocols 1/2 are supported; CTAP1 is not. */
@@ -31,18 +35,20 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         cbor_write_text(&writer, "FIDO_2_1") &&
         cbor_write_text(&writer, "FIDO_2_3");
     if (profile->hmac_secret) ok = ok && cbor_write_uint(&writer, 0x02U) &&
-        cbor_write_array(&writer, 1U + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U)) &&
-        cbor_write_text(&writer, "hmac-secret");
+        cbor_write_array(&writer, 2U + (profile->third_party_payment ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U)) &&
+        cbor_write_text(&writer, "hmac-secret") && cbor_write_text(&writer, "uvm");
     if (profile->resident_credentials) ok = ok && cbor_write_text(&writer, "credBlob");
     if (profile->large_blobs) ok = ok && cbor_write_text(&writer, "largeBlobKey");
     if (profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "credProtect") && cbor_write_text(&writer, "minPinLength");
     if (profile->hmac_secret && profile->make_credential) ok = ok && cbor_write_text(&writer, "hmac-secret-mc");
+    if (profile->third_party_payment) ok = ok && cbor_write_text(&writer, "thirdPartyPayment");
     ok = ok && cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
-        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, (profile->make_credential ? 4U : 3U) +
-            (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 5U : 0U) + (profile->resident_credentials ? 1U : 0U)) &&
+        cbor_write_uint(&writer, 0x04U) && cbor_write_map(&writer, (profile->make_credential ? 4U : 3U) + (profile->enterprise_capable ? 1U : 0U) +
+            (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 5U : 0U) + (profile->resident_credentials ? 2U : 0U)) &&
         /* String keys sort by length, then bytes: rk, up, plat.
          * Do not use uv=false/clientPin=false: those imply supported but unset. */
+        (!profile->enterprise_capable || (cbor_write_text(&writer, "ep") && cbor_write_bool(&writer, profile->enterprise_enabled))) &&
         cbor_write_text(&writer, "rk") && cbor_write_bool(&writer, profile->resident_credentials) &&
         cbor_write_text(&writer, "up") && cbor_write_bool(&writer, profile->user_presence) &&
         cbor_write_text(&writer, "plat") && cbor_write_bool(&writer, false);
@@ -51,6 +57,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "authnrCfg") && cbor_write_bool(&writer, true) &&
         cbor_write_text(&writer, "clientPin") && cbor_write_bool(&writer, profile->pin_set);
     if (profile->large_blobs) ok = ok && cbor_write_text(&writer, "largeBlobs") && cbor_write_bool(&writer, true);
+    if (profile->resident_credentials) ok = ok && cbor_write_text(&writer, "perCredMgmtRO") && cbor_write_bool(&writer, true);
     if (profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "pinUvAuthToken") && cbor_write_bool(&writer, true) &&
         cbor_write_text(&writer, "setMinPINLength") && cbor_write_bool(&writer, true);
     if (profile->make_credential) ok = ok && cbor_write_text(&writer, "makeCredUvNotRqd") && cbor_write_bool(&writer, !profile->always_uv);
@@ -80,8 +87,14 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->resident_credentials) ok = ok && cbor_write_uint(&writer, 0x14U) &&
         cbor_write_uint(&writer, profile->remaining_credentials);
     ok = ok && cbor_write_uint(&writer, 0x16U) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "packed");
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x18U) && cbor_write_bool(&writer, profile->long_touch_reset);
+    if (profile->encrypted_identifiers) ok = ok && cbor_write_uint(&writer, 0x19U) && cbor_write_bytes(&writer, profile->encrypted_identifier, 32U);
+    if (profile->usb_transport && profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1AU) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "usb");
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1DU) && cbor_write_uint(&writer, 63U);
+    if (profile->encrypted_identifiers) ok = ok && cbor_write_uint(&writer, 0x1EU) && cbor_write_bytes(&writer, profile->encrypted_store_state, 32U);
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1FU) &&
-        cbor_write_array(&writer, 2U) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U);
+        cbor_write_array(&writer, profile->enterprise_capable ? 4U : 3U) &&
+        (!profile->enterprise_capable || cbor_write_uint(&writer, 1U)) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U) && cbor_write_uint(&writer, 4U);
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);
     *output_length = writer.length;

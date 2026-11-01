@@ -25,8 +25,8 @@ AuthStatus rp2350_store_metadata_encode(const AuthCredential *c,Rp2350StoreHash 
     size_t sizes[]={c->user_id_length,c->rp_id_length,c->rp_name_length,c->user_name_length,c->user_display_name_length};
     size_t total=128+c->cred_blob_length; for(size_t i=0;i<5;i++) total+=sizes[i];
     if(capacity<total) return AUTH_CAPACITY;
-    memset(out,0,128); store_put16(out,(c->cred_blob_length || c->large_blob_key) ? 2U : 1U);
-    out[2]=(c->discoverable ? 1U : 0U) | (c->large_blob_key ? 2U : 0U); out[22]=c->cred_blob_length; out[3]=c->cred_protect;
+    memset(out,0,128); store_put16(out,c->third_party_payment ? 3U : (c->cred_blob_length || c->large_blob_key) ? 2U : 1U);
+    out[2]=(c->discoverable ? 1U : 0U) | (c->large_blob_key ? 2U : 0U) | (c->third_party_payment ? 4U : 0U); out[22]=c->cred_blob_length; out[3]=c->cred_protect;
     store_put32(out+4,(uint32_t)c->algorithm); store_put32(out+8,c->signature_count);
     for(size_t i=0;i<5;i++) store_put16(out+12+2*i,(uint16_t)sizes[i]);
     store_put64(out+24,c->creation_order); memcpy(out+32,c->credential_id,32);
@@ -41,12 +41,12 @@ AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHa
     auth_secure_zero(c,sizeof(*c));
     if (!in) return AUTH_INVALID_ARGUMENT;
     if(!supported()) return AUTH_UNSUPPORTED;
-    if(n<128 || n>RP2350_STORE_METADATA_MAX || (store_u16(in)!=1 && store_u16(in)!=2) || (in[2]&~3U) ||
+    if(n<128 || n>RP2350_STORE_METADATA_MAX || (store_u16(in)!=1 && store_u16(in)!=2 && store_u16(in)!=3) || (in[2]&~(store_u16(in)==3 ? 7U : 3U)) ||
         in[22]>32 || in[23] || (store_u16(in)==1 && ((in[2]&2U) || in[22])) || (store_u32(in+4)!=UINT32_C(0xfffffff9) && store_u32(in+4)!=UINT32_C(0xfffffff8))) return AUTH_BAD_DATA;
     size_t limits[]={64,AUTH_RP_ID_MAX_SIZE,64,64,64}, sizes[5],total=128+in[22];
     for(size_t i=0;i<5;i++) { sizes[i]=store_u16(in+12+2*i); if(sizes[i]>limits[i]) return AUTH_BAD_DATA; total+=sizes[i]; }
     if(total!=n) return AUTH_BAD_DATA;
-    c->cred_blob_length=in[22]; c->large_blob_key=(in[2]&2U)!=0;
+    c->third_party_payment=(in[2]&4U)!=0; c->cred_blob_length=in[22]; c->large_blob_key=(in[2]&2U)!=0;
     c->discoverable=(in[2]&1U)!=0; c->cred_protect=in[3]; c->algorithm=store_u32(in+4)==UINT32_C(0xfffffff9) ? AUTH_COSE_ALG_ES256 : AUTH_COSE_ALG_EDDSA;
     c->signature_count=store_u32(in+8); c->creation_order=store_u64(in+24);
     c->user_id_length=(uint8_t)sizes[0]; c->rp_id_length=(uint16_t)sizes[1];
@@ -60,31 +60,43 @@ AuthStatus rp2350_store_metadata_decode(const uint8_t *in,size_t n,Rp2350StoreHa
     return status;
 }
 size_t rp2350_store_pin_size(const AuthPinRecord *p) {
-    return p->min_length_rp_count ? RP2350_STORE_PIN_MAX : 24U;
+    return p->enterprise_enabled ? RP2350_STORE_PIN_MAX : p->persistent_token_present ? RP2350_STORE_PIN_TOKEN_MAX : p->min_length_rp_count || p->long_touch_reset || p->legacy_pin_complexity ? RP2350_STORE_PIN_LEGACY_MAX : 24U;
 }
 AuthStatus rp2350_store_pin_encode(const AuthPinRecord *p,uint8_t out[RP2350_STORE_PIN_MAX]) {
     if(!p || !out) return AUTH_INVALID_ARGUMENT;
     if(!auth_pin_record_valid(p)) return AUTH_BAD_DATA;
-    memset(out,0,RP2350_STORE_PIN_MAX); store_put16(out,p->min_length_rp_count ? 2U : 1U);
+    memset(out,0,RP2350_STORE_PIN_MAX); store_put16(out,p->enterprise_enabled ? 6U : p->persistent_token_present ? 5U : p->legacy_pin_complexity ? 4U : p->long_touch_reset ? 3U : p->min_length_rp_count ? 2U : 1U);
     out[2]=p->set ? 1U : 0U; out[3]=p->code_points; out[4]=p->retries;
-    out[5]=p->min_length; out[6]=(p->always_uv ? 1U : 0U) | (p->force_change ? 2U : 0U);
+    out[5]=p->min_length; out[6]=(p->always_uv ? 1U : 0U) | (p->force_change ? 2U : 0U) | (p->long_touch_reset ? 4U : 0U) | (p->legacy_pin_complexity ? 8U : 0U) | (p->persistent_readonly ? 16U : 0U) | (p->enterprise_enabled ? 32U : 0U) | (p->enterprise_enabled && p->persistent_token_present ? 64U : 0U);
     out[7]=p->min_length_rp_count;
     memcpy(out+8,p->hash,16);
     if(p->min_length_rp_count) memcpy(out+24,p->min_length_rp_hashes,sizeof(p->min_length_rp_hashes));
+    if(p->persistent_token_present) memcpy(out+RP2350_STORE_PIN_LEGACY_MAX,p->persistent_token,32U);
+    if(p->enterprise_enabled) memcpy(out+RP2350_STORE_PIN_TOKEN_MAX,p->enterprise_fingerprint,32U);
     return AUTH_OK;
 }
 AuthStatus rp2350_store_pin_decode(const uint8_t *in,size_t n,AuthPinRecord *p) {
     if(!p) return AUTH_INVALID_ARGUMENT;
     auth_secure_zero(p,sizeof(*p));
     if(!in) return AUTH_INVALID_ARGUMENT;
-    if(n!=24U && n!=RP2350_STORE_PIN_MAX) return AUTH_BAD_DATA;
+    if(n!=24U && n!=RP2350_STORE_PIN_LEGACY_MAX && n!=RP2350_STORE_PIN_TOKEN_MAX && n!=RP2350_STORE_PIN_MAX) return AUTH_BAD_DATA;
     uint16_t version=store_u16(in);
     if((n==24U && (version!=1U || in[7])) ||
-        (n==RP2350_STORE_PIN_MAX && (version!=2U || !in[7] || in[7]>AUTH_PIN_MAX_RP_IDS)) ||
-        in[2]>1 || (in[6]&~3U)) return AUTH_BAD_DATA;
+        (n==RP2350_STORE_PIN_LEGACY_MAX &&
+            ((version!=2U && version!=3U && version!=4U) || (version==2U && !in[7]) || in[7]>AUTH_PIN_MAX_RP_IDS)) ||
+        (n==RP2350_STORE_PIN_TOKEN_MAX && (version!=5U || in[7]>AUTH_PIN_MAX_RP_IDS)) ||
+        (n==RP2350_STORE_PIN_MAX && (version!=6U || !(in[6]&32U) || in[7]>AUTH_PIN_MAX_RP_IDS)) ||
+        in[2]>1 || (in[6]&~(version==6U ? 127U : version==5U ? 31U : version==4U ? 15U : version==3U ? 7U : 3U)) ||
+        (version==3U && !(in[6]&4U)) || (version==4U && !(in[6]&8U)) ||
+        (version==6U && !(in[6]&64U) && !store_zero(in+RP2350_STORE_PIN_LEGACY_MAX,32U))) return AUTH_BAD_DATA;
     p->min_length=in[5]; p->always_uv=(in[6]&1U)!=0; p->force_change=(in[6]&2U)!=0;
     p->set=in[2]!=0; p->code_points=in[3]; p->retries=in[4]; memcpy(p->hash,in+8,16);
-    if(version==2U) {
+    p->persistent_readonly=(in[6]&16U)!=0; p->persistent_token_present=version==5U || (version==6U && (in[6]&64U));
+    p->enterprise_enabled=version==6U;
+    if(p->enterprise_enabled) memcpy(p->enterprise_fingerprint,in+RP2350_STORE_PIN_TOKEN_MAX,32U);
+    if(p->persistent_token_present) memcpy(p->persistent_token,in+RP2350_STORE_PIN_LEGACY_MAX,32U);
+    p->long_touch_reset=(in[6]&4U)!=0; p->legacy_pin_complexity=(in[6]&8U)!=0;
+    if(version>=2U) {
         p->min_length_rp_count=in[7];
         memcpy(p->min_length_rp_hashes,in+24,sizeof(p->min_length_rp_hashes));
     }

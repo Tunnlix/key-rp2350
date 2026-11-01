@@ -329,3 +329,20 @@ AuthCrypto rp2350_crypto_interface(Rp2350Crypto *p) {
 AuthSecretCrypto rp2350_secret_interface(Rp2350Crypto *p) {
     return (AuthSecretCrypto){p,agreement,shared,mac,aes,supported,credential_mac,regenerate,large_blob_key};
 }
+
+/* Dedicated identity path: never insert an attestation scalar into credential
+ * slots or change credential handles, agreement state or durable counters. */
+AuthStatus rp2350_crypto_sign_attestation_internal(Rp2350Crypto *p,const uint8_t scalar[32],
+    const uint8_t digest[32],uint8_t signature[72],size_t *length) {
+    if(!p || !scalar || !digest || !signature || !length) return AUTH_INVALID_ARGUMENT;
+    *length=0U;auth_secure_zero(signature,72U);
+    if(!ready(p) || p->keys_locked) return AUTH_CRYPTO_ERROR;
+    mbedtls_ecdsa_context c;mbedtls_ecdsa_init(&c);uint8_t der[72];size_t n=0;
+    int rc=mbedtls_ecp_group_load(&c.MBEDTLS_PRIVATE(grp),MBEDTLS_ECP_DP_SECP256R1);
+    if(!rc) rc=mbedtls_mpi_read_binary(&c.MBEDTLS_PRIVATE(d),scalar,32U);
+    if(!rc) rc=mbedtls_ecp_check_privkey(&c.MBEDTLS_PRIVATE(grp),&c.MBEDTLS_PRIVATE(d));
+    if(!rc) rc=mbedtls_ecdsa_write_signature(&c,MBEDTLS_MD_SHA256,digest,32U,der,sizeof(der),&n,rng,p);
+    if(!rc && n>0U && n<=72U) { memcpy(signature,der,n);*length=n; } else rc=-1;
+    mbedtls_ecdsa_free(&c);auth_secure_zero(der,sizeof(der));
+    return rc ? AUTH_CRYPTO_ERROR : AUTH_OK;
+}

@@ -1,5 +1,6 @@
 #include "ctap/ctap_get_assertion.h"
 #include "ctap/cbor_writer.h"
+#include "ctap/ctap_uvm.h"
 #include "ctap/ctap_entities.h"
 
 #include <string.h>
@@ -50,15 +51,20 @@ static uint8_t finish(AuthCredentialService *service, CtapGetAssertionWorkspace 
     uint8_t *signature = workspace->scratch.phase.finish.signature;
     memcpy(signed_data, prepared->rp_id_hash, 32U);
     signed_data[32] = (prepared->user_presence_required ? 1U : 0U) | (prepared->user_verified ? 4U : 0U) |
-        ((extension_length != 0U || prepared->cred_blob_requested) ? 0x80U : 0U);
+        ((extension_length != 0U || prepared->cred_blob_requested || prepared->uvm_requested || prepared->payment_requested) ? 0x80U : 0U);
     size_t data_length = 37U;
-    if (extension_length != 0U || prepared->cred_blob_requested) {
+    if (extension_length != 0U || prepared->cred_blob_requested || prepared->uvm_requested || prepared->payment_requested) {
         CborWriter extension; cbor_writer_init(&extension, signed_data + data_length, sizeof workspace->scratch.phase.finish.signed_data - data_length - 32U);
-        bool ok = cbor_write_map(&extension, (prepared->cred_blob_requested ? 1U : 0U) + (extension_length != 0U ? 1U : 0U));
+        bool ok = cbor_write_map(&extension, (prepared->cred_blob_requested ? 1U : 0U) + (extension_length != 0U ? 1U : 0U) + (prepared->uvm_requested ? 1U : 0U) + (prepared->payment_requested ? 1U : 0U));
+        if (prepared->uvm_requested) ok = ok && cbor_write_text(&extension, "uvm") &&
+            ctap_uvm_write(&extension, prepared->user_presence_required, prepared->user_verified,
+                prepared->credential_id_length > AUTH_CREDENTIAL_ID_SIZE);
         if (prepared->cred_blob_requested) ok = ok && cbor_write_text(&extension, "credBlob") &&
             cbor_write_bytes(&extension, credential->cred_blob, credential->cred_blob_length);
         if (extension_length != 0U) ok = ok && cbor_write_text(&extension, "hmac-secret") &&
             cbor_write_bytes(&extension, extension_output, extension_length);
+        if (prepared->payment_requested) ok = ok && cbor_write_text(&extension, "thirdPartyPayment") &&
+            cbor_write_bool(&extension, credential->third_party_payment);
         if (!ok) return CTAP_STATUS_OTHER;
         data_length += extension.length;
     }

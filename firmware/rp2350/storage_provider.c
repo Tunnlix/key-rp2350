@@ -2,6 +2,8 @@
 #include "storage_key_record_internal.h"
 #include "storage_bytes_internal.h"
 #include <string.h>
+#include "vendor/ctaes/ctaes.h"
+static AuthStatus encrypted_identifiers(void *,const uint8_t[32],uint8_t[64]);
 static AuthStatus load_nonresident_key(Rp2350StoreProvider *,const AuthKeyHandle *);
 static void clear_selection(Rp2350StoreProvider *p) {
     auth_secure_zero(p->selected_id,sizeof(p->selected_id));
@@ -450,7 +452,7 @@ AuthSecretCrypto rp2350_store_provider_secrets_internal(Rp2350StoreProvider *p) 
 AuthStorage rp2350_store_provider_storage_internal(Rp2350StoreProvider *p) {
     return (AuthStorage){p,AUTH_RESIDENT_MAX_COUNT,read_record,insert,erase_plain,find_rp,count,counter,enumerate,put,erase,update};
 }
-AuthPinStorage rp2350_store_provider_pin_internal(Rp2350StoreProvider *p) { return (AuthPinStorage){p,pin_read,pin_write}; }
+AuthPinStorage rp2350_store_provider_pin_internal(Rp2350StoreProvider *p) { return (AuthPinStorage){p,pin_read,pin_write,encrypted_identifiers}; }
 
 static uint64_t handle_number(const AuthKeyHandle *h) {
     uint64_t value=0; for(size_t i=24;i<32;i++) value=(value<<8)|h->bytes[i]; return value;
@@ -493,7 +495,7 @@ static AuthStatus nonresident_metadata(Rp2350StoreProvider *p,const uint8_t *id,
     AuthStatus status=c.sha256(c.context,id,length,out->credential_id);
     if(status==AUTH_OK) {
         out->key=p->workspace->nonresident_key.handle; memcpy(out->rp_id_hash,rp,32);
-        out->algorithm=p->workspace->nonresident_key.algorithm; out->cred_protect=policy;
+        out->algorithm=p->workspace->nonresident_key.algorithm; out->cred_protect=policy&3U; out->third_party_payment=(policy&4U)!=0;
         out->signature_count=p->cache.global.nonresident_counter;
         if(!auth_credential_valid(out)) status=AUTH_BAD_DATA;
     }
@@ -535,7 +537,7 @@ static AuthStatus reserve_nonresident(void *ctx,uint64_t *serial) {
     if(status==AUTH_OK) *serial=p->cache.global.nonresident_issued;
     auth_secure_zero(&g,sizeof(g)); return status;
 }
-static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const uint8_t rp[32],uint8_t policy,
+static AuthStatus create_nonresident_payment(void *ctx,int32_t algorithm,const uint8_t rp[32],uint8_t policy,bool payment,
         AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
     Rp2350StoreProvider *p=ctx;
     if(!p || !rp || !out || !id || !length || !pub || policy<1 || policy>3) return AUTH_INVALID_ARGUMENT;
@@ -558,6 +560,7 @@ static AuthStatus create_nonresident_algorithm(void *ctx,int32_t algorithm,const
         }
         if(!found) status=AUTH_BAD_DATA;
     }
+    if(payment) policy|=4U;
     if(status==AUTH_OK) status=rp2350_nonresident_seal_create_internal(&p->workspace->nonresident_seal,
         &p->workspace->nonresident_key,rp,policy,reserve_nonresident,p,p->selected_id,&p->workspace->nonresident);
     if(status==AUTH_OK) status=nonresident_metadata(p,p->selected_id,sizeof(p->selected_id),rp,policy,out);
@@ -582,12 +585,41 @@ static AuthStatus counter_nonresident(void *ctx,const uint8_t *id,size_t length,
 }
 static AuthStatus create_nonresident(void *ctx,const uint8_t rp[32],uint8_t policy,
     AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
-    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_ES256,rp,policy,out,id,length,pub);
+    return create_nonresident_payment(ctx,AUTH_COSE_ALG_ES256,rp,policy,false,out,id,length,pub);
 }
 static AuthStatus create_nonresident_ed25519(void *ctx,const uint8_t rp[32],uint8_t policy,
     AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65]) {
-    return create_nonresident_algorithm(ctx,AUTH_COSE_ALG_EDDSA,rp,policy,out,id,length,pub);
+    return create_nonresident_payment(ctx,AUTH_COSE_ALG_EDDSA,rp,policy,false,out,id,length,pub);
 }
 AuthNonresidentProvider rp2350_store_provider_nonresident_internal(Rp2350StoreProvider *p) {
-    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident,create_nonresident_ed25519};
+    return (AuthNonresidentProvider){p,create_nonresident,read_nonresident,counter_nonresident,release_nonresident,create_nonresident_ed25519,create_nonresident_payment};
+}
+
+/* Never expose the stable plaintext identifiers through a protocol callback. */
+static AuthStatus encrypted_identifiers(void *ctx,const uint8_t token[32],uint8_t output[64]) {
+    Rp2350StoreProvider *p=ctx;
+    if(!p || !token || !output) return AUTH_INVALID_ARGUMENT;
+    if(!begin(p)) return AUTH_IO_ERROR;
+    AuthStatus status=nonresident_authority(p);
+    AuthCrypto c=rp2350_crypto_interface(p->crypto);AuthSecretCrypto s=rp2350_secret_interface(p->crypto);
+    uint8_t salt[32]={0},prk[32]={0},key[32]={0},info[18]={0},iv[16]={0},encoded[64]={0};
+    const char *domains[]={"encIdentifier","encCredStoreState"};
+    const uint8_t *plain[]={p->cache.global.device_id,p->cache.global.store_state};
+    if(status==AUTH_OK) status=s.hmac_sha256(s.context,salt,32,token,32,prk);
+    for(size_t i=0;i<2 && status==AUTH_OK;i++) {
+        size_t n=strlen(domains[i]);memcpy(info,domains[i],n);info[n]=1;
+        status=s.hmac_sha256(s.context,prk,32,info,n+1,key);
+        if(status==AUTH_OK) status=c.random(c.context,encoded+i*32,16);
+        memcpy(iv,encoded+i*32,16);
+        AES128_CBC_ctx aes;
+        if(status==AUTH_OK) {
+            AES128_CBC_init(&aes,key,iv);
+            AES128_CBC_encrypt(&aes,1U,encoded+i*32+16,plain[i]);
+        }
+        auth_secure_zero(&aes,sizeof(aes));
+    }
+    if(status==AUTH_OK) memcpy(output,encoded,sizeof(encoded));
+    auth_secure_zero(prk,sizeof(prk));auth_secure_zero(key,sizeof(key));auth_secure_zero(info,sizeof(info));
+    auth_secure_zero(iv,sizeof(iv));auth_secure_zero(encoded,sizeof(encoded));
+    return finish(p,status,true);
 }

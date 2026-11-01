@@ -3,7 +3,9 @@
 #include "authenticator/auth_platform.h"
 #include "authenticator/auth_pin.h"
 #define RP2350_STORE_PLAIN_MAX 3584U
-#define RP2350_STORE_PIN_MAX (24U + AUTH_PIN_MAX_RP_IDS * 32U)
+#define RP2350_STORE_PIN_LEGACY_MAX (24U + AUTH_PIN_MAX_RP_IDS * 32U)
+#define RP2350_STORE_PIN_TOKEN_MAX (RP2350_STORE_PIN_LEGACY_MAX + 32U)
+#define RP2350_STORE_PIN_MAX (RP2350_STORE_PIN_TOKEN_MAX + 32U)
 #define RP2350_STORE_FRAME_MAX 4096U
 #define RP2350_STORE_METADATA_MAX (128U+64U+2048U+192U+32U)
 #define RP2350_STORE_PARTITION_SIZE 0x80000U
@@ -35,10 +37,11 @@ typedef AuthStatus (*Rp2350StoreHash)(void *,const uint8_t *,size_t,uint8_t[32])
  * Payloads are plaintext INTERNAL storage objects, never a transport API. */
 AuthStatus rp2350_store_metadata_encode(const AuthCredential *,Rp2350StoreHash,void *,uint8_t *,size_t,size_t *);
 AuthStatus rp2350_store_metadata_decode(const uint8_t *,size_t,Rp2350StoreHash,void *,AuthCredential *);
-/* Legacy empty-list policies keep their exact version-1/24-byte encoding.
- * Nonempty RP lists use version 2. Old firmware must not be booted against a
- * store after that feature is configured: it rejects version 2 fail-closed.
- * Decoder accepts both versions; the upgrade never erases existing records. */
+/* Legacy default policies keep their exact version-1/24-byte encoding.
+ * RP lists use version 2; enabled long-touch reset uses version 3 (with or
+ * without an RP list). Older readers reject unknown versions/flags fail-closed:
+ * do not downgrade after configuring a policy unsupported by that firmware.
+ * Decoder accepts all three versions; upgrades never erase existing records. */
 size_t rp2350_store_pin_size(const AuthPinRecord *);
 AuthStatus rp2350_store_pin_encode(const AuthPinRecord *,uint8_t[RP2350_STORE_PIN_MAX]);
 AuthStatus rp2350_store_pin_decode(const uint8_t *,size_t,AuthPinRecord *);

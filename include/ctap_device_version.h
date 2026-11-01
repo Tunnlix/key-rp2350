@@ -6,7 +6,7 @@
  * Increase the firmware version for each released firmware change. */
 #define CTAP_DEVICE_VERSION_MAJOR 1
 #define CTAP_DEVICE_VERSION_MINOR 5
-#define CTAP_DEVICE_VERSION_BUILD 0
+#define CTAP_DEVICE_VERSION_BUILD 1
 #define CTAP_DEVICE_VERSION_PRERELEASE ""
 
 #define CTAP_DEVICE_VERSION_STRINGIFY_(value) #value

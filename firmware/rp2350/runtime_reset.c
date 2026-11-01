@@ -1,3 +1,4 @@
+#include "enterprise_attestation.h"
 #include "runtime_reset_internal.h"
 static bool reset_callback(void *);
 static AuthStatus authorize(void *ctx) {
@@ -36,6 +37,7 @@ static AuthStatus reinitialize(void *ctx,const Rp2350StoreReplayState *state) {
     if(!auth_credentials_init(r->service,&c,&storage) || !auth_credentials_configure_secrets(r->service,&secrets) ||
         (r->nonresident_enabled && !auth_credentials_configure_nonresident(r->service,&nonresident)) ||
         !ctap_client_pin_init(r->pin,r->service,&pin)) return AUTH_CRYPTO_ERROR;
+    if(!rp2350_enterprise_configure_internal(r->service,r->crypto) || !rp2350_batch_configure_internal(r->service,r->crypto)) return AUTH_BAD_DATA;
     r->service->large_blobs=r->pin->large_blobs=r->backend->profile.large_blobs;
     ctap_large_blobs_clear(&r->backend->blobs);
     r->backend->profile.pin_set=false; return AUTH_OK;

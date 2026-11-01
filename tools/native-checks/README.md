@@ -11,6 +11,7 @@ cmake -S tools/native-checks -B build/native-checks -G Ninja -DCMAKE_BUILD_TYPE=
 cmake --build build/native-checks
 ./build/native-checks/storage_check
 ./build/native-checks/crypto_check
+./build/native-checks/device_feature_check
 ```
 
 On Windows, the executables end in `.exe`. For offline builds pass
@@ -21,8 +22,8 @@ Release. These checks are separate from the firmware and ordinary library build.
 `storage_check` creates 32 ES256/Ed25519 credentials, measures PIN writes and a
 deletion, interrupts each program-page boundary of deletion/compaction/selector
 switching, checks durable PIN charges and rejects a corrupted committed MAC.
-It also verifies read-only trial recovery followed by post-confirmation cleanup.
-It also injects prefix and interleaved-bit partial NOR programs and partial
+It verifies read-only trial recovery followed by post-confirmation cleanup and
+injects prefix and interleaved-bit partial NOR programs and partial
 selector-sector erases. These are representative fault patterns, not exhaustive
 hardware qualification, physical-tampering resistance or ROM rollback tests.
 An optional argument names a 512 KiB synthetic v1.3 store snapshot: the check
@@ -60,3 +61,29 @@ three-retry request budget without extending collection deadlines, and reject
 simultaneous valid/error flags, other health faults, adapter refusal, cached or
 post-read errors and missing fresh output. LED checks count each pulse and its width for every entropy failure
 type/status combination; the diagnostic emits only a failure code and status.
+
+Use `storage_check --identifiers` for the focused GetInfo/reset checks. It verifies
+pre-PIN discovery without granting permissions, stable tokens across reboot,
+fresh IVs, reset separation, interrupted migration recovery and read-only trial
+initialization. `--policy` also covers persistent read-only inventory, payment
+attributes, long-touch reset and optional attestation providers.
+
+`device_feature_check` covers WINK, LOCK ownership/release/expiry, five-second
+reset consent, UVM output and GetInfo encoding. LOCK tests do not set the reserved
+legacy capability bit merely to activate the official tool's conditional cases.
+
+For a configured attestation lab, set `TUNNLIX_ENTERPRISE_TEST_OUTPUT` to an empty
+local directory when running `storage_check --policy`. Verify its public response
+fixtures independently with:
+
+```sh
+python3 tools/native-checks/verify-enterprise-results.py \
+  build/enterprise-lab/identity build/attestation-replies \
+  --batch-identity build/ordinary-lab/identity
+```
+
+The verifier requires Python with `cryptography` and `fido2`. It checks certificate
+chains, signatures, tamper rejection, credential algorithms, ordinary/enterprise
+identity separation and explicit `none` attestation. Omit `--batch-identity` when
+no ordinary identity is configured. Generated replies and all identities stay
+outside the public source tree.

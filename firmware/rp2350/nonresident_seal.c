@@ -48,7 +48,7 @@ AuthStatus rp2350_nonresident_seal_create_internal(Rp2350NonresidentSeal *s,
     if(s && s->busy) return AUTH_BUSY;
     if(out) auth_secure_zero(out,256);
     if(w) auth_secure_zero(w,sizeof(*w));
-    if(!s || !key || !rp || !out || !w || !reserve || policy<1 || policy>3) return AUTH_INVALID_ARGUMENT;
+    if(!s || !key || !rp || !out || !w || !reserve || (policy&3U)<1 || (policy&~7U)!=0) return AUTH_INVALID_ARGUMENT;
     if(!s->initialized) return AUTH_CRYPTO_ERROR;
     s->busy=true;
     AuthStatus status=rp2350_key_record_encode_internal(key,w->plain);
@@ -57,7 +57,7 @@ AuthStatus rp2350_nonresident_seal_create_internal(Rp2350NonresidentSeal *s,
     uint64_t serial=0; status=reserve(context,&serial);
     if(status==AUTH_OK && (!serial || serial>=RP2350_NONRESIDENT_ISSUANCE_LIMIT)) status=AUTH_CAPACITY;
     if(status==AUTH_OK) {
-        memcpy(w->wire,"TKNR",4); store_put16(w->wire+4,1); store_put16(w->wire+6,176);
+        memcpy(w->wire,"TKNR",4); store_put16(w->wire+4,(policy&4U) ? 2U : 1U); store_put16(w->wire+6,176);
         memcpy(w->wire+8,s->epoch,16); store_put64(w->wire+24,serial);
         status=s->crypto.random(s->crypto.context,w->wire+32,16);
     }
@@ -76,14 +76,15 @@ AuthStatus rp2350_nonresident_seal_open_internal(Rp2350NonresidentSeal *s,
     if(!s || !id || !rp || !key || !policy || !w) return AUTH_INVALID_ARGUMENT;
     if(!s->initialized) return AUTH_CRYPTO_ERROR;
     s->busy=true;
-    if(length!=256 || memcmp(id,"TKNR",4) || store_u16(id+4)!=1 || store_u16(id+6)!=176 ||
+    if(length!=256 || memcmp(id,"TKNR",4) || (store_u16(id+4)!=1 && store_u16(id+4)!=2) || store_u16(id+6)!=176 ||
         !store_equal(id+8,s->epoch,16) || !store_u64(id+24) ||
         store_u64(id+24)>=RP2350_NONRESIDENT_ISSUANCE_LIMIT) return finish(s,w,AUTH_NOT_FOUND);
     memcpy(w->wire,id,256);
     AuthStatus status=s->secrets.hmac_sha256(s->secrets.context,s->mac,32,w->wire,224,w->tag);
     if(status==AUTH_OK && !store_equal(w->tag,w->wire+224,32)) status=AUTH_NOT_FOUND;
     if(status==AUTH_OK) status=crypt(s,w,false);
-    if(status==AUTH_OK && (!store_equal(w->plain+136,rp,32) || w->plain[168]<1 || w->plain[168]>3 ||
+    if(status==AUTH_OK && (!store_equal(w->plain+136,rp,32) || (w->plain[168]&3U)<1 || (w->plain[168]&~7U)!=0 ||
+        (store_u16(id+4)==1 && (w->plain[168]&4U)) ||
         !store_zero(w->plain+169,7))) status=AUTH_NOT_FOUND;
     if(status==AUTH_OK) {
         status=rp2350_key_record_decode_internal(w->plain,136,key);

@@ -2,21 +2,36 @@
 
 #include <string.h>
 
+bool auth_credentials_payment_supported(const AuthCredentialService *s)
+{
+    return auth_credentials_resident_supported(s) && auth_credentials_nonresident_supported(s) &&
+        s->nonresident.create_payment != NULL;
+}
+
 AuthStatus auth_credentials_create_nonresident_algorithm(AuthCredentialService *s, int32_t algorithm,
     const uint8_t rp[32],uint8_t policy,AuthCredentialPrepareId prepare,void *context,
     AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65])
 {
+    return auth_credentials_create_nonresident_payment(s,algorithm,rp,policy,false,prepare,context,out,id,length,pub);
+}
+
+AuthStatus auth_credentials_create_nonresident_payment(AuthCredentialService *s, int32_t algorithm,
+    const uint8_t rp[32],uint8_t policy,bool payment,AuthCredentialPrepareId prepare,void *context,
+    AuthCredential *out,uint8_t id[AUTH_CREDENTIAL_ID_MAX_SIZE],size_t *length,uint8_t pub[65])
+{
     if(!auth_credentials_nonresident_supported(s) || s->creation_busy || s->lookup_busy || !rp ||
         !out || !id || !length || !pub || policy<1 || policy>3 || !auth_credentials_algorithm_supported(s, algorithm)) return AUTH_INVALID_ARGUMENT;
+    if(payment && s->nonresident.create_payment==NULL) return AUTH_UNSUPPORTED;
     s->creation_busy=true;
     AuthCreationScratch *w=&s->creation_scratch;
     auth_secure_zero(w,sizeof(*w));
-    AuthStatus status = algorithm == AUTH_COSE_ALG_ES256 ?
+    AuthStatus status = s->nonresident.create_payment != NULL ?
+        s->nonresident.create_payment(s->nonresident.context,algorithm,rp,policy,payment,&w->created,w->wire_id,&w->wire_id_length,w->public_key) : algorithm == AUTH_COSE_ALG_ES256 ?
         s->nonresident.create(s->nonresident.context,rp,policy,&w->created,w->wire_id,&w->wire_id_length,w->public_key) :
         s->nonresident.create_ed25519(s->nonresident.context,rp,policy,&w->created,w->wire_id,&w->wire_id_length,w->public_key);
     if(status==AUTH_OK && (!auth_credential_id_length_valid(w->wire_id_length) ||
         w->wire_id_length<=AUTH_CREDENTIAL_ID_SIZE || !auth_credential_valid(&w->created) ||
-        w->created.discoverable || w->created.cred_protect!=policy || memcmp(w->created.rp_id_hash,rp,32)!=0 ||
+        w->created.discoverable || w->created.third_party_payment!=payment || w->created.cred_protect!=policy || memcmp(w->created.rp_id_hash,rp,32)!=0 ||
         w->created.algorithm!=algorithm || !auth_public_key_valid(algorithm,w->public_key))) status=AUTH_BAD_DATA;
     uint8_t digest[32]={0};
     if(status==AUTH_OK) status=s->crypto.sha256(s->crypto.context,w->wire_id,w->wire_id_length,digest);

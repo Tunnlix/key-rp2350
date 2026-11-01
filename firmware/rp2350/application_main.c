@@ -39,6 +39,10 @@ static uint32_t now_ms(void *context) {
     (void)context;
     return to_ms_since_boot(get_absolute_time());
 }
+static void wink(void *context, uint32_t channel_id) {
+    (void)channel_id;
+    rp2350_status_led_wink(now_ms(context));
+}
 
 static bool button_pressed(void *context) {
     (void)context;
@@ -134,7 +138,8 @@ static AuthStatus start_application(void) {
         .submit = submit_report,
         .usb_transport = true,
         .trial_boot = boot.pending,
-        .cancel_requested = rp2350_usb_cancel_requested
+        .cancel_requested = rp2350_usb_cancel_requested,
+        .wink = wink
     };
     /* Key onboard model: fa024a59-a2a6-41d9-bd40-ed6a78915bca. Stable across firmware revisions. */
     static const uint8_t model_aaguid[16] = {0xfa, 0x02, 0x4a, 0x59, 0xa2, 0xa6, 0x41, 0xd9, 0xbd, 0x40, 0xed, 0x6a, 0x78, 0x91, 0x5b, 0xca};
