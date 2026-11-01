@@ -26,6 +26,7 @@ typedef struct {
     bool pin_set;
     uint8_t min_length;
     bool always_uv, force_change, large_blobs;
+    bool long_touch_reset;
     uint8_t token[32], token_rp_hash[32], permissions;
     uint32_t issued_at_ms;
     bool token_active, token_used;

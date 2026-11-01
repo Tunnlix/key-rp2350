@@ -145,7 +145,8 @@ CtaphidDeviceResult rp2350_application_poll(Rp2350Application *a) {
      * reinterpret an already-held contact as fresh presence. */
     if(a->backend.pending && a->backend.awaiting_presence && a->backend.presence_started) {
         if(a->presence.operation_id!=a->backend.operation_id)
-            rp2350_presence_begin(&a->presence,a->backend.operation_id,now);
+            rp2350_presence_begin_hold(&a->presence,a->backend.operation_id,now,
+                a->backend.awaiting_reset && a->pin.long_touch_reset ? 5000U : 0U);
     } else rp2350_presence_abort(&a->presence,a->presence.operation_id);
     if(event) (void)ctaphid_ctap_backend_signal_presence(&a->backend,event,true,now);
     result=rp2350_runtime_poll_internal(&a->runtime,&a->device,now);

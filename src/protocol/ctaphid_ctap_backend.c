@@ -17,6 +17,7 @@ bool ctaphid_ctap_backend_init(CtaphidCtapBackend *backend,
     backend->profile.pin_uv_auth = backend->profile.pin_set = false;
     backend->profile.resident_credentials = backend->profile.large_blobs = false;
     backend->profile.always_uv = backend->profile.force_pin_change = false;
+    backend->profile.long_touch_reset = false;
     backend->profile.min_pin_length = 4U;
     backend->profile.max_credential_id_length = AUTH_CREDENTIAL_ID_SIZE;
     backend->presence_timeout_ms = CTAP_USER_PRESENCE_DEFAULT_TIMEOUT_MS;
@@ -56,6 +57,7 @@ bool ctaphid_ctap_backend_configure_pin(CtaphidCtapBackend *backend, CtapClientP
     backend->profile.pin_set = pin->pin_set;
     backend->profile.min_pin_length = pin->min_length;
     backend->profile.always_uv = pin->always_uv; backend->profile.force_pin_change = pin->force_change;
+    backend->profile.long_touch_reset = pin->long_touch_reset;
     backend->profile.resident_credentials = auth_credentials_resident_supported(backend->credentials);
     return true;
 }
@@ -317,6 +319,7 @@ static void execute_ready_command(CtaphidCtapBackend *backend, CtaphidDevice *de
         backend->profile.min_pin_length = backend->pin->min_length;
         backend->profile.always_uv = backend->pin->always_uv;
         backend->profile.force_pin_change = backend->pin->force_change;
+        backend->profile.long_touch_reset = backend->pin->long_touch_reset;
         if (status == CTAP_STATUS_OK && backend->profile.resident_credentials) {
             size_t total = 0U;
             const AuthStorage *storage = &backend->credentials->storage;

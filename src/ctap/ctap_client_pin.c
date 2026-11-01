@@ -23,7 +23,7 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     bool valid = storage->read(storage->context, &record) == AUTH_OK && auth_pin_record_valid(&record);
     bool set = record.set;
     uint8_t minimum = record.min_length;
-    bool always = record.always_uv, force = record.force_change;
+    bool always = record.always_uv, force = record.force_change, long_touch = record.long_touch_reset;
     auth_secure_zero(&record, sizeof record);
     if (!valid) return false;
     uint8_t fresh[32] = {0};
@@ -34,6 +34,7 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     auth_secure_zero(pin, sizeof *pin);
     pin->service = service; pin->storage = copied; pin->pin_set = set;
     pin->min_length = minimum ? minimum : 4U; pin->always_uv = always; pin->force_change = force;
+    pin->long_touch_reset = long_touch;
     pin->credential_management = auth_credentials_resident_supported(service);
     memcpy(pin->token, fresh, sizeof fresh); auth_secure_zero(fresh, sizeof fresh);
     return true;
@@ -349,6 +350,7 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
         pin->pin_set = record.set; *set = record.set;
         pin->min_length = record.min_length ? record.min_length : 4U;
         pin->always_uv = record.always_uv; pin->force_change = record.force_change;
+        pin->long_touch_reset = record.long_touch_reset;
     }
     auth_secure_zero(&record, sizeof record);
     if (!valid) { pin->faulted = true; ctap_client_pin_invalidate(pin); return CTAP_STATUS_OTHER; }
@@ -495,10 +497,14 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
             memcpy(record.min_length_rp_hashes, rp_hashes, count * 32U);
             record.min_length_rp_count = (uint8_t)count;
         }
+    } else if (command == 4U) {
+        if(record.long_touch_reset) { status=CTAP_STATUS_OK; goto done; }
+        record.long_touch_reset=true;
     } else { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
     if (!persist(pin, &record)) goto done;
     pin->min_length = record.min_length ? record.min_length : 4U;
     pin->always_uv = record.always_uv; pin->force_change = record.force_change;
+    pin->long_touch_reset = record.long_touch_reset;
     ctap_client_pin_invalidate(pin);
     status = CTAP_STATUS_OK;
 done:

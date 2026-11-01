@@ -13,7 +13,7 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
     if (fields[1].major != 0U || (present[2] && fields[2].major != 5U) ||
         (present[3] && fields[3].major != 0U) || (present[4] && fields[4].major != 2U))
         return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
-    if (fields[1].value != 2U && fields[1].value != 3U) return CTAP_STATUS_INVALID_PARAMETER;
+    if (fields[1].value != 2U && fields[1].value != 3U && fields[1].value != 4U) return CTAP_STATUS_INVALID_PARAMETER;
     bool set;
     status = ctap_client_pin_status(pin, &set);
     if (status != CTAP_STATUS_OK) return status;

@@ -15,6 +15,7 @@ typedef struct {
     uint8_t code_points, retries;
     uint8_t min_length; /* Zero is the backwards-compatible default of four. */
     bool always_uv, force_change;
+    bool long_touch_reset;
     /* Exact RP IDs are represented by their SHA-256 hashes, not suffix matches.
      * Unused entries are zero. The list is replaced by authenticated policy
      * configuration and cleared by the combined factory reset. */

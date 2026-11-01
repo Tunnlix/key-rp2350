@@ -22,7 +22,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     cbor_writer_init(&writer, encoded, sizeof encoded);
     bool ok = cbor_write_map(&writer, 9U + (profile->large_blobs ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 3U : 0U) +
         (profile->usb_transport ? 1U : 0U) + (profile->firmware_version ? 1U : 0U) + (profile->pin_uv_auth ? 1U : 0U) +
-        (profile->resident_credentials ? 1U : 0U)) &&
+        (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U)) &&
         /* Integer map keys are in increasing canonical order. */
         /* Older clients require 2.0 discovery even when newer CTAP2 versions
          * are understood. PIN protocols 1/2 are supported; CTAP1 is not. */
@@ -80,8 +80,10 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->resident_credentials) ok = ok && cbor_write_uint(&writer, 0x14U) &&
         cbor_write_uint(&writer, profile->remaining_credentials);
     ok = ok && cbor_write_uint(&writer, 0x16U) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "packed");
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x18U) && cbor_write_bool(&writer, profile->long_touch_reset);
+    if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1DU) && cbor_write_uint(&writer, 63U);
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1FU) &&
-        cbor_write_array(&writer, 2U) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U);
+        cbor_write_array(&writer, 3U) && cbor_write_uint(&writer, 2U) && cbor_write_uint(&writer, 3U) && cbor_write_uint(&writer, 4U);
     if (!ok || writer.length > capacity) return false;
     memcpy(output, encoded, writer.length);
     *output_length = writer.length;

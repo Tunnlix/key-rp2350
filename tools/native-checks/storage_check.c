@@ -332,10 +332,13 @@ static void check_min_pin_length(AuthCredentialService *service,AuthPinStorage *
     assert(ctap_get_info_encode(&profile,info_reply,sizeof(info_reply),&info_length));
     assert(cbor_read_document(info_reply,info_length,&info_map));
     assert(cbor_map_uint(&info_map,0x10,&info_value) && info_value.major==0 && info_value.value==AUTH_PIN_MAX_RP_IDS);
-    assert(cbor_map_uint(&info_map,0x1f,&info_value) && info_value.major==4 && info_value.value==2);
+    assert(cbor_map_uint(&info_map,0x1f,&info_value) && info_value.major==4 && info_value.value==3);
     const uint8_t *config_cursor=info_value.data,*config_end=info_value.encoded+info_value.encoded_length;
     assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==2);
-    assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==3 && config_cursor==config_end);
+    assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==3);
+    assert(cbor_read_next(&config_cursor,config_end,&info_value) && info_value.major==0 && info_value.value==4 && config_cursor==config_end);
+    assert(cbor_map_uint(&info_map,0x1d,&info_value) && info_value.major==0 && info_value.value==63);
+    assert(cbor_map_uint(&info_map,0x18,&info_value) && info_value.major==7 && info_value.value==20);
     assert(hash(NULL,(const uint8_t *)"audit.invalid",13,allowed)==AUTH_OK);
     assert(hash(NULL,(const uint8_t *)"other.invalid",13,denied)==AUTH_OK);
     assert(ctap_client_pin_min_length_for_rp(&pin,allowed,&minimum)==CTAP_STATUS_OK && minimum==0);
@@ -456,6 +459,107 @@ static void check_min_pin_length(AuthCredentialService *service,AuthPinStorage *
     assert(rp2350_store_pin_encode(&record,wire)==AUTH_OK && rp2350_store_pin_size(&record)==24);
     assert(rp2350_store_pin_decode(wire,24,&decoded)==AUTH_OK);
     puts("minPinLength: authenticated RP list, duplicate/empty/replacement/capacity, legacy/new records, interrupted writes and signed authorized-only output pass");
+}
+static uint8_t enable_long_touch(CtapClientPin *pin,uint8_t protocol,uint8_t permissions,bool tamper) {
+    uint8_t pin_hash[16],token[32],message[34],mac[32],request[96];
+    memset(pin_hash,42,sizeof(pin_hash));
+    uint8_t status=pin_token_permissions(pin,protocol,pin_hash,permissions,token);
+    if(status!=CTAP_STATUS_OK) return status;
+    memset(message,0xff,32); message[32]=0x0d; message[33]=4;
+    assert(secrets.hmac_sha256(secrets.context,token,sizeof(token),message,sizeof(message),mac)==AUTH_OK);
+    if(tamper) mac[0]^=1;
+    CborWriter w; cbor_writer_init(&w,request,sizeof(request));
+    assert(cbor_write_map(&w,3) && cbor_write_uint(&w,1) && cbor_write_uint(&w,4) &&
+        cbor_write_uint(&w,3) && cbor_write_uint(&w,protocol) && cbor_write_uint(&w,4) &&
+        cbor_write_bytes(&w,mac,ctap_pin_protocol_auth_length(protocol)));
+    return ctap_authenticator_config_execute(pin,request,w.length,1001);
+}
+static void check_long_touch_policy(AuthCredentialService *service,AuthPinStorage *pins,uint8_t protocol) {
+    static uint8_t baseline[sizeof(media)]; memcpy(baseline,media,sizeof(media));
+    CtapClientPin pin; AuthPinRecord record,decoded; uint8_t wire[RP2350_STORE_PIN_MAX];
+    assert(ctap_client_pin_init(&pin,service,pins) && !pin.long_touch_reset);
+    assert(enable_long_touch(&pin,protocol,CTAP_PIN_PERMISSION_CONFIG,true)==CTAP_STATUS_PIN_AUTH_INVALID);
+    assert(enable_long_touch(&pin,protocol,CTAP_PIN_PERMISSION_CM,false)==CTAP_STATUS_PIN_AUTH_INVALID);
+    assert(pins->read(pins->context,&record)==AUTH_OK && !record.long_touch_reset);
+    assert(enable_long_touch(&pin,protocol,CTAP_PIN_PERMISSION_CONFIG,false)==CTAP_STATUS_OK && pin.long_touch_reset);
+    assert(pins->read(pins->context,&record)==AUTH_OK && record.long_touch_reset);
+    assert(rp2350_store_pin_size(&record)==RP2350_STORE_PIN_MAX);
+    assert(rp2350_store_pin_encode(&record,wire)==AUTH_OK && wire[0]==3 && wire[1]==0);
+    assert(rp2350_store_pin_decode(wire,sizeof(wire),&decoded)==AUTH_OK && decoded.long_touch_reset);
+    wire[0]=2; assert(rp2350_store_pin_decode(wire,sizeof(wire),&decoded)==AUTH_BAD_DATA);
+    wire[0]=3; wire[6]&=(uint8_t)~4U;
+    assert(rp2350_store_pin_decode(wire,sizeof(wire),&decoded)==AUTH_BAD_DATA);
+    assert(cold_boot()==AUTH_OK && ctap_client_pin_init(&pin,service,pins) && pin.long_touch_reset);
+    /* Version 3 preserves the RP allowlist alongside the new reset policy. */
+    record.min_length_rp_count=1; memset(record.min_length_rp_hashes[0],0x71,32);
+    assert(rp2350_store_pin_encode(&record,wire)==AUTH_OK);
+    assert(rp2350_store_pin_decode(wire,sizeof(wire),&decoded)==AUTH_OK);
+    assert(decoded.long_touch_reset && decoded.min_length_rp_count==1 &&
+        memcmp(decoded.min_length_rp_hashes[0],record.min_length_rp_hashes[0],32)==0);
+    /* Re-enabling is an authenticated idempotent no-op, with no flash wear. */
+    uint8_t hash[16],token[32]; memset(hash,42,sizeof(hash));
+    assert(pin_token_permissions(&pin,protocol,hash,CTAP_PIN_PERMISSION_CONFIG,token)==CTAP_STATUS_OK);
+    unsigned before=writes;
+    assert(ctap_client_pin_configure(&pin,4,0,false)==CTAP_STATUS_OK && writes==before);
+    for(int cut=0;cut<5;cut++) {
+        memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+        assert(ctap_client_pin_init(&pin,service,pins));
+        assert(pin_token_permissions(&pin,protocol,hash,CTAP_PIN_PERMISSION_CONFIG,token)==CTAP_STATUS_OK);
+        write_budget=cut;
+        uint8_t status=ctap_client_pin_configure(&pin,4,0,false);
+        write_budget=-1;
+        assert(status==CTAP_STATUS_OK || status==CTAP_STATUS_OTHER);
+        assert(cold_boot()==AUTH_OK && pins->read(pins->context,&record)==AUTH_OK);
+        if(status==CTAP_STATUS_OK) assert(record.long_touch_reset);
+        assert(auth_pin_record_valid(&record));
+    }
+    /* Exercise the real reset storage flow with the policy enabled. */
+    memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+    assert(ctap_client_pin_init(&pin,service,pins));
+    assert(enable_long_touch(&pin,protocol,CTAP_PIN_PERMISSION_CONFIG,false)==CTAP_STATUS_OK);
+    static Rp2350StoreCheckpointWorkspace intent_workspace;
+    static Rp2350StoreResetWorkspace erase_workspace;
+    Rp2350StoreSelection selection; Rp2350StoreResetErasure erased; Rp2350StoreProvisioned receipt;
+    assert(rp2350_store_reset_intent_internal(&selection,&flash,&config,reset_consent,NULL,&intent_workspace)==AUTH_OK);
+    assert(rp2350_store_reset_erase_internal(&erased,&flash,&config,reset_consent,NULL,&erase_workspace)==AUTH_OK);
+    assert(rp2350_store_provision_internal(&receipt,&flash,&config,&base,&secrets,consent,NULL,&provisioning)==AUTH_OK);
+    assert(cold_boot()==AUTH_OK && pins->read(pins->context,&record)==AUTH_OK);
+    assert(!record.long_touch_reset && !record.set && !record.min_length_rp_count);
+    memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+    puts("longTouchForReset: authenticated enable, wrong-MAC/permission rejection, v3 fail-closed policy, reboot and interrupted append pass");
+}
+static void check_pin_boundaries(AuthCredentialService *service,AuthPinStorage *pins,uint8_t protocol) {
+    static uint8_t baseline[sizeof(media)]; memcpy(baseline,media,sizeof(media));
+    for(unsigned test=0;test<6;test++) {
+        memcpy(media,baseline,sizeof(media)); assert(cold_boot()==AUTH_OK);
+        CtapClientPin pin; assert(ctap_client_pin_init(&pin,service,pins));
+        CtapClientPinRequest change={.protocol=protocol,.subcommand=4,
+            .auth_length=ctap_pin_protocol_auth_length(protocol)};
+        uint8_t plain[64]={0},keys[64],old[16],message[112],reply[256]; size_t reply_size=0;
+        memset(old,42,sizeof(old));
+        unsigned points=0;
+        if(test==0) { memset(plain,'A',63);points=63; }
+        if(test==1) memset(plain,'A',64);
+        if(test==2) { for(unsigned i=0;i<21;i++) { plain[i*3]=0xe2;plain[i*3+1]=0x82;plain[i*3+2]=0xac; } points=21; }
+        if(test==3) for(unsigned i=0;i<32;i++) { plain[i*2]=0xc3;plain[i*2+1]=0xa4; }
+        if(test==4) { memset(plain,'A',62);plain[62]=0xc3; }
+        if(test==5) { memcpy(plain,"abcdefgh",8);plain[10]='x'; }
+        memcpy(change.peer,crypto.agreement_public,65);
+        assert(ctap_pin_protocol_shared_version(&base,&secrets,protocol,change.peer,keys)==CTAP_STATUS_OK);
+        assert(ctap_pin_protocol_encrypt(&base,&secrets,protocol,keys,old,16,change.pin_hash_enc)==CTAP_STATUS_OK);
+        assert(ctap_pin_protocol_encrypt(&base,&secrets,protocol,keys,plain,64,change.new_pin_enc)==CTAP_STATUS_OK);
+        size_t prefix=ctap_pin_protocol_prefix(protocol),new_size=64+prefix,old_size=16+prefix;
+        memcpy(message,change.new_pin_enc,new_size);memcpy(message+new_size,change.pin_hash_enc,old_size);
+        assert(secrets.hmac_sha256(secrets.context,keys,32,message,new_size+old_size,change.auth)==AUTH_OK);
+        uint8_t result=ctap_client_pin_execute(&pin,&change,reply,sizeof(reply),&reply_size,1000);
+        assert(result==(points ? CTAP_STATUS_OK : CTAP_STATUS_PIN_POLICY_VIOLATION));
+        AuthPinRecord record;assert(pins->read(pins->context,&record)==AUTH_OK);
+        if(points) assert(record.code_points==points);
+        else assert(!memcmp(record.hash,old,16));
+        auth_secure_zero(keys,sizeof(keys));auth_secure_zero(&change,sizeof(change));
+    }
+    memcpy(media,baseline,sizeof(media));assert(cold_boot()==AUTH_OK);
+    printf("PIN protocol %u: 63/64-byte ASCII, multibyte limits, truncated UTF-8 and nonzero padding checks pass\n",protocol);
 }
 static void check_pin_policy(AuthCredentialService *service,AuthPinStorage *pins) {
     CtapClientPin pin; AuthPinRecord record; uint8_t wrong[16],correct[16],token[32];
@@ -588,6 +692,8 @@ int main(int argc,char **argv) {
     if(policy_only) {
         AuthPinStorage pins=rp2350_store_provider_pin_internal(&provider);
         check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
+        check_long_touch_policy(&service,&pins,1); check_long_touch_policy(&service,&pins,2);
+        check_pin_boundaries(&service,&pins,1);check_pin_boundaries(&service,&pins,2);
         check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
         check_blobs(&service,&pins,1); check_blobs(&service,&pins,2);
         check_pin_policy(&service,&pins); rp2350_crypto_free(&crypto); return 0;
@@ -734,6 +840,8 @@ int main(int argc,char **argv) {
     assert(pins.read(pins.context,&pin)==AUTH_OK); pin.force_change=false;
     assert(pins.write(pins.context,&pin)==AUTH_OK);
     check_min_pin_length(&service,&pins,1); check_min_pin_length(&service,&pins,2);
+        check_long_touch_policy(&service,&pins,1); check_long_touch_policy(&service,&pins,2);
+        check_pin_boundaries(&service,&pins,1);check_pin_boundaries(&service,&pins,2);
     check_up_permissions(&service,&pins,1); check_up_permissions(&service,&pins,2);
     check_blobs(&service,&pins,1);
     check_blobs(&service,&pins,2);
