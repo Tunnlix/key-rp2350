@@ -20,6 +20,7 @@ typedef struct {
     uint8_t ids[AUTH_RESIDENT_MAX_COUNT][32], rp_hash[32];
     size_t count, next;
     uint8_t kind;
+    bool persistent_authorization;
     uint64_t token_generation, metadata_revision;
     uint32_t last_call_ms;
     CtapCredentialManagementScratch scratch;

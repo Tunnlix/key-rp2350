@@ -96,11 +96,10 @@ static uint8_t continue_enumeration(AuthCredentialService *service, CtapClientPi
 {
     uint8_t status;
     uint8_t kind = command == CM_ENUMERATE_RPS_NEXT ? CM_ENUMERATE_RPS_BEGIN : CM_ENUMERATE_CREDENTIALS_BEGIN;
-    if (state->kind != kind || state->next >= state->count || pin->faulted || !pin->token_active ||
-        (pin->permissions & CTAP_PIN_PERMISSION_CM) == 0U ||
-        (pin->token_rp_bound && (kind != CM_ENUMERATE_CREDENTIALS_BEGIN ||
+    if (state->kind != kind || state->next >= state->count || !ctap_client_pin_management_active(pin, state->persistent_authorization, state->token_generation) ||
+        (!state->persistent_authorization && pin->token_rp_bound && (kind != CM_ENUMERATE_CREDENTIALS_BEGIN ||
             !ctap_pin_equal(pin->token_rp_hash, state->rp_hash, 32U))) ||
-        state->token_generation != pin->token_generation || state->metadata_revision != service->metadata_revision ||
+        state->metadata_revision != service->metadata_revision ||
         (uint32_t)(now_ms - state->last_call_ms) > 30000U) {
         ctap_credential_management_clear(state); return CTAP_STATUS_NOT_ALLOWED;
     }
@@ -163,7 +162,9 @@ static uint8_t authorize_request(CtapClientPin *pin, CtapCredentialManagement *s
     }
     const uint8_t *scope = command == CM_ENUMERATE_CREDENTIALS_BEGIN ? request->rp_hash :
         (mutation(command) && pin->token_rp_bound ? pin->token_rp_hash : NULL);
-    return ctap_client_pin_authorize_management_version(pin, (uint8_t)request->fields[3].value, scope, message, message_length, request->fields[4].data, now_ms);
+    return mutation(command) ?
+        ctap_client_pin_authorize_management_version(pin, (uint8_t)request->fields[3].value, scope, message, message_length, request->fields[4].data, now_ms) :
+        ctap_client_pin_authorize_management_read(pin, (uint8_t)request->fields[3].value, scope, message, message_length, request->fields[4].data, now_ms);
 }
 
 /* Requires successful authorization; no mutation precedes availability,
@@ -233,7 +234,8 @@ static uint8_t begin_enumeration(AuthCredentialService *service, CtapClientPin *
         memcpy(output, encoded, writer.length); *length = writer.length; return CTAP_STATUS_OK;
     }
     if (state->count == 0U) return CTAP_STATUS_NO_CREDENTIALS;
-    state->kind = (uint8_t)command; state->token_generation = pin->token_generation;
+    state->kind = (uint8_t)command; state->persistent_authorization = pin->last_management_persistent;
+    state->token_generation = state->persistent_authorization ? pin->persistent_generation : pin->token_generation;
     state->metadata_revision = service->metadata_revision; state->last_call_ms = now_ms; memcpy(state->rp_hash, request->rp_hash, 32U);
     uint8_t status = entry(service, state, true, output, capacity, length);
     if (status != CTAP_STATUS_OK || state->next == state->count) ctap_credential_management_clear(state);

@@ -6,7 +6,7 @@
 #define AUTH_PIN_MAX_RETRIES 8U
 #define AUTH_PIN_MAX_RP_IDS 4U
 
-/* Persistent PIN verifier and policy, never plaintext. Code point length
+/* Persistent PIN verifier and policy, never a plaintext PIN. Code point length
  * permits raising the minimum and requiring a PIN change. A missing PIN has a zero verifier/length and
  * eight retries. This state is separate from credential metadata and keys. */
 typedef struct {
@@ -16,6 +16,11 @@ typedef struct {
     uint8_t min_length; /* Zero is the backwards-compatible default of four. */
     bool always_uv, force_change;
     bool long_touch_reset;
+    bool persistent_readonly, persistent_token_present;
+    /* May exist before PIN enrollment for encrypted GetInfo discovery, with
+     * no permissions. Secret: encrypted by the storage provider. */
+    uint8_t persistent_token[32];
+    bool legacy_pin_complexity; /* Retained only to decode/rewrite older experimental records; no enforcement. */
     /* Exact RP IDs are represented by their SHA-256 hashes, not suffix matches.
      * Unused entries are zero. The list is replaced by authenticated policy
      * configuration and cleared by the combined factory reset. */
@@ -31,6 +36,10 @@ typedef struct {
     void *context;
     AuthStatus (*read)(void *, AuthPinRecord *);
     AuthStatus (*write)(void *, const AuthPinRecord *);
+    /* Optional GetInfo privacy fields: two iv||AES-128-CBC ciphertexts,
+     * HKDF-SHA-256 domains encIdentifier/encCredStoreState. Fresh IVs each call.
+     * Only encrypted output crosses into the protocol core. */
+    AuthStatus (*encrypted_identifiers)(void *, const uint8_t persistent_token[32], uint8_t output[64]);
 } AuthPinStorage;
 
 bool auth_pin_record_valid(const AuthPinRecord *record);

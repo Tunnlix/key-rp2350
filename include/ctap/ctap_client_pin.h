@@ -11,11 +11,12 @@
 #define CTAP_PIN_PERMISSION_CM 0x04U
 #define CTAP_PIN_PERMISSION_LBW 0x10U
 #define CTAP_PIN_PERMISSION_CONFIG 0x20U
+#define CTAP_PIN_PERMISSION_PCMR 0x40U
 #define CTAP_PIN_INITIAL_TIMEOUT_MS 30000U
 #define CTAP_PIN_MAX_TIMEOUT_MS 600000U
 
-/* Protocol 1/2 PINs and volatile permission-scoped tokens. No built-in UV or
- * persistent tokens. Initialize at real power-on; INIT cannot reset retries.
+/* Protocol 1/2 PINs, volatile permission-scoped tokens, and a separate
+ * encrypted-at-rest persistent read-only management token. No built-in UV. Initialize at real power-on; INIT cannot reset retries.
  * Poll on the injected device clock, including while idle/waiting for touch.
  * USB initial-use limit 30 s, total lifetime 600 s; no cached user presence. */
 typedef struct {
@@ -27,6 +28,9 @@ typedef struct {
     uint8_t min_length;
     bool always_uv, force_change, large_blobs;
     bool long_touch_reset;
+    uint8_t persistent_token[32];
+    bool persistent_readonly, persistent_token_present, last_management_persistent;
+    uint64_t persistent_generation;
     uint8_t token[32], token_rp_hash[32], permissions;
     uint32_t issued_at_ms;
     bool token_active, token_used;
@@ -66,7 +70,8 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
  * rather than claiming success, even if persistent deletion already committed. */
 void ctap_client_pin_reset_state(CtapClientPin *pin);
 void ctap_client_pin_poll(CtapClientPin *pin, uint32_t now_ms);
-/* Retire all token state on expiry, replacement, reset and storage failure. */
+/* Retire the ordinary token on expiry/replacement. Persistent read-only state
+ * is independent; PIN change/forced change/reset revoke it durably. Faults wipe RAM. */
 void ctap_client_pin_invalidate(CtapClientPin *pin);
 /* MC/GA call after required UP, even when a later extension/signing stage fails.
  * CTAP 2.1 clearPinUvAuthTokenPermissionsExceptLbw: retain only Large Blob Write
@@ -74,6 +79,10 @@ void ctap_client_pin_invalidate(CtapClientPin *pin);
  * GA and credential management do not consume permissions. No cached UP/UV. */
 void ctap_client_pin_clear_permissions_except_lbw(CtapClientPin *pin);
 uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
+/* First normal GetInfo initializes a permissionless privacy token if needed.
+ * Caller must have completed read-only trial boot confirmation. Idempotent;
+ * no per-GetInfo flash writes, no PIN enrollment or authorization implied. */
+uint8_t ctap_client_pin_ensure_identifier_token(CtapClientPin *pin);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
 /* Persist policy and retire authorization before exposing changed configuration. */
 uint8_t ctap_client_pin_configure(CtapClientPin *, uint8_t subcommand, uint8_t minimum, bool force_change);
@@ -84,6 +93,9 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *, uint8_t subcommand, uin
 /* Zero output means this RP is not authorized; no PIN/token is disclosed. */
 uint8_t ctap_client_pin_min_length_for_rp(CtapClientPin *, const uint8_t rp_hash[32], uint8_t *minimum);
 uint8_t ctap_client_pin_require_uv(CtapClientPin *);
+bool ctap_client_pin_management_active(const CtapClientPin *, bool persistent, uint64_t generation);
+uint8_t ctap_client_pin_authorize_management_read(CtapClientPin *, uint8_t protocol, const uint8_t *rp_hash,
+    const uint8_t *, size_t, const uint8_t *, uint32_t now_ms);
 uint8_t ctap_client_pin_authorize_permission(CtapClientPin *, uint8_t protocol, uint8_t permission,
     const uint8_t *, size_t, const uint8_t *, uint32_t now_ms);
 uint8_t ctap_pin_auth_parse(CtapClientPin *pin, const CborValue *param,

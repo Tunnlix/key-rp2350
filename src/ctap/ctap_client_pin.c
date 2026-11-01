@@ -24,11 +24,10 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     bool set = record.set;
     uint8_t minimum = record.min_length;
     bool always = record.always_uv, force = record.force_change, long_touch = record.long_touch_reset;
-    auth_secure_zero(&record, sizeof record);
-    if (!valid) return false;
+    if (!valid) { auth_secure_zero(&record, sizeof record); return false; }
     uint8_t fresh[32] = {0};
     if (service->crypto.random(service->crypto.context, fresh, sizeof fresh) != AUTH_OK) {
-        auth_secure_zero(fresh, sizeof fresh); return false;
+        auth_secure_zero(fresh, sizeof fresh); auth_secure_zero(&record, sizeof record); return false;
     }
     AuthPinStorage copied = *storage;
     auth_secure_zero(pin, sizeof *pin);
@@ -36,6 +35,11 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     pin->min_length = minimum ? minimum : 4U; pin->always_uv = always; pin->force_change = force;
     pin->long_touch_reset = long_touch;
     pin->credential_management = auth_credentials_resident_supported(service);
+    pin->persistent_readonly = record.persistent_readonly;
+    pin->persistent_token_present = record.persistent_token_present;
+    pin->persistent_generation = 1U;
+    memcpy(pin->persistent_token, record.persistent_token, 32U);
+    auth_secure_zero(&record, sizeof record);
     memcpy(pin->token, fresh, sizeof fresh); auth_secure_zero(fresh, sizeof fresh);
     return true;
 }
@@ -78,7 +82,7 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
         if (command == 9U && (fields[9].value & 3U) != 0U && !present[10]) return CTAP_STATUS_MISSING_PARAMETER;
         if (fields[6].value != 16U + prefix || (command == 9U && fields[9].value == 0U)) return CTAP_STATUS_INVALID_PARAMETER;
         /* Known unavailable permissions are rejected; undefined bits ignored. */
-        if ((fields[9].value & 0x48U) != 0U) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
+        if ((fields[9].value & 8U) != 0U || ((fields[9].value & 0x40U) && (fields[9].value & 0x3fU))) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
         if (present[10] && (fields[10].value == 0U || fields[10].value > sizeof request->rp_id))
             return CTAP_STATUS_INVALID_PARAMETER;
         if (fields[3].major != 5U) return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
@@ -115,7 +119,7 @@ uint8_t ctap_client_pin_prepare(const uint8_t *input, size_t length, CtapClientP
     request->subcommand = (uint8_t)command; request->protocol = protocol;
     memcpy(request->peer, peer, sizeof peer);
     if (command == 5U || command == 9U) {
-        request->permissions = command == 5U ? 3U : fields[9].value & 0x37U;
+        request->permissions = command == 5U ? 3U : fields[9].value & 0x77U;
         request->rp_present = present[10];
         if (present[10]) {
             request->rp_length = (size_t)fields[10].value;
@@ -171,10 +175,12 @@ static uint8_t check_pin_state(const CtapClientPin *pin, const CtapClientPinRequ
     const AuthPinRecord *record)
 {
     if (request->subcommand == 3U && record->set) return CTAP_STATUS_PIN_AUTH_INVALID;
-    if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_CM) != 0U &&
+    if (request->subcommand == 9U && (request->permissions & (CTAP_PIN_PERMISSION_CM | CTAP_PIN_PERMISSION_PCMR)) != 0U &&
         !pin->credential_management) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
     if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_LBW) != 0U && !pin->large_blobs)
         return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
+    if (request->subcommand == 9U && (request->permissions & CTAP_PIN_PERMISSION_PCMR) &&
+        request->permissions != CTAP_PIN_PERMISSION_PCMR) return CTAP_STATUS_UNAUTHORIZED_PERMISSION;
     if (request->subcommand == 4U || request->subcommand == 5U || request->subcommand == 9U) {
         if (!record->set) return CTAP_STATUS_PIN_NOT_SET;
         if (record->retries == 0U) return CTAP_STATUS_PIN_BLOCKED;
@@ -270,12 +276,63 @@ done:
     return status;
 }
 
+static uint8_t publish_persistent(CtapClientPin *pin, const CtapClientPinRequest *request,
+    const uint8_t keys[64], AuthPinRecord *record, uint8_t *output, size_t capacity, size_t *length)
+{
+    uint8_t encrypted[48] = {0}, encoded[52];
+    CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
+    uint8_t status = CTAP_STATUS_OTHER;
+    bool fresh = !record->persistent_token_present, grant = !record->persistent_readonly;
+    if (fresh) {
+        if (pin->persistent_generation == UINT64_MAX ||
+            pin->service->crypto.random(pin->service->crypto.context, record->persistent_token, 32U) != AUTH_OK) goto done;
+        record->persistent_token_present = true;
+    }
+    if (ctap_pin_protocol_encrypt(&pin->service->crypto, &pin->service->secrets, request->protocol,
+            keys, record->persistent_token, 32U, encrypted) != CTAP_STATUS_OK ||
+        !cbor_write_map(&writer, 1U) || !cbor_write_uint(&writer, 2U) ||
+        !cbor_write_bytes(&writer, encrypted, 32U + ctap_pin_protocol_prefix(request->protocol)) || writer.length > capacity) goto done;
+    record->persistent_readonly = true;
+    if (grant && !persist(pin, record)) goto done;
+    memcpy(pin->persistent_token, record->persistent_token, 32U);
+    pin->persistent_readonly = true; pin->persistent_token_present = true;
+    if (fresh) ++pin->persistent_generation;
+    memcpy(output, encoded, writer.length); *length = writer.length; status = CTAP_STATUS_OK;
+done:
+    auth_secure_zero(encrypted, sizeof encrypted); auth_secure_zero(encoded, sizeof encoded);
+    return status;
+}
+
+static bool reset_persistent_record(CtapClientPin *pin, AuthPinRecord *record)
+{
+    record->persistent_readonly = false;
+    record->persistent_token_present = true;
+    auth_secure_zero(record->persistent_token, sizeof record->persistent_token);
+    return pin->service->crypto.random(pin->service->crypto.context,
+        record->persistent_token, sizeof record->persistent_token) == AUTH_OK;
+}
+
+static void refresh_persistent(CtapClientPin *pin, const AuthPinRecord *record)
+{
+    if (pin->persistent_readonly != record->persistent_readonly ||
+        !ctap_pin_equal(pin->persistent_token, record->persistent_token, 32U)) {
+        if (pin->persistent_generation == UINT64_MAX) pin->faulted = true;
+        else ++pin->persistent_generation;
+    }
+    memcpy(pin->persistent_token, record->persistent_token, 32U);
+    pin->persistent_readonly = record->persistent_readonly;
+    pin->persistent_token_present = record->persistent_token_present;
+}
+
 static uint8_t commit_new_pin(CtapClientPin *pin, const CtapClientPinRequest *request,
     const uint8_t keys[64], AuthPinRecord *record)
 {
     uint8_t status = new_pin(pin, keys, request->new_pin_enc, request->protocol, record);
     if (status != CTAP_STATUS_OK) return status;
+    if (!reset_persistent_record(pin, record)) return CTAP_STATUS_OTHER;
     if (!persist(pin, record)) return CTAP_STATUS_OTHER;
+    refresh_persistent(pin, record);
+    if (pin->faulted) return CTAP_STATUS_OTHER;
     pin->consecutive_failures = 0U;
     pin->pin_set = true; pin->force_change = false;
     return reset_token(pin) ? CTAP_STATUS_OK : CTAP_STATUS_OTHER;
@@ -322,7 +379,9 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
             status = request->subcommand == 5U ? CTAP_STATUS_PIN_INVALID : CTAP_STATUS_PIN_POLICY_VIOLATION;
             goto done;
         }
-        status = publish_token(pin, request, keys, output, capacity, length, now_ms);
+        status = request->permissions == CTAP_PIN_PERMISSION_PCMR ?
+            publish_persistent(pin, request, keys, &record, output, capacity, length) :
+            publish_token(pin, request, keys, output, capacity, length, now_ms);
     } else {
         status = commit_new_pin(pin, request, keys, &record);
         if (status == CTAP_STATUS_OK) *length = 0U;
@@ -345,6 +404,10 @@ void ctap_client_pin_invalidate(CtapClientPin *pin)
     auth_secure_zero(pin->token_rp_hash, sizeof pin->token_rp_hash);
     pin->permissions = 0U; pin->token_active = false; pin->token_used = false;
     pin->token_rp_bound = false;
+    if (pin->faulted) {
+        auth_secure_zero(pin->persistent_token, sizeof pin->persistent_token);
+        pin->persistent_readonly = pin->persistent_token_present = false;
+    }
 }
 
 void ctap_client_pin_poll(CtapClientPin *pin, uint32_t now_ms)
@@ -365,10 +428,35 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
         pin->min_length = record.min_length ? record.min_length : 4U;
         pin->always_uv = record.always_uv; pin->force_change = record.force_change;
         pin->long_touch_reset = record.long_touch_reset;
+        refresh_persistent(pin, &record);
+        if (pin->faulted) valid = false;
     }
     auth_secure_zero(&record, sizeof record);
     if (!valid) { pin->faulted = true; ctap_client_pin_invalidate(pin); return CTAP_STATUS_OTHER; }
     return CTAP_STATUS_OK;
+}
+
+uint8_t ctap_client_pin_ensure_identifier_token(CtapClientPin *pin)
+{
+    if (pin == NULL || pin->faulted) return CTAP_STATUS_OTHER;
+    if (pin->storage.encrypted_identifiers == NULL || pin->persistent_token_present) return CTAP_STATUS_OK;
+    AuthPinRecord record = {0};
+    uint8_t status = CTAP_STATUS_OTHER;
+    if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) goto failed;
+    if (!record.persistent_token_present) {
+        record.persistent_token_present = true;
+        if (pin->service->crypto.random(pin->service->crypto.context, record.persistent_token, 32U) != AUTH_OK ||
+            !auth_pin_record_valid(&record) || !persist(pin, &record)) goto failed;
+    }
+    refresh_persistent(pin, &record);
+    if (!pin->faulted) status = CTAP_STATUS_OK;
+    goto done;
+failed:
+    pin->faulted = true;
+    ctap_client_pin_invalidate(pin);
+done:
+    auth_secure_zero(&record, sizeof record);
+    return status;
 }
 
 uint8_t ctap_client_pin_probe(CtapClientPin *pin)
@@ -444,9 +532,32 @@ uint8_t ctap_client_pin_authorize_permission(CtapClientPin *pin, uint8_t protoco
     return CTAP_STATUS_OK;
 }
 
+bool ctap_client_pin_management_active(const CtapClientPin *pin, bool persistent, uint64_t generation)
+{
+    if (pin == NULL || pin->faulted) return false;
+    return persistent ? pin->persistent_readonly && !pin->force_change && generation == pin->persistent_generation :
+        pin->token_active && (pin->permissions & CTAP_PIN_PERMISSION_CM) && generation == pin->token_generation;
+}
+
+uint8_t ctap_client_pin_authorize_management_read(CtapClientPin *pin, uint8_t protocol, const uint8_t *rp_hash,
+    const uint8_t *message, size_t length, const uint8_t *mac, uint32_t now_ms)
+{
+    if (pin == NULL || pin->faulted || message == NULL || mac == NULL) return CTAP_STATUS_PIN_AUTH_INVALID;
+    pin->last_management_persistent = false;
+    if (pin->persistent_readonly && !pin->force_change) {
+        uint8_t keys[64] = {0}; memcpy(keys, pin->persistent_token, 32U);
+        uint8_t status = ctap_pin_protocol_verify_version(&pin->service->secrets, protocol, keys,
+            message, length, mac, ctap_pin_protocol_auth_length(protocol));
+        auth_secure_zero(keys, sizeof keys);
+        if (status == CTAP_STATUS_OK) { pin->last_management_persistent = true; return status; }
+    }
+    return ctap_client_pin_authorize_management_version(pin, protocol, rp_hash, message, length, mac, now_ms);
+}
+
 uint8_t ctap_client_pin_authorize_management_version(CtapClientPin *pin, uint8_t protocol, const uint8_t *rp_hash,
     const uint8_t *message, size_t length, const uint8_t *mac, uint32_t now_ms)
 {
+    if (pin != NULL) pin->last_management_persistent = false;
     if (pin != NULL && pin->token_rp_bound &&
         (rp_hash == NULL || !ctap_pin_equal(pin->token_rp_hash, rp_hash, 32U))) return CTAP_STATUS_PIN_AUTH_INVALID;
     return ctap_client_pin_authorize_permission(pin, protocol, CTAP_PIN_PERMISSION_CM, message, length, mac, now_ms);
@@ -515,7 +626,10 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
         if(record.long_touch_reset) { status=CTAP_STATUS_OK; goto done; }
         record.long_touch_reset=true;
     } else { status = CTAP_STATUS_INVALID_PARAMETER; goto done; }
+    if (record.force_change && !reset_persistent_record(pin, &record)) goto done;
     if (!persist(pin, &record)) goto done;
+    refresh_persistent(pin, &record);
+    if (pin->faulted) goto done;
     pin->min_length = record.min_length ? record.min_length : 4U;
     pin->always_uv = record.always_uv; pin->force_change = record.force_change;
     pin->long_touch_reset = record.long_touch_reset;
