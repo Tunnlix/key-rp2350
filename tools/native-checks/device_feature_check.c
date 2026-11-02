@@ -204,6 +204,20 @@ static void check_uvm(void) {
     }
     puts("PASS UVM: presence/PIN/silent factors and resident/sealed key protection");
 }
+static void check_pin_rules(void) {
+    const uint8_t repeated_utf8[]={0xe2,0x82,0xac,0xe2,0x82,0xac,0xe2,0x82,0xac};
+    const uint8_t distinct_utf8[]={0xe2,0x82,0xac,0xe2,0x82,0xad};
+    assert(!auth_pin_policy_accepts(NULL,6) && !auth_pin_policy_accepts((const uint8_t *)"",0));
+    assert(auth_pin_policy_accepts((const uint8_t *)"73918264",8));
+    assert(auth_pin_policy_accepts((const uint8_t *)"a b 9274",8));
+    assert(auth_pin_policy_accepts(distinct_utf8,sizeof(distinct_utf8)));
+    assert(auth_pin_policy_accepts((const uint8_t *)"123456",6)==!CTAP_PIN_COMPLEXITY);
+    assert(auth_pin_policy_accepts((const uint8_t *)"PaSsWoRd",8)==!CTAP_PIN_COMPLEXITY);
+    assert(auth_pin_policy_accepts(repeated_utf8,sizeof(repeated_utf8))==!CTAP_PIN_COMPLEXITY);
+    assert(auth_pin_policy_accepts((const uint8_t *)"777777",6)==!CTAP_PIN_COMPLEXITY);
+    assert(auth_pin_policy_accepts((const uint8_t *)" password",9));
+    puts("PASS PIN rules: whole-value blocklist, ASCII case folding, repeated Unicode, numeric/spaces and OFF behavior");
+}
 static void check_info(void) {
     CtapGetInfoProfile p={.make_credential=true,.hmac_secret=true,.user_presence=true,.max_message_size=CTAP_MESSAGE_CAPACITY};
     uint8_t out[CTAP_GET_INFO_MAX_CBOR_SIZE],unchanged[sizeof(out)]; size_t n=0; CborValue map,v;
@@ -222,7 +236,9 @@ static void check_info(void) {
     assert(ctap_get_info_encode(&p,out,sizeof(out),&n) && cbor_read_document(out,n,&map));
     assert(cbor_map_uint(&map,4,&ep_options) && cbor_map_text(&ep_options,"ep",&v) && v.value==21);
     assert(cbor_map_uint(&map,0x18,&v) && v.major==7 && v.value==21);
-    assert(!cbor_map_uint(&map,0x1b,&v) && !cbor_map_uint(&map,0x1c,&v));
+    assert(cbor_map_uint(&map,0x1b,&v)==(CTAP_PIN_COMPLEXITY != 0));
+    if (CTAP_PIN_COMPLEXITY) assert(v.major==7 && v.encoded[0]==0xf4);
+    assert(!cbor_map_uint(&map,0x1c,&v));
     const uint8_t *cursor=map.data,*end=map.encoded+map.encoded_length;
     uint64_t previous=0;
     for(uint64_t i=0;i<map.value;i++) {
@@ -239,13 +255,15 @@ static void check_info(void) {
     CborValue options;assert(cbor_map_uint(&map,4,&options) && cbor_map_text(&options,"perCredMgmtRO",&v) && v.value==21);
     memcpy(unchanged,out,sizeof(out)); size_t sentinel=99;
     assert(!ctap_get_info_encode(&p,out,1,&sentinel) && sentinel==99 && !memcmp(out,unchanged,sizeof(out)));
-    assert(!cbor_map_uint(&map,0x1b,&v) && !cbor_map_uint(&map,0x1c,&v));
+    assert(cbor_map_uint(&map,0x1b,&v)==(CTAP_PIN_COMPLEXITY != 0));
+    if (CTAP_PIN_COMPLEXITY) assert(v.major==7 && v.encoded[0]==0xf4);
+    assert(!cbor_map_uint(&map,0x1c,&v));
     CborValue extensions;assert(cbor_map_uint(&map,2,&extensions));
     const uint8_t *item=extensions.data;
     for(uint64_t i=0;i<extensions.value;i++) {
         assert(cbor_read_next(&item,extensions.encoded+extensions.encoded_length,&v));
-        assert(!cbor_text_equal(&v,"pinComplexityPolicy"));
+        if (!CTAP_PIN_COMPLEXITY) assert(!cbor_text_equal(&v,"pinComplexityPolicy"));
     }
     puts("PASS GetInfo: PIN-bound maximum/reset fields, full CBOR parsing and bounded-output failure preservation");
 }
-int main(void) { check_wink();check_lock();check_initial_progress();check_presence();check_uvm();check_info(); }
+int main(void) { check_wink();check_lock();check_initial_progress();check_presence();check_uvm();check_pin_rules();check_info(); }

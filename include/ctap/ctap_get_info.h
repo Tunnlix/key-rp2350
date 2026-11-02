@@ -25,6 +25,7 @@ typedef struct {
     uint8_t min_pin_length; /* Zero means default four. */
     bool always_uv, force_pin_change;
     bool long_touch_reset;
+    bool pin_complexity;
     bool enterprise_capable, enterprise_enabled;
     bool pin_set; /* Current persistent PIN state, refreshed before GetInfo. */
     bool large_blobs;

@@ -24,6 +24,7 @@ typedef struct {
     bool cred_blob_requested, cred_blob_stored, large_blob_requested;
     bool discoverable;
     bool min_pin_length_requested;
+    bool pin_complexity_requested;
     bool uvm_requested;
     AuthCredential metadata;
 } CtapMakeCredential;

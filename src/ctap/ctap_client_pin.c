@@ -5,6 +5,25 @@
 
 #include <string.h>
 
+static bool policy_supported(const AuthPinRecord *record)
+{
+    /* An OFF build cannot silently weaken a persisted enabled policy.
+     * Switch profiles through explicit reset/reprovisioning instead. */
+    return CTAP_PIN_COMPLEXITY || !record->pin_complexity;
+}
+
+static void policy_defaults(AuthPinRecord *record)
+{
+    if (record->policy_initialized) return;
+    record->policy_initialized = true;
+    record->legacy_pin_complexity = false;
+    record->pin_complexity = CTAP_PIN_COMPLEXITY != 0;
+    /* Existing hashes cannot establish whether the old PIN meets new rules. */
+    if (record->pin_complexity && record->set) {
+        record->force_change = true; record->persistent_readonly = false;
+    }
+}
+
 static bool reset_token(CtapClientPin *pin)
 {
     ctap_client_pin_invalidate(pin);
@@ -20,7 +39,8 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
         !auth_secret_crypto_valid(&service->secrets) || service->secrets.regenerate == NULL ||
         service->crypto.random == NULL || service->crypto.sha256 == NULL) return false;
     AuthPinRecord record = {0};
-    bool valid = storage->read(storage->context, &record) == AUTH_OK && auth_pin_record_valid(&record);
+    bool valid = storage->read(storage->context, &record) == AUTH_OK && auth_pin_record_valid(&record) && policy_supported(&record);
+    policy_defaults(&record);
     bool set = record.set;
     uint8_t minimum = record.min_length;
     bool always = record.always_uv, force = record.force_change, long_touch = record.long_touch_reset;
@@ -33,7 +53,7 @@ bool ctap_client_pin_init(CtapClientPin *pin, AuthCredentialService *service, co
     auth_secure_zero(pin, sizeof *pin);
     pin->service = service; pin->storage = copied; pin->pin_set = set;
     pin->min_length = minimum ? minimum : 4U; pin->always_uv = always; pin->force_change = force;
-    pin->long_touch_reset = long_touch;
+    pin->long_touch_reset = long_touch; pin->pin_complexity = record.pin_complexity;
     pin->enterprise_enabled = record.enterprise_enabled;
     memcpy(pin->enterprise_fingerprint,record.enterprise_fingerprint,32U);
     pin->credential_management = auth_credentials_resident_supported(service);
@@ -161,8 +181,16 @@ static uint8_t new_pin(CtapClientPin *pin, const uint8_t keys[64], const uint8_t
         if ((plain[i] & 0xC0U) != 0x80U) ++points;
     }
     if (points < (record->min_length ? record->min_length : 4U)) goto done;
+    policy_defaults(record);
+    if (record->pin_complexity && !auth_pin_policy_accepts(plain, length)) goto done;
     status = CTAP_STATUS_OTHER;
     if (pin->service->crypto.sha256(pin->service->crypto.context, plain, length, digest) != AUTH_OK) goto done;
+    /* CTAP 2.3 changePIN step 13: a forced change must select a different PIN.
+     * Compare verifiers after validating the new value; never retain plaintext. */
+    if (record->force_change && ctap_pin_equal(record->hash, digest, sizeof record->hash)) {
+        status = CTAP_STATUS_PIN_POLICY_VIOLATION;
+        goto done;
+    }
     record->force_change = false;
     record->set = true; record->code_points = points; record->retries = AUTH_PIN_MAX_RETRIES;
     memcpy(record->hash, digest, 16U);
@@ -336,7 +364,7 @@ static uint8_t commit_new_pin(CtapClientPin *pin, const CtapClientPinRequest *re
     refresh_persistent(pin, record);
     if (pin->faulted) return CTAP_STATUS_OTHER;
     pin->consecutive_failures = 0U;
-    pin->pin_set = true; pin->force_change = false;
+    pin->pin_set = true; pin->force_change = false; pin->pin_complexity = record->pin_complexity;
     return reset_token(pin) ? CTAP_STATUS_OK : CTAP_STATUS_OTHER;
 }
 
@@ -357,6 +385,8 @@ uint8_t ctap_client_pin_execute(CtapClientPin *pin, const CtapClientPinRequest *
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
         pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
     }
+    if (!policy_supported(&record)) goto done;
+    policy_defaults(&record);
     if (request->subcommand == 1U) {
         uint8_t encoded[8]; CborWriter writer; cbor_writer_init(&writer, encoded, sizeof encoded);
         if (!cbor_write_map(&writer, 2U) || !cbor_write_uint(&writer, 3U) || !cbor_write_uint(&writer, record.retries) ||
@@ -424,8 +454,10 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
 {
     if (pin == NULL || set == NULL || pin->faulted) return CTAP_STATUS_OTHER;
     AuthPinRecord record = {0};
-    bool valid = pin->storage.read(pin->storage.context, &record) == AUTH_OK && auth_pin_record_valid(&record);
+    bool valid = pin->storage.read(pin->storage.context, &record) == AUTH_OK && auth_pin_record_valid(&record) && policy_supported(&record);
     if (valid) {
+        policy_defaults(&record);
+        pin->pin_complexity = record.pin_complexity;
         pin->pin_set = record.set; *set = record.set;
         pin->min_length = record.min_length ? record.min_length : 4U;
         pin->always_uv = record.always_uv; pin->force_change = record.force_change;
@@ -443,16 +475,25 @@ uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set)
 uint8_t ctap_client_pin_ensure_identifier_token(CtapClientPin *pin)
 {
     if (pin == NULL || pin->faulted) return CTAP_STATUS_OTHER;
-    if (pin->storage.encrypted_identifiers == NULL || pin->persistent_token_present) return CTAP_STATUS_OK;
+
     AuthPinRecord record = {0};
     uint8_t status = CTAP_STATUS_OTHER;
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) goto failed;
-    if (!record.persistent_token_present) {
-        record.persistent_token_present = true;
-        if (pin->service->crypto.random(pin->service->crypto.context, record.persistent_token, 32U) != AUTH_OK ||
-            !auth_pin_record_valid(&record) || !persist(pin, &record)) goto failed;
+    bool initialize = !record.policy_initialized;
+    if (!policy_supported(&record)) goto failed;
+    policy_defaults(&record);
+    if (initialize && record.force_change) {
+        if (!reset_persistent_record(pin, &record)) goto failed;
+        ctap_client_pin_invalidate(pin);
     }
+    if (pin->storage.encrypted_identifiers != NULL && !record.persistent_token_present) {
+        record.persistent_token_present = true;
+        if (pin->service->crypto.random(pin->service->crypto.context, record.persistent_token, 32U) != AUTH_OK) goto failed;
+        initialize = true;
+    }
+    if (initialize && (!auth_pin_record_valid(&record) || !persist(pin, &record))) goto failed;
     refresh_persistent(pin, &record);
+    pin->pin_complexity = record.pin_complexity; pin->force_change = record.force_change;
     if (!pin->faulted) status = CTAP_STATUS_OK;
     goto done;
 failed:
@@ -605,6 +646,12 @@ done:
 uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uint8_t minimum,
     bool force, const uint8_t *rp_hashes, size_t count)
 {
+    return ctap_client_pin_configure_policy(pin, command, minimum, force, rp_hashes, count, false);
+}
+
+uint8_t ctap_client_pin_configure_policy(CtapClientPin *pin, uint8_t command, uint8_t minimum,
+    bool force, const uint8_t *rp_hashes, size_t count, bool enable_complexity)
+{
     if (pin == NULL || pin->faulted) return CTAP_STATUS_OTHER;
     if (count > AUTH_PIN_MAX_RP_IDS) return CTAP_STATUS_LIMIT_EXCEEDED;
     if (count && (rp_hashes == NULL || command != 3U)) return CTAP_STATUS_INVALID_PARAMETER;
@@ -613,6 +660,8 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
     if (pin->storage.read(pin->storage.context, &record) != AUTH_OK || !auth_pin_record_valid(&record)) {
         pin->faulted = true; ctap_client_pin_invalidate(pin); goto done;
     }
+    if (!policy_supported(&record)) goto done;
+    policy_defaults(&record);
     if (command == 1U) {
         if (!auth_enterprise_valid(&pin->service->enterprise)) { status=CTAP_STATUS_INVALID_PARAMETER; goto done; }
         if (record.enterprise_enabled && ctap_pin_equal(record.enterprise_fingerprint,pin->service->enterprise.fingerprint,32U)) {
@@ -626,6 +675,7 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
         if (minimum == 0U) minimum = old;
         if (minimum < old || minimum > 63U) { status = CTAP_STATUS_PIN_POLICY_VIOLATION; goto done; }
         if (force && !record.set) { status = CTAP_STATUS_PIN_NOT_SET; goto done; }
+        if (CTAP_PIN_COMPLEXITY && enable_complexity) record.pin_complexity = true;
         record.min_length = minimum;
         record.force_change = record.force_change || force || (record.set && record.code_points < minimum);
         if (count != 0U) {
@@ -644,6 +694,7 @@ uint8_t ctap_client_pin_configure_rpids(CtapClientPin *pin, uint8_t command, uin
     pin->min_length = record.min_length ? record.min_length : 4U;
     pin->always_uv = record.always_uv; pin->force_change = record.force_change;
     pin->long_touch_reset = record.long_touch_reset;
+    pin->pin_complexity = record.pin_complexity;
     pin->enterprise_enabled = record.enterprise_enabled;
     memcpy(pin->enterprise_fingerprint,record.enterprise_fingerprint,32U);
     ctap_client_pin_invalidate(pin);

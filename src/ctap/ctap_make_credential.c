@@ -110,6 +110,13 @@ static uint8_t parse_extensions(AuthCredentialService *service, CtapClientPin *p
             return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
         result->metadata.third_party_payment = value.encoded[0] == 0xf5U;
     }
+#if CTAP_PIN_COMPLEXITY
+    if (pin != NULL && cbor_map_text(extensions, "pinComplexityPolicy", &value)) {
+        if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+            return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+        result->pin_complexity_requested = value.encoded[0] == 0xf5U;
+    }
+#endif
     if (pin != NULL && cbor_map_text(extensions, "minPinLength", &value)) {
         if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
             return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;

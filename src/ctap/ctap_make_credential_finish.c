@@ -24,6 +24,7 @@ typedef struct {
     CtapMakeCredentialWorkspace *workspace;
     size_t length, capacity;
     uint8_t status, min_pin_length;
+    bool pin_complexity;
 } RegistrationResponse;
 
 static AuthStatus prepare_response_id(void *context, const AuthCredential *credential,
@@ -55,6 +56,7 @@ static AuthStatus prepare_response_id(void *context, const AuthCredential *crede
         prepared->cred_blob_requested ? &prepared->cred_blob_stored : NULL,
         prepared->large_blob_requested ? blob_key : NULL,
         response->min_pin_length && prepared->min_pin_length_requested ? &response->min_pin_length : NULL,
+        response->min_pin_length && prepared->pin_complexity_requested ? &response->pin_complexity : NULL,
         prepared->uvm_requested, prepared->enterprise_attestation,
         response->workspace->scratch.finish.encoded, sizeof response->workspace->scratch.finish.encoded, &response->length);
     auth_secure_zero(blob_key, sizeof blob_key);
@@ -100,11 +102,12 @@ static uint8_t finish_at(AuthCredentialService *service,
     uint8_t *public_key = workspace->scratch.finish.public_key;
     AuthStatus status;
     uint8_t minimum = 0U;
-    if (prepared->min_pin_length_requested) {
+    if (prepared->min_pin_length_requested || prepared->pin_complexity_requested) {
         uint8_t policy_status = ctap_client_pin_min_length_for_rp(prepared->pin, prepared->rp_id_hash, &minimum);
         if (policy_status != CTAP_STATUS_OK) return policy_status;
     }
-    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, capacity, CTAP_STATUS_OK, minimum};
+    RegistrationResponse response = {service, prepared, aaguid, workspace, 0U, capacity, CTAP_STATUS_OK, minimum,
+        prepared->pin != NULL && prepared->pin->pin_complexity};
     if (prepared->discoverable) {
         status = auth_credentials_create_resident_prepared(service, &prepared->metadata,
             prepare_response, &response, credential, public_key);

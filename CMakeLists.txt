@@ -4,6 +4,7 @@ project(ctap_core VERSION 0.1.0 LANGUAGES C)
 # Embed with add_subdirectory() and link ctap_core. The application supplies
 # clock, touch, crypto and storage callbacks; this target has no platform drivers.
 add_library(ctap_core STATIC
+    src/authenticator/auth_pin_policy.c
     src/authenticator/auth_enterprise.c
     src/authenticator/auth_credentials.c
     src/authenticator/auth_nonresident.c
@@ -43,6 +44,8 @@ add_library(ctap_core STATIC
 )
 target_include_directories(ctap_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_compile_features(ctap_core PUBLIC c_std_17)
+option(CTAP_PIN_COMPLEXITY "Support PIN complexity, enabled by default on new/reset devices" ON)
+target_compile_definitions(ctap_core PUBLIC CTAP_PIN_COMPLEXITY=$<BOOL:${CTAP_PIN_COMPLEXITY}>)
 # Empty cache values retain the defaults in ctap_config.h. PUBLIC definitions
 # keep application/provider struct layouts consistent with the library.
 foreach(setting IN ITEMS CTAP_MESSAGE_CAPACITY CTAP_RESIDENT_CAPACITY CTAP_TOUCH_TIMEOUT_MS)

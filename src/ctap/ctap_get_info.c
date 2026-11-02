@@ -1,3 +1,4 @@
+#include "authenticator/auth_pin_policy.h"
 #include "ctap/ctap_get_info.h"
 #include "ctap/cbor_writer.h"
 #include "authenticator/auth_platform.h"
@@ -26,7 +27,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     cbor_writer_init(&writer, encoded, sizeof encoded);
     bool ok = cbor_write_map(&writer, 9U + (profile->large_blobs ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 3U : 0U) +
         (profile->usb_transport ? 1U : 0U) + (profile->firmware_version ? 1U : 0U) + (profile->pin_uv_auth ? 1U : 0U) +
-        (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->encrypted_identifiers ? 2U : 0U) + (profile->usb_transport && profile->pin_uv_auth ? 1U : 0U)) &&
+        (profile->resident_credentials ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->encrypted_identifiers ? 2U : 0U) + (profile->usb_transport && profile->pin_uv_auth ? 1U : 0U) + (CTAP_PIN_COMPLEXITY && profile->pin_uv_auth ? 1U : 0U)) &&
         /* Integer map keys are in increasing canonical order. */
         /* Older clients require 2.0 discovery even when newer CTAP2 versions
          * are understood. PIN protocols 1/2 are supported; CTAP1 is not. */
@@ -35,12 +36,13 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
         cbor_write_text(&writer, "FIDO_2_1") &&
         cbor_write_text(&writer, "FIDO_2_3");
     if (profile->hmac_secret) ok = ok && cbor_write_uint(&writer, 0x02U) &&
-        cbor_write_array(&writer, 2U + (profile->third_party_payment ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U)) &&
+        cbor_write_array(&writer, 2U + (profile->third_party_payment ? 1U : 0U) + (profile->resident_credentials ? 1U : 0U) + (profile->large_blobs ? 1U : 0U) + (profile->pin_uv_auth ? 2U : 0U) + (profile->make_credential ? 1U : 0U) + (CTAP_PIN_COMPLEXITY && profile->pin_uv_auth ? 1U : 0U)) &&
         cbor_write_text(&writer, "hmac-secret") && cbor_write_text(&writer, "uvm");
     if (profile->resident_credentials) ok = ok && cbor_write_text(&writer, "credBlob");
     if (profile->large_blobs) ok = ok && cbor_write_text(&writer, "largeBlobKey");
     if (profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "credProtect") && cbor_write_text(&writer, "minPinLength");
     if (profile->hmac_secret && profile->make_credential) ok = ok && cbor_write_text(&writer, "hmac-secret-mc");
+    if (CTAP_PIN_COMPLEXITY && profile->pin_uv_auth) ok = ok && cbor_write_text(&writer, "pinComplexityPolicy");
     if (profile->third_party_payment) ok = ok && cbor_write_text(&writer, "thirdPartyPayment");
     ok = ok && cbor_write_uint(&writer, 0x03U) &&
         cbor_write_bytes(&writer, profile->aaguid, sizeof profile->aaguid) &&
@@ -90,6 +92,7 @@ bool ctap_get_info_encode(const CtapGetInfoProfile *profile,
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x18U) && cbor_write_bool(&writer, profile->long_touch_reset);
     if (profile->encrypted_identifiers) ok = ok && cbor_write_uint(&writer, 0x19U) && cbor_write_bytes(&writer, profile->encrypted_identifier, 32U);
     if (profile->usb_transport && profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1AU) && cbor_write_array(&writer, 1U) && cbor_write_text(&writer, "usb");
+    if (CTAP_PIN_COMPLEXITY && profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1BU) && cbor_write_bool(&writer, profile->pin_complexity);
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1DU) && cbor_write_uint(&writer, 63U);
     if (profile->encrypted_identifiers) ok = ok && cbor_write_uint(&writer, 0x1EU) && cbor_write_bytes(&writer, profile->encrypted_store_state, 32U);
     if (profile->pin_uv_auth) ok = ok && cbor_write_uint(&writer, 0x1FU) &&

@@ -28,6 +28,7 @@ typedef struct {
     uint8_t min_length;
     bool always_uv, force_change, large_blobs;
     bool long_touch_reset;
+    bool pin_complexity;
     bool enterprise_enabled;
     uint8_t enterprise_fingerprint[32];
     uint8_t persistent_token[32];
@@ -82,13 +83,16 @@ void ctap_client_pin_invalidate(CtapClientPin *pin);
  * GA and credential management do not consume permissions. No cached UP/UV. */
 void ctap_client_pin_clear_permissions_except_lbw(CtapClientPin *pin);
 uint8_t ctap_client_pin_status(CtapClientPin *pin, bool *set);
-/* First normal GetInfo initializes a permissionless privacy token if needed.
+/* First normal GetInfo commits a legacy PIN-policy transition, then initializes
+ * a permissionless privacy token if needed. Legacy ON policy requires PIN change.
  * Caller must have completed read-only trial boot confirmation. Idempotent;
  * no per-GetInfo flash writes, no PIN enrollment or authorization implied. */
 uint8_t ctap_client_pin_ensure_identifier_token(CtapClientPin *pin);
 uint8_t ctap_client_pin_probe(CtapClientPin *pin);
 /* Persist policy and retire authorization before exposing changed configuration. */
 uint8_t ctap_client_pin_configure(CtapClientPin *, uint8_t subcommand, uint8_t minimum, bool force_change);
+uint8_t ctap_client_pin_configure_policy(CtapClientPin *, uint8_t subcommand, uint8_t minimum,
+    bool force_change, const uint8_t *rp_hashes, size_t count, bool enable_complexity);
 /* Hashes are a contiguous count*32 byte list. A zero count preserves the
  * existing list (CTAP setMinPINLength treats an empty array as no update). */
 uint8_t ctap_client_pin_configure_rpids(CtapClientPin *, uint8_t subcommand, uint8_t minimum,

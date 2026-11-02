@@ -4,6 +4,8 @@
 bool auth_pin_record_valid(const AuthPinRecord *record)
 {
     if (record == NULL || record->retries > AUTH_PIN_MAX_RETRIES ||
+        (record->pin_complexity && !record->policy_initialized) ||
+        (record->policy_initialized && record->legacy_pin_complexity) ||
         (record->min_length != 0U && (record->min_length < 4U || record->min_length > 63U)) ||
         (record->force_change && !record->set) || record->min_length_rp_count > AUTH_PIN_MAX_RP_IDS) return false;
     uint8_t enterprise_nonzero = 0U;

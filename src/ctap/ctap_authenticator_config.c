@@ -37,7 +37,7 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
         if (status != CTAP_STATUS_OK) return status;
     }
     uint8_t minimum = 0U;
-    bool force = false;
+    bool force = false, complexity = false;
     uint8_t rp_hashes[AUTH_PIN_MAX_RP_IDS][32] = {{0}};
     size_t rp_count = 0U;
     if (fields[1].value == 3U && present[2]) {
@@ -72,8 +72,14 @@ uint8_t ctap_authenticator_config_execute(CtapClientPin *pin, const uint8_t *inp
                 return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
             force = value.encoded[0] == 0xf5U;
         }
-        /* PIN complexity is unsupported; ignore its optional parameter. */
+#if CTAP_PIN_COMPLEXITY
+        if (cbor_map_uint(&fields[2], 4U, &value)) {
+            if (value.major != 7U || (value.encoded[0] != 0xf4U && value.encoded[0] != 0xf5U))
+                return CTAP_STATUS_CBOR_UNEXPECTED_TYPE;
+            complexity = value.encoded[0] == 0xf5U;
+        }
+#endif
     }
-    return ctap_client_pin_configure_rpids(pin, (uint8_t)fields[1].value, minimum, force,
-        &rp_hashes[0][0], rp_count);
+    return ctap_client_pin_configure_policy(pin, (uint8_t)fields[1].value, minimum, force,
+        &rp_hashes[0][0], rp_count, complexity);
 }

@@ -67,6 +67,7 @@ AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2
     w->root.profile=1; w->root.descriptor_length=32; w->root.serial=w->root.reset_generation=1;
     w->global.reset_generation=1; w->pin.retries=AUTH_PIN_MAX_RETRIES;
     w->pin.min_length=RP2350_DEFAULT_MIN_PIN_LENGTH;
+    w->pin.policy_initialized=true; w->pin.pin_complexity=CTAP_PIN_COMPLEXITY != 0;
     status=fresh(crypto,w->root.descriptor,32); if(status!=AUTH_OK) goto done;
     status=fresh(crypto,w->root.epoch,16); if(status!=AUTH_OK) goto done;
     status=fresh(crypto,w->global.handle_prefix,24); if(status!=AUTH_OK) goto done;
@@ -84,7 +85,7 @@ AuthStatus rp2350_store_provision_internal(Rp2350StoreProvisioned *out,const Rp2
     status=config->hash(config->records_context,w->ordered,sizeof(w->ordered),w->manifest.ordered_digest); if(status!=AUTH_OK) goto done;
     status=rp2350_store_manifest_encode(&w->manifest,w->data); if(status!=AUTH_OK) goto done;
     status=append(w,3,8,96,w->selector.manifest_digest); if(status!=AUTH_OK) goto done;
-    if(w->log.end!=2048) { status=AUTH_BAD_DATA; goto done; }
+    if(w->log.end!=2304) { status=AUTH_BAD_DATA; goto done; }
     status=root_slots(w,flash); if(status!=AUTH_OK) goto done;
     /* Only the final selector commit makes this new empty epoch bootable. */
     w->selector.state=1; w->selector.serial=w->selector.generation=w->selector.reset_generation=1;

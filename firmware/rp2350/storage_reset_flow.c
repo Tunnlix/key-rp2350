@@ -30,6 +30,7 @@ static AuthStatus run(Rp2350StoreResetFlow *state,const Rp2350Flash *flash,const
     if(w->snapshot.state!=RP2350_STORE_RECOVERED || w->snapshot.records.metadata_count || w->snapshot.records.key_count ||
         w->snapshot.records.pin.set || w->snapshot.records.pin.retries!=AUTH_PIN_MAX_RETRIES ||
         w->snapshot.records.pin.min_length_rp_count!=0U || w->snapshot.records.pin.long_touch_reset ||
+        (!w->snapshot.records.pin.policy_initialized || w->snapshot.records.pin.pin_complexity != (CTAP_PIN_COMPLEXITY != 0)) ||
         w->snapshot.records.pin.enterprise_enabled || w->snapshot.records.pin.legacy_pin_complexity || w->snapshot.records.pin.persistent_readonly) { status=AUTH_BAD_DATA; goto done; }
     status=rp2350_crypto_stage_epoch_internal(crypto,w->snapshot.records.global.handle_prefix,w->snapshot.records.global.handle_high);
     if(status!=AUTH_OK) goto done;

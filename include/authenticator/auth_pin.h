@@ -2,6 +2,7 @@
 #define AUTH_PIN_H
 
 #include "authenticator/auth_platform.h"
+#include "authenticator/auth_pin_policy.h"
 
 #define AUTH_PIN_MAX_RETRIES 8U
 #define AUTH_PIN_MAX_RP_IDS 4U
@@ -23,6 +24,7 @@ typedef struct {
      * no permissions. Secret: encrypted by the storage provider. */
     uint8_t persistent_token[32];
     bool legacy_pin_complexity; /* Retained only to decode/rewrite older experimental records; no enforcement. */
+    bool policy_initialized, pin_complexity; /* Versioned policy, independent of legacy experiment. */
     /* Exact RP IDs are represented by their SHA-256 hashes, not suffix matches.
      * Unused entries are zero. The list is replaced by authenticated policy
      * configuration and cleared by the combined factory reset. */
