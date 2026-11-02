@@ -87,3 +87,13 @@ chains, signatures, tamper rejection, credential algorithms, ordinary/enterprise
 identity separation and explicit `none` attestation. Omit `--batch-identity` when
 no ordinary identity is configured. Generated replies and all identities stay
 outside the public source tree.
+
+PIN complexity is enabled by default. Configure another build directory with
+`-DCTAP_PIN_COMPLEXITY=OFF` to check the excluded-feature profile. Both profiles
+exercise setPIN/changePIN for protocols 1/2, sticky configuration, interrupted
+policy writes, legacy policy transition, discovery and signed RP-authorized
+extension output. The OFF profile also rejects an enabled persisted policy.
+`device_feature_check` covers whole-value/case matching, repeated Unicode, numeric
+PINs/spaces and absence of the optional URL. `storage_check --policy` runs the
+focused policy/credential suite; the full invocation adds synthetic power cuts.
+These programs use synthetic flash and never reset a connected device.

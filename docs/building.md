@@ -188,7 +188,7 @@ The device stores 32 discoverable credentials. Sealed non-discoverable credentia
 IDs are held by clients and do not consume those slots. Credential management
 supports listing, deletion and editable user names. PIN policy supports always-UV,
 increasing the minimum length, and requiring a PIN change. The factory minimum
-is six Unicode characters; existing stored policies remain unchanged by updates.
+is six Unicode code points. Policy upgrades may require a PIN change as described below.
 The signed `minPinLength` extension reports the current minimum only to
 configured RP IDs. The authenticated RP policy supports up to four distinct IDs.
 
@@ -233,9 +233,9 @@ and [security limitations](../.github/SECURITY.md).
 PIN-policy, persistent-token, enterprise and payment records use versioned
 formats. The current firmware reads older records, but older firmware rejects
 formats it cannot interpret. Downgrade after new-format records are created is
-unsupported. Legacy experimental complexity flags remain readable without
-composition enforcement; an existing forced-PIN-change requirement remains in
-force until PIN change or reset.
+unsupported. Legacy experimental complexity flags are not interpreted as the new
+policy. An enabled policy in the new record format cannot be silently disabled
+by loading a complexity-OFF build. See the transition requirements below.
 
 Both A/B firmware slots share credential and blob storage. Trial confirmation
 covers startup and USB enumeration, not every runtime path. Storage-encryption
@@ -270,3 +270,70 @@ and reset-change checks for both encrypted GetInfo fields.
 The matching lab metadata and raw reports are retained locally with the signed
 image hashes. They are not public default-build metadata or a production trust
 identity. FIDO certification has not been obtained.
+
+## PIN complexity build profiles
+
+`CTAP_PIN_COMPLEXITY` is a public CMake option, ON by default. Fresh provisioning
+and factory reset enable complexity in an ON build. The policy is enforced on
+the device for new PINs in both setPIN and changePIN, using PIN protocols 1 and 2.
+It permits numeric PINs, spaces and valid Unicode; it adds no required character
+classes. Existing UTF-8 encoding, embedded-NUL rejection, 63-byte ceiling, minimum
+length and retry limits apply independently of this option.
+
+The policy rejects a whole PIN consisting of one repeated Unicode code point,
+and exact whole-value matches against the following project-maintained blocklist
+(ASCII letters matched without case; no trimming or normalization):
+
+```text
+123456 1234567 12345678 123456789 1234567890
+654321 123123 123321 112233 121212 159753 123654
+qwerty qwerty123 password password1 abc123 iloveyou
+letmein welcome admin123
+```
+
+These are Tunnlix policy choices informed by the activation-secret guidance in
+[NIST SP 800-63B-4 section 3.2.10](https://pages.nist.gov/800-63-4/sp800-63b.html#activation-secrets).
+The list is not a NIST-prescribed algorithm. This does not establish NIST
+certification, FIPS validation or an authenticator assurance level. In particular,
+NIST's hardware-protected verification/PIN-derived key-protection requirements
+need a separate architecture assessment; the blocklist does not supply them.
+
+Owners can modify `src/authenticator/auth_pin_policy.c` to customize rules in
+source, or exclude the additional checks at configuration time:
+
+```sh
+cmake -S firmware/rp2350 -B build/custom-pin-policy \
+  -DPICO_SDK_PATH="$PICO_SDK_PATH" -DCTAP_PIN_COMPLEXITY=OFF
+```
+
+Supply the other board/build settings from the normal build instructions. Use a
+separate build directory for each profile. This option propagates to the core and
+storage providers; portable consumers compiling without CMake must define the
+same `CTAP_PIN_COMPLEXITY=0` or `1` for every translation unit. OFF omits complexity
+GetInfo/extension claims and ignores unsupported optional Config complexity input;
+it does not disable ordinary PIN verification, length limits or retry protection.
+
+On an ON build, GetInfo reports the active policy. Standard authenticated Config
+can enable complexity on a supported disabled device, but false does not disable
+an enabled policy. Enabled state persists through reboot. Factory reset deletes
+credentials and restores the installed build's default policy. Activation and
+explicit forceChangePin remain separate controls; enabling complexity on a device
+with a current-format PIN does not itself force a change of that existing PIN.
+
+Upgrading a pre-policy PIN record under an ON build requires changing the existing
+PIN: its stored hash cannot show whether it satisfies the new rules. No credential
+is deleted. Until PIN change succeeds, new PIN-token grants are blocked and old
+persistent read-only permissions are revoked. The first normal GetInfo persists
+this transition after read-only trial boot; PIN operations also enforce it if a
+client proceeds directly. Failed storage operations fail closed. Repeated GetInfo
+does not rewrite an already initialized policy record.
+
+An OFF image refuses to initialize a key holding an enabled current-format policy.
+Switching to OFF requires an explicit destructive reset/reprovisioning using the
+OFF build's signed RAM recovery/provisioning path. An ordinary reset under an ON
+image restores ON, so it does not prepare that downgrade. Owners must arrange
+account recovery before this operation. Do not erase/reprovision automatically
+on image update, decode failure, or first connection. New policy records also
+prevent older firmware from silently interpreting the new state.
+
+No policy URL is currently advertised through GetInfo.

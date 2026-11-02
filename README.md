@@ -39,7 +39,7 @@ ports to other boards.
 | Encrypted GetInfo identifiers | ✅ | Fresh IVs; reset replaces the device identifier and credential-store state. |
 | Enterprise attestation | ✅ | Optional provisioned identity; disabled by default. Not needed for ordinary passkeys. |
 | Ordinary batch attestation | ✅ | Optional separate identity. Default builds use packed self-attestation. |
-| PIN complexity policy | 🕒 | Deferred for a future version; no composition rules are currently enforced. |
+| PIN complexity policy | ✅ | Blocks common and repeated PINs by default; numeric PINs allowed. Custom builds can exclude it. |
 | NFC, Bluetooth, display and biometrics | ❌ | Require hardware absent from the current reference board. |
 | Alternative CTAP `largeBlob` extension | ❌ | Uses the mutually exclusive `largeBlobKey` / LargeBlobs approach instead. |
 
