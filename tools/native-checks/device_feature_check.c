@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct { uint8_t report[64]; unsigned sent,winks,starts,aborts; } Recorder;
+typedef struct { uint8_t report[64]; unsigned sent,winks,starts,aborts,aborted_reports; } Recorder;
 static bool sent(void *ctx,const uint8_t report[64],uint64_t transfer) {
     Recorder *r=ctx; (void)transfer; memcpy(r->report,report,64); r->sent++; return true;
 }
@@ -18,6 +18,7 @@ static void start(void *ctx,uint64_t operation,const uint8_t *data,size_t n) {
     (void)operation; (void)data; (void)n; ((Recorder *)ctx)->starts++;
 }
 static void abort_cbor(void *ctx,uint64_t operation) { (void)operation; ((Recorder *)ctx)->aborts++; }
+static void abort_report(void *ctx,uint64_t transfer) { (void)transfer; ((Recorder *)ctx)->aborted_reports++; }
 static void request(CtaphidDevice *d,uint32_t cid,uint8_t command,unsigned length) {
     uint8_t report[64]={0};
     for(unsigned i=0;i<4;i++) report[i]=(uint8_t)(cid>>(24U-8U*i));
@@ -94,6 +95,67 @@ static void check_lock(void) {
     request_at(&d,b,CTAPHID_COMMAND_INIT,8,0,1501); assert(r.report[7]==6 && r.aborts==0);
     request_at(&d,a,CTAPHID_COMMAND_INIT,8,0,1502); assert(r.aborts==1);
     puts("PASS LOCK: bounded ownership, validation, renewal/release, foreign isolation, CANCEL, INIT, wrap and independent transaction lifetime");
+}
+static void check_initial_progress(void) {
+    Recorder r={0}; CtaphidDevice d;
+    CtaphidDeviceConfig config={.submit_report=sent,.transport_context=&r,
+        .start_cbor=start,.abort_cbor=abort_cbor,.cbor_context=&r};
+    assert(ctaphid_device_init(&d,&config)==CTAPHID_DEVICE_OK);
+    uint32_t cid=allocate(&d,&r,0x0c);
+    unsigned before=r.sent;
+    request_at(&d,cid,CTAPHID_COMMAND_CBOR,1,0x04,101);
+    assert(r.starts==1 && r.sent==before+1 && d.cbor_running);
+    assert(r.report[4]==(0x80|CTAPHID_COMMAND_KEEPALIVE) && r.report[6]==1 &&
+        r.report[7]==CTAPHID_STATUS_PROCESSING);
+    assert(d.phase==CTAPHID_DEVICE_PROCESSING && d.last_keepalive_ms==101);
+    assert(ctaphid_device_poll(&d,200)==CTAPHID_DEVICE_OK && r.sent==before+1);
+    assert(ctaphid_device_poll(&d,201)==CTAPHID_DEVICE_OK && r.sent==before+2);
+    /* A completion discards unsent progress and sends just its final response. */
+    assert(ctaphid_device_set_keepalive(&d,d.transaction_id,CTAPHID_STATUS_UPNEEDED,202)==CTAPHID_DEVICE_OK);
+    const uint8_t success=0;
+    assert(ctaphid_device_complete_cbor(&d,d.transaction_id,&success,1)==CTAPHID_DEVICE_OK);
+    assert(ctaphid_device_poll(&d,202)==CTAPHID_DEVICE_OK && r.sent==before+3);
+    assert(r.report[4]==(0x80|CTAPHID_COMMAND_CBOR) && r.report[7]==0 && d.phase==CTAPHID_DEVICE_IDLE);
+    assert(ctaphid_device_poll(&d,500)==CTAPHID_DEVICE_OK && r.sent==before+3);
+    /* CANCEL still terminates the request after the initial progress report. */
+    request_at(&d,cid,CTAPHID_COMMAND_CBOR,1,0x04,501);
+    uint64_t cancelled=d.transaction_id;
+    request_at(&d,cid,CTAPHID_COMMAND_CANCEL,0,0,502);
+    assert(r.aborts==1 && r.report[4]==(0x80|CTAPHID_COMMAND_CBOR) && r.report[7]==0x2d);
+    assert(ctaphid_device_complete_cbor(&d,cancelled,&success,1)==CTAPHID_DEVICE_INVALID_STATE);
+    /* Advisory progress cannot turn competing-channel backpressure into a
+     * dropped request. The already queued reports drain in the same poll. */
+    uint8_t report[64]={0};
+    for(unsigned i=0;i<4;i++) report[i]=(uint8_t)(cid>>(24U-8U*i));
+    report[4]=0x80|CTAPHID_COMMAND_CBOR; report[6]=1; report[7]=0x04;
+    assert(ctaphid_device_receive_report(&d,report,64,503)==CTAPHID_DEVICE_OK);
+    d.control_count=CTAPHID_DEVICE_CONTROL_REPORTS;
+    memset(d.control,0,sizeof(d.control));
+    assert(ctaphid_device_poll(&d,503)==CTAPHID_DEVICE_OK && r.starts==3 && d.cbor_running);
+    assert(d.control_count==0);
+    assert(ctaphid_device_complete_cbor(&d,d.transaction_id,&success,1)==CTAPHID_DEVICE_OK);
+    assert(ctaphid_device_poll(&d,504)==CTAPHID_DEVICE_OK && d.phase==CTAPHID_DEVICE_IDLE);
+    /* An asynchronous initial keepalive must complete before the final reply;
+     * its completion must never release the transaction's ownership. */
+    config.asynchronous_transport=true; config.abort_report=abort_report;
+    assert(ctaphid_device_init(&d,&config)==CTAPHID_DEVICE_OK);
+    request(&d,UINT32_MAX,CTAPHID_COMMAND_INIT,8);
+    cid=((uint32_t)r.report[15]<<24)|((uint32_t)r.report[16]<<16)|
+        ((uint32_t)r.report[17]<<8)|r.report[18];
+    assert(ctaphid_device_report_sent(&d,d.flight_id,true)==CTAPHID_DEVICE_OK);
+    request_at(&d,cid,CTAPHID_COMMAND_CBOR,1,0x04,505);
+    uint64_t progress_transfer=d.flight_id;
+    assert(d.in_flight && r.report[4]==(0x80|CTAPHID_COMMAND_KEEPALIVE));
+    assert(ctaphid_device_complete_cbor(&d,d.transaction_id,&success,1)==CTAPHID_DEVICE_OK);
+    assert(ctaphid_device_report_sent(&d,progress_transfer,true)==CTAPHID_DEVICE_OK);
+    assert(d.phase==CTAPHID_DEVICE_SENDING);
+    assert(ctaphid_device_poll(&d,506)==CTAPHID_DEVICE_OK && d.in_flight);
+    assert(r.report[4]==(0x80|CTAPHID_COMMAND_CBOR));
+    assert(ctaphid_device_report_sent(&d,d.flight_id,true)==CTAPHID_DEVICE_OK && d.phase==CTAPHID_DEVICE_IDLE);
+    request_at(&d,cid,CTAPHID_COMMAND_CBOR,1,0x04,507);
+    assert(ctaphid_device_report_sent(&d,d.flight_id,false)==CTAPHID_DEVICE_TRANSPORT_FAILED);
+    assert(!d.cbor_running && d.phase==CTAPHID_DEVICE_IDLE && r.aborts==2);
+    puts("PASS initial progress: immediate PROCESSING, interval, final-response ordering, CANCEL, backpressure, asynchronous ownership and failed transfer");
 }
 static void check_presence(void) {
     Rp2350Presence p;
@@ -186,4 +248,4 @@ static void check_info(void) {
     }
     puts("PASS GetInfo: PIN-bound maximum/reset fields, full CBOR parsing and bounded-output failure preservation");
 }
-int main(void) { check_wink();check_lock();check_presence();check_uvm();check_info(); }
+int main(void) { check_wink();check_lock();check_initial_progress();check_presence();check_uvm();check_info(); }

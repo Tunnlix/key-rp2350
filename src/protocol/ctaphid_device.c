@@ -299,6 +299,13 @@ static CtaphidDeviceResult process_request(CtaphidDevice *device, uint32_t now_m
         device->keepalive_status = CTAPHID_STATUS_PROCESSING;
         device->last_keepalive_ms = now_ms;
         device->reassembler.has_complete_message = false;
+        /* Make initial progress available before the backend performs crypto or
+         * storage work. In particular, control-OUT hosts can start reading as
+         * soon as SET_REPORT completes. Do not wait for the periodic interval.
+         * Progress is advisory: a full control queue must not reject a request;
+         * normal periodic keepalives resume after those reports are drained. */
+        (void)queue_control(device, device->active_channel_id,
+            CTAPHID_COMMAND_KEEPALIVE, CTAPHID_STATUS_PROCESSING, device->transaction_id);
         device->config.start_cbor(device->config.cbor_context, device->transaction_id,
             device->reassembler.buffer, device->reassembler.received_length);
         return CTAPHID_DEVICE_OK;
