@@ -9,8 +9,32 @@ cmake --preset core-only
 cmake --build --preset core-only
 ```
 
-`src/` and `include/` contain the portable library. `firmware/rp2350/` contains
-the USB application, GPIO, entropy, cryptography and persistent storage.
+The portable library is maintained in [Tunnlix Key Core](https://github.com/Tunnlix/key-core).
+This repository selects a named release and its SHA-256 in
+`cmake/key-core-release.cmake`; CMake retrieves it automatically. `firmware/rp2350/`
+contains the USB application, GPIO, entropy, cryptography and persistent storage.
+
+For an offline build, provide the matching release source archive:
+
+```sh
+cmake --preset core-only -DTUNNLIX_KEY_CORE_ARCHIVE=/path/to/key-core-release.tar.gz
+```
+
+The archive must match the selected release checksum. For coordinated development,
+use `-DTUNNLIX_KEY_CORE_SOURCE_DIR=/path/to/key-core` in a separate build directory.
+CMake warns about the override and records it in `key-core-provenance.json` in the
+build directory. `-DTUNNLIX_KEY_CORE_REQUIRE_RELEASE=ON` rejects source overrides
+and is required when preparing release builds. It also works with the verified
+offline archive. Do not replace the pinned release with a moving branch.
+
+The same dependency options apply to the RP2350 and native-check configurations.
+Core and firmware versions advance independently. A core update changes the
+release tag, source revision and archive checksum together, followed by validation
+of the complete firmware integration. See the core's release notes for API and
+configuration changes; persistent-data compatibility must be assessed separately.
+
+Record `key-core-provenance.json` with build and signing evidence. A local source
+override is development input, not evidence that a published release was used.
 
 ## XIAO RP2350 firmware
 
@@ -173,7 +197,7 @@ image exists and USB boot remains enabled. A/B provides an independent ROM
 fallback while the new image remains unconfirmed.
 
 The USB product and update-information name are **Key**, with manufacturer
-**Tunnlix**. Firmware identity comes from `include/ctap_device_version.h`;
+**Tunnlix**. Firmware identity comes from `firmware/rp2350/ctap_device_version.h`;
 numeric USB/CTAP fields cannot distinguish development builds from stable ones.
 Building source does not imply release or completed hardware acceptance.
 
@@ -298,8 +322,9 @@ certification, FIPS validation or an authenticator assurance level. In particula
 NIST's hardware-protected verification/PIN-derived key-protection requirements
 need a separate architecture assessment; the blocklist does not supply them.
 
-Owners can modify `src/authenticator/auth_pin_policy.c` to customize rules in
-source, or exclude the additional checks at configuration time:
+Owners can customize `src/authenticator/auth_pin_policy.c` in a local key-core
+checkout and select it with `TUNNLIX_KEY_CORE_SOURCE_DIR`, or exclude the additional
+checks at firmware configuration time:
 
 ```sh
 cmake -S firmware/rp2350 -B build/custom-pin-policy \
