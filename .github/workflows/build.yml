@@ -2,11 +2,21 @@ name: Firmware integration checks
 
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - '.vscode/**'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '.vscode/**'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   providers:
@@ -34,3 +44,104 @@ jobs:
         run: ./build/native/crypto_check
       - name: Persistent state and PIN-policy checks
         run: ./build/native/storage_check --policy
+
+  firmware:
+    name: RP2350 firmware (complexity ${{ matrix.complexity }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        complexity: [ON, OFF]
+    env:
+      ARM_GNU_VERSION: 15.2.rel1
+      ARM_GNU_SHA256: 597893282ac8c6ab1a4073977f2362990184599643b4c5ee34870a8215783a16
+      PICO_SDK_REVISION: 079c6f39023649b154152db30f1d781e884879bc
+      PICOTOOL_REVISION: 2041936441b48a3cc53ae3da9e805229fe8f4e18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out Pico SDK 2.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: ${{ env.PICO_SDK_REVISION }}
+          path: .ci/pico-sdk
+          persist-credentials: false
+      - name: Fetch the pinned TinyUSB submodule
+        run: git -C .ci/pico-sdk submodule update --init --depth 1 lib/tinyusb
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y cmake ninja-build gcc g++ libusb-1.0-0-dev
+      - name: Cache Arm GNU toolchain
+        id: arm-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .ci/arm-toolchain
+          key: arm-gnu-${{ runner.os }}-${{ runner.arch }}-${{ env.ARM_GNU_VERSION }}-${{ env.ARM_GNU_SHA256 }}
+      - name: Download and verify Arm GNU toolchain
+        if: steps.arm-cache.outputs.cache-hit != 'true'
+        run: |
+          archive="arm-gnu-toolchain-${ARM_GNU_VERSION}-x86_64-arm-none-eabi.tar.xz"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/$archive" "https://developer.arm.com/-/media/Files/downloads/gnu/${ARM_GNU_VERSION}/binrel/$archive"
+          echo "$ARM_GNU_SHA256  $RUNNER_TEMP/$archive" | sha256sum --check
+          mkdir -p .ci/arm-toolchain
+          tar -xJf "$RUNNER_TEMP/$archive" -C .ci/arm-toolchain --strip-components=1
+      - name: Verify compiler version
+        run: |
+          .ci/arm-toolchain/bin/arm-none-eabi-gcc --version
+          test "$(.ci/arm-toolchain/bin/arm-none-eabi-gcc -dumpfullversion)" = "15.2.1"
+      - name: Configure default unsigned firmware and setup tools
+        run: >-
+          cmake -S firmware/rp2350 -B build/rp2350 -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DPICO_SDK_PATH="$GITHUB_WORKSPACE/.ci/pico-sdk"
+          -DPICO_TOOLCHAIN_PATH="$GITHUB_WORKSPACE/.ci/arm-toolchain"
+          -DPICOTOOL_GIT_BRANCH="$PICOTOOL_REVISION"
+          -DPICOTOOL_FORCE_FETCH_FROM_GIT=ON
+          -DTUNNLIX_KEY_CORE_REQUIRE_RELEASE=ON
+          -DCTAP_PIN_COMPLEXITY=${{ matrix.complexity }}
+          -DRP2350_BUILD_RECOVERY=ON
+          -DRP2350_BUILD_PROVISIONING=ON
+      - name: Build application, recovery and provisioning images
+        run: >-
+          cmake --build build/rp2350 --parallel 2 --target
+          rp2350_application rp2350_recovery rp2350_layout_recovery rp2350_factory_provision
+      - name: Stage unsigned artifacts and build provenance
+        env:
+          PIN_COMPLEXITY: ${{ matrix.complexity }}
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import hashlib, json, os, shutil
+          source = Path('build/rp2350')
+          output = Path('build/unsigned-artifacts')
+          files = ['rp2350_application.elf', 'rp2350_application.uf2', 'rp2350_application.elf.map',
+                   'recovery/rp2350_recovery.elf', 'recovery/rp2350_recovery.uf2',
+                   'recovery/rp2350_layout_recovery.elf', 'recovery/rp2350_layout_recovery.uf2',
+                   'provisioning/rp2350_factory_provision.elf', 'provisioning/rp2350_factory_provision.uf2',
+                   'key-core-provenance.json']
+          for name in files:
+              target = output / name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source / name, target)
+          metadata = {'source_commit': os.environ['GITHUB_SHA'], 'unsigned': True,
+                      'board': 'seeed_xiao_rp2350', 'pin_complexity': os.environ['PIN_COMPLEXITY'],
+                      'sdk_revision': os.environ['PICO_SDK_REVISION'],
+                      'picotool_revision': os.environ['PICOTOOL_REVISION'],
+                      'compiler': os.environ['ARM_GNU_VERSION'],
+                      'compiler_archive_sha256': os.environ['ARM_GNU_SHA256']}
+          (output / 'build-provenance.json').write_text(json.dumps(metadata, indent=2) + '\n')
+          checksums = [hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + path.relative_to(output).as_posix()
+                       for path in sorted(output.rglob('*')) if path.is_file()]
+          (output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
+          PYTHON
+      - name: Upload unsigned build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rp2350-unsigned-complexity-${{ matrix.complexity }}
+          path: build/unsigned-artifacts/
+          if-no-files-found: error
+          retention-days: 7
