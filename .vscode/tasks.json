@@ -1,7 +1,87 @@
 {
   "version": "2.0.0",
   "tasks": [
-    {"label": "Configure portable core", "type": "process", "command": "cmake", "args": ["--preset", "core-only"], "problemMatcher": []},
-    {"label": "Build portable core", "type": "process", "command": "cmake", "args": ["--build", "--preset", "core-only"], "dependsOn": "Configure portable core", "problemMatcher": ["$gcc"], "group": {"kind": "build", "isDefault": true}}
+    {
+      "label": "Configure RP2350 firmware",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "-S",
+        "firmware/rp2350",
+        "--preset",
+        "rp2350-release"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build RP2350 firmware",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "build/rp2350",
+        "--target",
+        "rp2350_application"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Configure RP2350 firmware",
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Configure selected core",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "core-only"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build selected core",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "core-only"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Configure selected core",
+      "problemMatcher": [
+        "$gcc"
+      ]
+    },
+    {
+      "label": "Check selected core",
+      "type": "process",
+      "command": "ctest",
+      "args": [
+        "--test-dir",
+        "build/core",
+        "--output-on-failure"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Build selected core",
+      "problemMatcher": []
+    }
   ]
 }

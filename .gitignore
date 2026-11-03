@@ -60,7 +60,10 @@ gmon.out
 .DS_Store
 Thumbs.db
 
-# Keep .vscode configuration tracked for shared build/debug setup.
+# Share build tasks and recommendations; keep personal editor configuration local.
+/.vscode/*
+!/.vscode/tasks.json
+!/.vscode/extensions.json
 
 # Keep mutable project planning outside the public repository.
 /docs/*
