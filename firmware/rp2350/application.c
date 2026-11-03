@@ -99,7 +99,8 @@ AuthStatus rp2350_application_init(Rp2350Application *a,Rp2350Crypto *crypto,con
             crypto,&a->service,&a->pin,&a->backend,powered_at_ms) ||
         !ctaphid_ctap_backend_configure_credentials(&a->backend,&a->service) ||
         !ctaphid_ctap_backend_configure_pin(&a->backend,&a->pin)) { status=AUTH_BAD_DATA; goto failed; }
-    CtaphidDeviceConfig device={.submit_report=io->submit,.abort_report=io->abort,.transport_context=io->context,
+    CtaphidDeviceConfig device={.device_version={CTAP_DEVICE_VERSION_MAJOR,CTAP_DEVICE_VERSION_MINOR,CTAP_DEVICE_VERSION_BUILD},
+        .submit_report=io->submit,.abort_report=io->abort,.transport_context=io->context,
         .asynchronous_transport=io->asynchronous,.start_cbor=start,.abort_cbor=abort_operation,
         .resync_channel=resync,.cbor_context=a,.cancel_requested=io->cancel_requested,
         .wink_action=io->wink,.wink_context=io->context};

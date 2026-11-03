@@ -11,7 +11,7 @@ cmake -S tools/native-checks -B build/native-checks -G Ninja -DCMAKE_BUILD_TYPE=
 cmake --build build/native-checks
 ./build/native-checks/storage_check
 ./build/native-checks/crypto_check
-./build/native-checks/device_feature_check
+ctest --test-dir build/native-checks --output-on-failure
 ```
 
 On Windows, the executables end in `.exe`. For offline builds pass
@@ -68,8 +68,10 @@ fresh IVs, reset separation, interrupted migration recovery and read-only trial
 initialization. `--policy` also covers persistent read-only inventory, payment
 attributes, long-touch reset and optional attestation providers.
 
-`device_feature_check` covers WINK, LOCK ownership/release/expiry, five-second
-reset consent, UVM output and GetInfo encoding. LOCK tests do not set the reserved
+`device_feature_check` covers the RP2350 WINK animation and five-second reset
+consent. CTest also runs the selected core release's portable checks for HID
+routing, LOCK ownership/release/expiry, initial keepalive ordering, UVM, product
+version configuration and GetInfo encoding. LOCK tests do not set the reserved
 legacy capability bit merely to activate the official tool's conditional cases.
 
 For a configured attestation lab, set `TUNNLIX_ENTERPRISE_TEST_OUTPUT` to an empty
@@ -93,7 +95,13 @@ PIN complexity is enabled by default. Configure another build directory with
 exercise setPIN/changePIN for protocols 1/2, sticky configuration, interrupted
 policy writes, legacy policy transition, discovery and signed RP-authorized
 extension output. The OFF profile also rejects an enabled persisted policy.
-`device_feature_check` covers whole-value/case matching, repeated Unicode, numeric
+The core checks cover whole-value/case matching, repeated Unicode, numeric
 PINs/spaces and absence of the optional URL. `storage_check --policy` runs the
 focused policy/credential suite; the full invocation adds synthetic power cuts.
 These programs use synthetic flash and never reset a connected device.
+
+The build uses the same pinned core release as the firmware. Supply
+`TUNNLIX_KEY_CORE_ARCHIVE` for a checksum-verified offline archive, or explicitly
+select a development checkout with `TUNNLIX_KEY_CORE_SOURCE_DIR`. Release checks
+set `TUNNLIX_KEY_CORE_REQUIRE_RELEASE=ON`. The build directory records dependency
+provenance in `key-core-provenance.json`.

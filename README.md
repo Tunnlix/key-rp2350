@@ -7,9 +7,9 @@ key, a PIN and a button press to register passkeys and sign in. Inspect the code
 build your own key, or adapt the firmware to your hardware.
 
 The project aims to keep pace with the latest FIDO standards and bring useful
-new authentication features to an open, owner-controlled key. Its portable C core
-keeps protocol logic separate from hardware providers, providing a foundation for
-ports to other boards.
+new authentication features to an open, owner-controlled key. Its portable
+[Tunnlix Key Core](https://github.com/Tunnlix/key-core) keeps protocol logic
+separate from hardware providers, providing a foundation for ports to other boards.
 
 **Self-validated using FIDO Alliance conformance tools.**
 

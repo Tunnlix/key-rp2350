@@ -38,7 +38,7 @@ option(RP2350_CORE_LTO "Enable LTO for the core/providers; keep SDK objects outs
 if(CMAKE_INTERPROCEDURAL_OPTIMIZATION)
     message(FATAL_ERROR "Use RP2350_CORE_LTO instead of global IPO: SDK 2.3.1/GCC 15 full LTO is not supported here")
 endif()
-add_subdirectory(../.. portable-core)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/key-core.cmake")
 include(cmake/crypto.cmake)
 include(cmake/storage.cmake)
 
@@ -84,10 +84,10 @@ pico_set_program_name(rp2350_application "Key")
 target_compile_definitions(rp2350_application PRIVATE PICO_CRT0_IMAGE_TYPE_TBYB=1)
 # ROM selection version, not OTP anti-rollback. The byte-sized minor/build
 # components share the 16-bit ROM minor field.
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../include/ctap_device_version.h" version_lines
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/ctap_device_version.h" version_lines
     REGEX "^#define CTAP_DEVICE_VERSION_(MAJOR|MINOR|BUILD) [0-9]+$")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../include/ctap_device_version.h")
+    "${CMAKE_CURRENT_SOURCE_DIR}/ctap_device_version.h")
 foreach(component MAJOR MINOR BUILD)
     string(REGEX MATCH "CTAP_DEVICE_VERSION_${component} ([0-9]+)" match "${version_lines}")
     set(rom_${component} "${CMAKE_MATCH_1}")
