@@ -38,6 +38,9 @@ jobs:
         run: cmake -S tools/native-checks -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release -DCTAP_PIN_COMPLEXITY=${{ matrix.complexity }} -DTUNNLIX_KEY_CORE_REQUIRE_RELEASE=ON
       - name: Build
         run: cmake --build build/native --parallel 2
+      - name: Firmware tool safety checks
+        if: matrix.complexity == 'ON'
+        run: python3 -m unittest discover -s tools/tests -v
       - name: Core and board checks
         run: ctest --test-dir build/native --output-on-failure
       - name: Cryptography checks

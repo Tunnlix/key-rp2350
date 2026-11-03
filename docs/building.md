@@ -61,6 +61,43 @@ the internal pull-up; no voltage source is needed on the button.
 
 ## Signing and RAM recovery
 
+On Linux, the unified firmware tool builds the current checkout, signs it with
+your owner key and offers to flash a connected key after verification:
+
+```sh
+python3 tools/firmware.py
+```
+
+Use a Python environment with `fido2` installed for flashing. The tool uses
+`PICO_SDK_PATH` and `PICO_TOOLCHAIN_PATH`, or the standard `~/.pico-sdk`
+installations. Its default owner keys are under `~/.local/share/tunnlix-signing/`.
+Use `--help` to override these paths or select a device by serial number.
+Enter the signing passphrase only at the local OpenSSL prompt.
+
+Each run gets its own folder under `build/firmware/`; previous bundles are
+preserved, including incomplete runs. Only successful, verified signing updates
+the `latest.json` pointer. Every operation ends with `RESULT: PASSED`, `FAILED`
+or `CANCELLED`, and saves `result.json` with the output and logs.
+
+Individual steps are also available:
+
+```sh
+python3 tools/firmware.py build
+python3 tools/firmware.py sign --build-dir build/rp2350
+python3 tools/firmware.py verify
+python3 tools/firmware.py flash
+```
+
+`verify` and `flash` use the latest successfully signed bundle, or an explicit
+`--bundle /path/to/signed`. Flashing verifies the owner signature, image bounds,
+device serial and existing A/B partition layout. It requests the standard D0
+hold, writes only the application to the inactive slot, then checks the running
+version and public persistent settings. Build-dependent enterprise capabilities
+are checked consistently. First-time setup, partition repair and OTP programming
+are separate operations; this tool does not perform them.
+
+For manual signing, the lower-level helper remains available:
+
 Build the optional recovery probe alongside the application:
 
 ```sh
