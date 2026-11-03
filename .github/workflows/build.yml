@@ -1,4 +1,4 @@
-name: Build
+name: Firmware integration checks
 
 on:
   push:
@@ -9,13 +9,13 @@ permissions:
   contents: read
 
 jobs:
-  core:
+  providers:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        build_type: [Debug, Release]
+        complexity: [ON, OFF]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,8 +23,14 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y cmake ninja-build gcc
-      - name: Configure
-        run: cmake -S . -B build/core -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-      - name: Build portable library
-        run: cmake --build build/core --parallel 2
+          sudo apt-get install --no-install-recommends -y cmake ninja-build gcc g++
+      - name: Configure selected core release and providers
+        run: cmake -S tools/native-checks -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release -DCTAP_PIN_COMPLEXITY=${{ matrix.complexity }} -DTUNNLIX_KEY_CORE_REQUIRE_RELEASE=ON
+      - name: Build
+        run: cmake --build build/native --parallel 2
+      - name: Core and board checks
+        run: ctest --test-dir build/native --output-on-failure
+      - name: Cryptography checks
+        run: ./build/native/crypto_check
+      - name: Persistent state and PIN-policy checks
+        run: ./build/native/storage_check --policy
