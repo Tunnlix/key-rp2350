@@ -3,8 +3,8 @@
 **Open-source security for your passkeys.**
 
 Tunnlix Key is a USB security-key project that puts you in control. Use a physical
-key, a PIN and a button press to register passkeys and sign in. Inspect the code,
-build your own key, or adapt the firmware to your hardware.
+key, a PIN and a button press to register passkeys and sign in. Inspect the code
+and build your own key.
 
 The project aims to keep pace with the latest FIDO standards and bring useful
 new authentication features to an open, owner-controlled key. Its portable
@@ -13,7 +13,7 @@ separate from hardware providers, providing a foundation for ports to other boar
 
 **Self-validated using FIDO Alliance conformance tools.**
 
-[Build your key](docs/building.md) · [Security overview](.github/SECURITY.md) ·
+[Build for XIAO RP2350](docs/building.md) · [Security overview](.github/SECURITY.md) ·
 [MIT license](LICENSE)
 
 ## Features
@@ -66,17 +66,14 @@ reports, private keys and signed lab images remain outside the public source tre
 Native regression and sanitizer checks also cover reset behavior, cryptography
 and recovery from interrupted storage writes. FIDO certification has not been obtained.
 
-## Bring your own hardware
-
-The protocol core is designed to be portable. Contributions that add hardware
-providers, support more boards, or improve existing ports are welcome. Share
-what you are building and help make Tunnlix Key available on more hardware.
+## Supported hardware
 
 The current firmware targets Raspberry Pi's RP2350 microcontroller. The reference
 build uses a Seeed Studio XIAO RP2350 board with a user-presence button connected
 between D0 (GPIO26) and GND. Seeed publishes
 [hardware resources, including schematics and editable PCB design files](https://wiki.seeedstudio.com/xiao_rp2350_arduino/#assets--resources).
-See [building and setup](docs/building.md) to build this target.
+See [building and setup](docs/building.md) to build this target. For another board
+or microcontroller, start with [Tunnlix Key Core's hardware-porting guidance](https://github.com/Tunnlix/key-core#bring-your-own-hardware).
 
 The firmware is MIT-licensed. See the
 [dependency notices](docs/third-party-notices.md) for third-party licenses.
